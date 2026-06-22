@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gestor de Gastos Compartidos</title>
+<style>
+  :root{
+    --bg:#f5f7f6;
+    --card:#ffffff;
+    --line:#e5e9e7;
+    --text:#1e2925;
+    --muted:#6f7975;
+    --primary:#27685a;
+    --primary-2:#1f564a;
+    --primary-soft:#e9f3f0;
+    --shadow:0 14px 38px rgba(28,48,41,.08);
+    --radius:20px;
+    --green:#237a47;
+    --green-bg:#ecf8f0;
+    --safe:#5d8537;
+    --safe-bg:#f3f9e8;
+    --yellow:#917000;
+    --yellow-bg:#fff7d6;
+    --orange:#bd5b08;
+    --orange-bg:#fff0df;
+    --red:#b52b25;
+    --red-bg:#fff0ee;
+    --gray:#67716d;
+    --gray-bg:#f1f3f2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  button,input,select,textarea{font:inherit}
+  button{cursor:pointer}
+  h1,h2,h3,p{margin-top:0}
+  .hidden{display:none!important}
+  .login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px;background:linear-gradient(145deg,#eaf3ef,#f8f9f8 60%,#edf2f0)}
+  .login-card{width:min(460px,100%);padding:30px;background:rgba(255,255,255,.96);border:1px solid rgba(255,255,255,.8);border-radius:28px;box-shadow:0 30px 80px rgba(29,54,46,.14)}
+  .logo{display:flex;gap:12px;align-items:center;margin-bottom:24px}
+  .logo-mark{width:44px;height:44px;border-radius:14px;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:850}
+  .logo strong{display:block;font-size:18px}.logo span{display:block;margin-top:2px;color:var(--muted);font-size:13px}
+  .login-card h1{font-size:28px;letter-spacing:-.7px;margin-bottom:8px}.login-card>p{color:var(--muted);line-height:1.55;margin-bottom:24px}
+  .field{margin-bottom:14px}.field label{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.45px;color:var(--muted);margin-bottom:7px}
+  .field input,.field select,.field textarea{width:100%;padding:12px 13px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--text);outline:none}
+  .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(39,104,90,.10)}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:6px}
+  .btn{border:none;border-radius:12px;padding:11px 15px;font-weight:780;transition:.15s ease;white-space:nowrap}
+  .btn.primary{background:var(--primary);color:#fff}.btn.primary:hover{background:var(--primary-2);transform:translateY(-1px);box-shadow:0 8px 18px rgba(39,104,90,.22)}
+  .btn.soft{background:var(--primary-soft);color:var(--primary)}.btn.outline{background:#fff;border:1px solid var(--line);color:var(--text)}.btn.danger{background:var(--red-bg);color:var(--red)}
+  .btn.small{padding:8px 10px;font-size:12px}.btn.full{width:100%}
+  .login-note{margin-top:15px;padding:12px;border-radius:12px;background:#f4f6f5;color:var(--muted);font-size:12px;line-height:1.5}
+  .topbar{position:sticky;top:0;z-index:20;background:rgba(245,247,246,.9);backdrop-filter:blur(14px);border-bottom:1px solid rgba(229,233,231,.95)}
+  .topbar-inner{max-width:1080px;margin:auto;padding:15px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .brand{display:flex;align-items:center;gap:11px;min-width:0}.brand .logo-mark{width:38px;height:38px;border-radius:12px}.brand-copy{min-width:0}.brand-copy strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brand-copy span{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+  .top-actions{display:flex;align-items:center;gap:8px}.role-pill{font-size:11px;font-weight:800;color:var(--primary);background:var(--primary-soft);border-radius:999px;padding:7px 10px}
+  .main{max-width:1080px;margin:auto;padding:22px 20px 70px}
+  .tabs{display:flex;gap:6px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:5px;width:max-content;max-width:100%;margin-bottom:22px;box-shadow:0 7px 22px rgba(30,48,42,.04)}
+  .tab{border:none;background:transparent;color:var(--muted);padding:10px 15px;border-radius:11px;font-weight:800}.tab.active{background:var(--primary);color:#fff}.tab-count{font-size:10px;opacity:.8;margin-left:5px}
+  .page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:18px}.page-head h1{font-size:28px;letter-spacing:-.75px;margin-bottom:5px}.page-head p{margin:0;color:var(--muted);line-height:1.45}.head-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin-bottom:16px}.stat{background:#fff;border:1px solid var(--line);border-radius:18px;padding:17px;box-shadow:0 8px 24px rgba(30,48,42,.035)}.stat-label{font-size:11px;font-weight:850;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}.stat-value{font-size:24px;font-weight:850;letter-spacing:-.7px;margin-top:8px}.stat-sub{font-size:12px;color:var(--muted);margin-top:4px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:19px;box-shadow:0 8px 24px rgba(30,48,42,.035);margin-bottom:16px}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.panel h2{font-size:18px;letter-spacing:-.3px;margin-bottom:4px}.panel-sub{color:var(--muted);font-size:13px;margin:0}
+  .legend{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 16px}.legend-item{font-size:11px;font-weight:750;padding:6px 9px;border-radius:999px}.legend-item.far{background:var(--green-bg);color:var(--green)}.legend-item.safe{background:var(--safe-bg);color:var(--safe)}.legend-item.warning{background:var(--yellow-bg);color:var(--yellow)}.legend-item.urgent{background:var(--orange-bg);color:var(--orange)}.legend-item.overdue{background:var(--red-bg);color:var(--red)}
+  .obligation-list{display:grid;gap:11px}.obligation{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;padding:16px 16px 16px 19px;border:1px solid var(--line);border-radius:17px;background:#fff;overflow:hidden;transition:.15s ease}.obligation:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--gray)}.obligation:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+  .obligation.far:before{background:var(--green)}.obligation.safe:before{background:var(--safe)}.obligation.warning:before{background:#d0a000}.obligation.urgent:before{background:var(--orange)}.obligation.overdue:before{background:var(--red)}
+  .ob-main{min-width:0}.ob-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.kind-pill{font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.35px;padding:5px 7px;border-radius:999px;background:var(--primary-soft);color:var(--primary)}.kind-pill.moratoria{background:#f1eafd;color:#7655a5}.obligation h3{font-size:16px;margin:9px 0 4px}.ob-sub{font-size:12px;color:var(--muted);line-height:1.45}.due-pill{display:inline-flex;margin-top:11px;font-size:12px;font-weight:850;padding:7px 9px;border-radius:10px}.due-pill.far{background:var(--green-bg);color:var(--green)}.due-pill.safe{background:var(--safe-bg);color:var(--safe)}.due-pill.warning{background:var(--yellow-bg);color:var(--yellow)}.due-pill.urgent{background:var(--orange-bg);color:var(--orange)}.due-pill.overdue{background:var(--red-bg);color:var(--red)}.due-pill.nodate{background:var(--gray-bg);color:var(--gray)}
+  .ob-side{text-align:right;display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:10px}.ob-amount{font-size:21px;font-weight:880;letter-spacing:-.5px}.ob-stage{font-size:11px;color:var(--muted);margin-top:2px}.ob-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+  .service-list{display:grid}.service-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;padding:14px 3px;border-bottom:1px solid var(--line)}.service-row:last-child{border-bottom:none}.service-main{display:flex;gap:12px;align-items:center;min-width:0}.service-icon{width:42px;height:42px;border-radius:13px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;font-size:11px;font-weight:850;flex:none}.service-title{font-weight:780;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.service-sub{font-size:12px;color:var(--muted);margin-top:3px}.service-actions{display:flex;gap:7px;align-items:center}
+  .paid-list{display:grid}.paid-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:14px 3px;border-bottom:1px solid var(--line);cursor:pointer}.paid-row:last-child{border-bottom:none}.paid-row:hover .paid-title{color:var(--primary)}.paid-main{display:flex;align-items:center;gap:12px;min-width:0}.paid-icon{width:42px;height:42px;border-radius:13px;background:var(--green-bg);color:var(--green);display:grid;place-items:center;font-weight:850;font-size:12px;flex:none}.paid-title{font-weight:780}.paid-sub{font-size:12px;color:var(--muted);margin-top:3px}.paid-amount{font-weight:850;white-space:nowrap}.paid-status{font-size:11px;font-weight:850;padding:6px 9px;border-radius:999px;background:var(--green-bg);color:var(--green)}
+  .empty{text-align:center;padding:42px 18px;color:var(--muted)}.empty-icon{width:52px;height:52px;border-radius:17px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;margin:0 auto 13px;font-size:22px}
+  .search{width:min(300px,100%);border:1px solid var(--line);border-radius:12px;padding:10px 12px;outline:none}.search:focus{border-color:var(--primary)}
+  .overlay{position:fixed;inset:0;z-index:50;background:rgba(17,27,23,.54);backdrop-filter:blur(5px);display:grid;place-items:center;padding:18px}.modal{width:min(620px,100%);max-height:91vh;overflow:auto;background:#fff;border-radius:24px;padding:23px;box-shadow:0 30px 90px rgba(16,25,21,.3);position:relative}.modal.wide{width:min(820px,100%)}.modal h2{font-size:23px;letter-spacing:-.5px;margin-bottom:5px}.modal-sub{font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.45}.close{position:absolute;right:14px;top:14px;width:34px;height:34px;border:none;border-radius:11px;background:#f2f4f3;color:var(--muted);font-size:18px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-grid .full{grid-column:1/-1}.modal-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:20px}.file-drop{position:relative;border:1.5px dashed #cfd7d3;border-radius:14px;padding:17px;text-align:center;color:var(--muted);background:#fafbfa}.file-drop input{position:absolute;inset:0;opacity:0;cursor:pointer}.preview{display:block;max-width:100%;max-height:180px;margin:10px auto 0;border-radius:12px}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.detail-box{padding:13px;border:1px solid var(--line);border-radius:14px;background:#fbfcfb}.detail-box.full{grid-column:1/-1}.detail-box label{display:block;font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:6px}.detail-box strong{font-size:14px;line-height:1.45}.docs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.doc-card{border:1px solid var(--line);border-radius:14px;padding:13px}.doc-card img{width:100%;max-height:230px;object-fit:contain;border-radius:10px;margin-top:10px;cursor:pointer;background:#f5f6f5}.doc-empty{font-size:12px;color:var(--muted);margin-top:9px}.mini-list{display:grid;margin-top:14px}.mini-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:12px 2px;border-bottom:1px solid var(--line);cursor:pointer}.mini-row:last-child{border-bottom:none}.mini-row:hover strong{color:var(--primary)}.mini-row small{display:block;color:var(--muted);margin-top:3px}.mini-status{font-size:10px;font-weight:850;padding:5px 8px;border-radius:999px}.mini-status.paid{background:var(--green-bg);color:var(--green)}.mini-status.pending{background:var(--orange-bg);color:var(--orange)}
+  .toast{position:fixed;left:50%;bottom:18px;z-index:80;transform:translateX(-50%) translateY(10px);opacity:0;pointer-events:none;background:#16231e;color:#fff;border-radius:999px;padding:10px 16px;font-size:12px;font-weight:750;transition:.2s ease;box-shadow:0 12px 32px rgba(0,0,0,.2)}.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .setup-card{width:min(760px,100%)}
+  .workspace-options{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:24px 0}
+  .workspace-option{border:1px solid var(--line);background:#fff;border-radius:20px;padding:20px;text-align:left;color:var(--text);transition:.16s ease;box-shadow:0 8px 22px rgba(30,48,42,.035)}
+  .workspace-option:hover{border-color:var(--primary);transform:translateY(-2px);box-shadow:var(--shadow)}
+  .workspace-option-icon{width:46px;height:46px;border-radius:14px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;font-size:21px;margin-bottom:15px}
+  .workspace-option strong{display:block;font-size:18px;margin-bottom:6px}.workspace-option span{display:block;color:var(--muted);font-size:13px;line-height:1.5}
+  .setup-type-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;padding:12px 14px;border-radius:15px;background:var(--primary-soft)}
+  .setup-type-head strong{display:block}.setup-type-head span{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+  .type-chip{font-size:11px;font-weight:850;padding:7px 10px;border-radius:999px;background:#fff;color:var(--primary);white-space:nowrap}
+  .setup-members{border-top:1px solid var(--line);margin-top:8px}
+  .split-pill{font-size:10px;font-weight:850;padding:5px 8px;border-radius:999px;background:#f2f4f3;color:var(--muted)}
+  .balance-panel{overflow:hidden}.balance-summary{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;border-radius:16px;background:linear-gradient(135deg,#edf6f3,#f8faf9);margin-bottom:13px}.balance-summary>div span{display:block;font-size:11px;color:var(--muted);font-weight:750;text-transform:uppercase;letter-spacing:.35px}.balance-summary>div strong{display:block;font-size:24px;margin-top:4px;letter-spacing:-.5px}.balance-status{font-size:11px;font-weight:850;padding:7px 10px;border-radius:999px}.balance-status.ok{background:var(--green-bg);color:var(--green)}.balance-status.open{background:var(--orange-bg);color:var(--orange)}
+  .balance-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.balance-person{border:1px solid var(--line);border-radius:16px;padding:15px;background:#fff}.balance-person-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.balance-person-head strong,.balance-person>strong{display:block}.balance-person-head span{display:block;font-size:11px;color:var(--muted);margin-top:3px}.balance-chip{font-size:10px;font-weight:850;padding:5px 8px;border-radius:999px;white-space:nowrap}.balance-chip.positive{background:var(--green-bg);color:var(--green)}.balance-chip.negative{background:var(--orange-bg);color:var(--orange)}.balance-chip.neutral{background:var(--gray-bg);color:var(--gray)}.balance-money{font-size:24px;font-weight:880;letter-spacing:-.6px;margin:13px 0 9px}.positive{color:var(--green)}.negative{color:var(--orange)}.neutral{color:var(--muted)}.balance-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted)}.balance-meta b{color:var(--text)}.recommendation{margin-top:12px;padding:13px 15px;border-radius:14px;background:var(--primary-soft);color:var(--primary-2);font-size:13px;line-height:1.55}.balance-warning{margin-top:10px;padding:11px 13px;border-radius:12px;background:var(--yellow-bg);color:var(--yellow);font-size:12px;line-height:1.5}
+  .split-editor{border:1px solid var(--line);border-radius:14px;padding:6px 13px;background:#fbfcfb}.split-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--line)}.split-row:last-of-type{border-bottom:none}.split-row>span{font-weight:730}.split-row>div{display:flex;align-items:center;gap:6px}.split-row input{width:105px!important;text-align:right;padding:8px 9px!important}.split-row b{color:var(--muted)}.split-total{display:flex;justify-content:space-between;align-items:center;padding:10px 0 4px;font-size:12px;color:var(--muted)}.split-total strong.valid{color:var(--green)}.split-total strong.invalid{color:var(--red)}.money-input b{order:0}.money-input input{order:1}
+  .breakdown{display:grid;gap:7px}.breakdown>div{display:flex;justify-content:space-between;gap:12px}.breakdown span{color:var(--muted);font-weight:500}.breakdown strong{white-space:nowrap}
+  .modal-balance{margin-top:12px}.section-title{margin:22px 0 8px;font-size:16px}.month-list{display:grid}.month-row{display:grid;grid-template-columns:150px minmax(0,1fr);gap:16px;align-items:center;padding:12px 2px;border-bottom:1px solid var(--line)}.month-row small{display:block;color:var(--muted);margin-top:3px}.month-balances{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.month-balances span{font-size:11px;font-weight:800;padding:6px 8px;border-radius:999px;background:#f4f6f5}
+  .member-edit-row{position:relative;display:grid;grid-template-columns:1.25fr 1fr .8fr 1fr auto;gap:9px;align-items:end;padding:12px 36px 0 0;border-bottom:1px solid var(--line)}.member-edit-row .field{margin-bottom:12px}.member-remove{position:absolute;right:0;top:28px;width:30px;height:30px;border:none;border-radius:10px;background:var(--red-bg);color:var(--red);font-size:18px}.percent-input{display:flex;align-items:center;gap:5px}.percent-input b{color:var(--muted)}.family-note{margin:14px 0 0}
+
+
+  /* Vista mensual rápida */
+  .month-control{background:linear-gradient(135deg,#ffffff,#f7faf8);border:1px solid var(--line);border-radius:var(--radius);padding:19px;box-shadow:0 8px 24px rgba(30,48,42,.035);margin-bottom:16px}
+  .month-control-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:15px}
+  .month-control-head h2{font-size:19px;letter-spacing:-.35px;margin:0 0 4px}.month-control-head p{font-size:13px;color:var(--muted);margin:0}
+  .month-nav{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}.month-nav button{width:36px;height:36px;border:1px solid var(--line);background:#fff;border-radius:11px;color:var(--text);font-size:18px}.month-nav button:hover{border-color:var(--primary);color:var(--primary)}
+  .month-name{min-width:132px;text-align:center;font-weight:850;text-transform:capitalize}.month-current{border:none!important;width:auto!important;padding:0 10px!important;font-size:11px!important;font-weight:800;background:var(--primary-soft)!important;color:var(--primary)!important}
+  .month-progress{display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:13px;background:#f3f6f5;margin-bottom:13px;font-size:12px;color:var(--muted)}.month-progress strong{color:var(--text)}
+  .month-progress-track{height:7px;background:#dfe6e3;border-radius:999px;overflow:hidden;flex:1}.month-progress-fill{height:100%;background:var(--primary);border-radius:999px}
+  .monthly-list{display:grid;gap:9px}.monthly-service{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:16px;background:#fff;position:relative;overflow:hidden}.monthly-service:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:#a7b0ac}.monthly-service.loaded:before{background:var(--yellow)}.monthly-service.paid:before{background:var(--green)}.monthly-service.overdue:before{background:var(--red)}
+  .monthly-main{display:flex;align-items:center;gap:11px;min-width:0}.monthly-copy{min-width:0}.monthly-title{font-weight:820;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.monthly-sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.4}.monthly-amount{text-align:right;min-width:125px}.monthly-amount strong{display:block;font-size:18px;letter-spacing:-.4px}.monthly-amount span{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+  .monthly-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.monthly-status{display:inline-flex;align-items:center;padding:6px 9px;border-radius:999px;font-size:10px;font-weight:850;white-space:nowrap}.monthly-status.missing{background:var(--gray-bg);color:var(--gray)}.monthly-status.loaded{background:var(--yellow-bg);color:var(--yellow)}.monthly-status.paid{background:var(--green-bg);color:var(--green)}.monthly-status.overdue{background:var(--red-bg);color:var(--red)}
+  .folder-list{display:grid;gap:9px;margin-top:15px}.folder-record{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:center;border:1px solid var(--line);border-radius:14px;padding:13px;cursor:pointer}.folder-record:hover{border-color:#c7d5d0;background:#fafcfb}.folder-record strong{display:block}.folder-record small{display:block;color:var(--muted);margin-top:4px;line-height:1.35}.folder-docs{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.doc-chip{font-size:9px;font-weight:850;padding:5px 7px;border-radius:999px;background:var(--gray-bg);color:var(--gray)}.doc-chip.ok{background:var(--green-bg);color:var(--green)}
+  .folder-total{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:15px 0}.folder-total>div{padding:13px;border:1px solid var(--line);border-radius:14px;background:#fafcfb}.folder-total span{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.35px;color:var(--muted);font-weight:850}.folder-total strong{display:block;margin-top:6px;font-size:17px}
+
+
+  /* Cuadro de servicios por mes */
+  .service-matrix-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:#fff}
+  .service-matrix{width:100%;min-width:820px;border-collapse:separate;border-spacing:0}
+  .service-matrix th{padding:11px 12px;background:#f6f8f7;border-bottom:1px solid var(--line);font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.42px;color:var(--muted);text-align:left}
+  .service-matrix th:not(:first-child){text-align:center}
+  .service-matrix td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .service-matrix tbody tr:last-child td{border-bottom:none}
+  .service-matrix tbody tr:hover{background:#fbfcfb}
+  .matrix-service{min-width:205px}
+  .matrix-service-main{display:flex;align-items:center;gap:10px;min-width:0}
+  .matrix-service-copy{min-width:0;flex:1}.matrix-service-copy strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.matrix-service-copy span{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+  .matrix-folder{border:none;background:var(--primary-soft);color:var(--primary);border-radius:10px;padding:7px 9px;font-size:11px;font-weight:820}
+  .matrix-month{min-width:180px}
+  .matrix-cell{width:100%;min-height:82px;border:1px solid var(--line);border-radius:13px;padding:10px;text-align:left;background:#fff;color:var(--text);display:flex;flex-direction:column;justify-content:center;gap:3px;transition:.15s ease}
+  button.matrix-cell:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(30,48,42,.08)}
+  .matrix-cell strong{font-size:14px;line-height:1.25}.matrix-cell span{font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.28px}.matrix-cell small{font-size:10.5px;color:var(--muted);line-height:1.3}
+  .matrix-cell.missing{background:var(--gray-bg);border-color:#e0e4e2}.matrix-cell.missing span{color:var(--gray)}
+  .matrix-cell.loaded{background:var(--yellow-bg);border-color:#f0df9a}.matrix-cell.loaded span{color:var(--yellow)}
+  .matrix-cell.overdue{background:var(--red-bg);border-color:#f0c7c3}.matrix-cell.overdue span{color:var(--red)}
+  .matrix-cell.paid{background:var(--green-bg);border-color:#c9e6d2}.matrix-cell.paid span{color:var(--green)}
+  .matrix-help{margin-top:10px;color:var(--muted);font-size:11px;line-height:1.45}
+  .other-services-title{font-size:14px;margin:20px 0 7px}
+
+  @media(max-width:760px){
+    .page-head{align-items:flex-start;flex-direction:column}.head-actions{justify-content:flex-start;width:100%}.head-actions .btn{flex:1}
+    .stats{grid-template-columns:1fr}.obligation{grid-template-columns:1fr}.ob-side{text-align:left;align-items:flex-start}.ob-actions{justify-content:flex-start}.service-row{grid-template-columns:1fr}.service-actions{padding-left:54px}.paid-row{grid-template-columns:minmax(0,1fr) auto}.paid-status{display:none}.form-grid,.detail-grid,.docs{grid-template-columns:1fr}.form-grid .full,.detail-box.full{grid-column:auto}.role-pill{display:none}
+  }
+
+  @media(max-width:700px){
+    .month-control-head{align-items:flex-start;flex-direction:column}.month-nav{width:100%;justify-content:space-between}.month-name{min-width:0;flex:1}
+    .monthly-service{grid-template-columns:1fr}.monthly-amount{text-align:left;min-width:0}.monthly-actions{justify-content:flex-start}.folder-record{grid-template-columns:1fr}.folder-docs{justify-content:flex-start}.folder-total{grid-template-columns:1fr}
+    .service-matrix-wrap{margin-left:-5px;margin-right:-5px}.service-matrix{min-width:760px}.matrix-cell{min-height:76px}
+  }
+
+  @media(max-width:480px){.topbar-inner,.main{padding-left:13px;padding-right:13px}.top-actions .btn.soft{display:none}.tabs{width:100%}.tab{flex:1;padding:10px 8px}.page-head h1{font-size:24px}.modal{padding:20px 16px}.paid-amount{font-size:13px}}
+
+  @media(max-width:900px){.member-edit-row{grid-template-columns:1fr 1fr}.member-remove{top:15px}.balance-grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:620px){.workspace-options{grid-template-columns:1fr}.balance-grid{grid-template-columns:1fr}.balance-summary{align-items:flex-start}.month-row{grid-template-columns:1fr}.month-balances{justify-content:flex-start}.member-edit-row{grid-template-columns:1fr;padding-right:38px}.setup-card .form-grid{grid-template-columns:1fr}.setup-card .form-grid .full{grid-column:auto}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="modalRoot"></div>
+<div class="toast" id="toast"></div>
+<script>
+const STORE_KEY='gestor-gastos-v3';
+const SESSION_KEY='gestor-gastos-session';
+const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const CATEGORIES={
+  luz:{label:'Luz',abbr:'LUZ',kind:'servicio'},
+  gas:{label:'Gas',abbr:'GAS',kind:'servicio'},
+  agua:{label:'Agua',abbr:'AGUA',kind:'servicio'},
+  internet:{label:'Internet',abbr:'NET',kind:'servicio'},
+  alquiler:{label:'Alquiler / Expensas',abbr:'ALQ',kind:'servicio'},
+  otro:{label:'Otro servicio',abbr:'OTR',kind:'servicio'},
+  arca:{label:'ARCA',abbr:'ARCA',kind:'impuesto'},
+  iva:{label:'IVA',abbr:'IVA',kind:'impuesto'},
+  iibb:{label:'Ingresos Brutos',abbr:'IIBB',kind:'impuesto'},
+  moratoria:{label:'Moratoria',abbr:'MOR',kind:'impuesto'},
+  otro_impuesto:{label:'Otro impuesto',abbr:'IMP',kind:'impuesto'}
+};
+
+let state=loadState();
+let session=loadSession();
+let activeTab='obligaciones';
+let selectedMonth=currentMonthKey();
+let setupChoice=null;
+normalizeSession();
+
+function initialState(){return{workspace:null,members:[],services:[],records:[]}}
+function normalizeState(saved){
+  const next=saved||initialState();
+  next.services=next.services||[];
+  next.records=next.records||[];
+  next.members=next.members||[];
+  if(next.workspace&&!next.workspace.type)next.workspace.type='family';
+  if(next.workspace&&!next.members.length){
+    const adminPin=next.workspace.adminPin||'1234';
+    const viewerPin=next.workspace.viewerPin||'0000';
+    next.members=next.workspace.type==='company' ? [
+      {id:uid(),name:'Responsable 1',role:'admin',share:50,pin:adminPin},
+      {id:uid(),name:'Responsable 2',role:'admin',share:50,pin:adminPin},
+      {id:uid(),name:'Observador',role:'viewer',share:0,pin:viewerPin}
+    ] : [
+      {id:uid(),name:'Adulto 1',role:'admin',share:50,pin:adminPin},
+      {id:uid(),name:'Adulto 2',role:'admin',share:50,pin:adminPin},
+      {id:uid(),name:'Niño/a 1',role:'viewer',share:0,pin:viewerPin},
+      {id:uid(),name:'Niño/a 2',role:'viewer',share:0,pin:viewerPin}
+    ];
+  }
+  next.members.forEach(member=>{
+    member.role=member.role==='viewer'?'viewer':'admin';
+    member.share=member.role==='admin'?Number(member.share||0):0;
+    member.pin=String(member.pin||'');
+  });
+  return next;
+}
+function loadState(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(STORE_KEY));
+    return normalizeState(saved);
+  }catch(e){return initialState()}
+}
+function saveState(){localStorage.setItem(STORE_KEY,JSON.stringify(state))}
+function loadSession(){try{return JSON.parse(sessionStorage.getItem(SESSION_KEY))||null}catch(e){return null}}
+function saveSession(value){session=value;sessionStorage.setItem(SESSION_KEY,JSON.stringify(value))}
+function normalizeSession(){
+  if(!session||session.memberId||!state.members?.length)return;
+  const member=state.members.find(m=>m.role===session.role)||state.members[0];
+  if(member)saveSession({memberId:member.id,role:member.role,name:member.name});
+}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+function canEdit(){return session&&session.role==='admin'}
+function memberById(id){return state.members.find(m=>m.id===id)}
+function admins(){return state.members.filter(m=>m.role==='admin')}
+function contributors(){return admins().filter(m=>Number(m.share)>0)}
+function workspaceType(){return state.workspace?.type==='company'?'company':'family'}
+function isCompany(){return workspaceType()==='company'}
+function workspaceMark(){return isCompany()?'E':'F'}
+function workspaceKindLabel(){return isCompany()?'Empresa':'Grupo familiar'}
+function groupButtonLabel(){return isCompany()?'Equipo':'Familia'}
+function groupTitle(){return isCompany()?'Equipo y accesos':'Familia y accesos'}
+function groupUpdatedLabel(){return isCompany()?'Equipo actualizado':'Familia actualizada'}
+function balanceTitle(){return isCompany()?'Equilibrio del equipo':'Equilibrio familiar'}
+function controlSubtitle(){return isCompany()?'Control compartido de gastos de la empresa':'Control familiar de gastos'}
+function setupMembersFor(type){
+  return type==='company' ? [
+    {id:uid(),name:'Responsable 1',role:'admin',share:50,pin:''},
+    {id:uid(),name:'Responsable 2',role:'admin',share:50,pin:''},
+    {id:uid(),name:'Observador',role:'viewer',share:0,pin:''}
+  ] : [
+    {id:uid(),name:'Adulto 1',role:'admin',share:50,pin:''},
+    {id:uid(),name:'Adulto 2',role:'admin',share:50,pin:''},
+    {id:uid(),name:'Niño/a 1',role:'viewer',share:0,pin:''},
+    {id:uid(),name:'Niño/a 2',role:'viewer',share:0,pin:''}
+  ];
+}
+function serviceById(id){return state.services.find(s=>s.id===id)}
+function categoryOf(service){return CATEGORIES[service?.category]||CATEGORIES.otro}
+function currentMonthKey(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
+function monthLabel(key){if(!key)return 'Pago puntual';const [y,m]=String(key).split('-');return `${MONTHS[Number(m)-1]||''} ${y}`.trim()}
+function capitalizedMonth(key){const value=monthLabel(key);return value.charAt(0).toUpperCase()+value.slice(1)}
+function shiftMonth(key,delta){const [y,m]=String(key).split('-').map(Number),d=new Date(y,m-1+delta,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
+function recordsForServiceMonth(serviceId,key){return state.records.filter(r=>r.serviceId===serviceId&&r.period===key&&r.recordType!=='puntual'&&r.recordType!=='moratoria').sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))}
+function monthlyOverview(key){
+  return state.services.filter(s=>s.recurring).map(service=>{
+    const records=recordsForServiceMonth(service.id,key),record=records[0]||null;
+    let status='missing';
+    if(record){status=record.status==='pagado'?'paid':(relevantDue(record).days!==null&&relevantDue(record).days<0?'overdue':'loaded')}
+    return{service,record,status};
+  }).sort((a,b)=>{
+    const order={missing:0,overdue:1,loaded:2,paid:3};
+    return order[a.status]-order[b.status]||a.service.name.localeCompare(b.service.name,'es');
+  });
+}
+function fmtMoney(value){if(value===null||value===undefined||value==='')return '—';return Number(value).toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0})}
+function fmtDate(value){if(!value)return '—';const d=parseDate(value);return d.toLocaleDateString('es-AR',{day:'2-digit',month:'short',year:'numeric'})}
+function parseDate(value){const [y,m,d]=String(value).split('-').map(Number);return new Date(y,m-1,d)}
+function todayStart(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
+function daysUntil(value){if(!value)return null;return Math.round((parseDate(value)-todayStart())/86400000)}
+function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[m]))}
+function showToast(text){const el=document.getElementById('toast');el.textContent=text;el.classList.add('show');clearTimeout(showToast.timer);showToast.timer=setTimeout(()=>el.classList.remove('show'),2200)}
+function roundMoney(value){return Math.round((Number(value)||0)*100)/100}
+
+function recordTitle(record){const service=serviceById(record.serviceId);return record.title?.trim()||service?.name||'Concepto eliminado'}
+function recordKindLabel(record){const service=serviceById(record.serviceId);if(service?.category==='moratoria'||record.recordType==='moratoria')return 'Moratoria';return categoryOf(service).kind==='impuesto'?'Impuesto':'Servicio'}
+function relevantDue(record){
+  const d1=record.facturaDate||null,d2=record.facturaDate2||null;
+  const days1=daysUntil(d1),days2=daysUntil(d2);
+  if(d1&&days1>=0)return{date:d1,days:days1,amount:Number(record.facturaAmount||0),stage:'1° vencimiento'};
+  if(d2&&days2>=0)return{date:d2,days:days2,amount:Number(record.facturaAmount2||record.facturaAmount||0),stage:'2° vencimiento'};
+  if(d2)return{date:d2,days:days2,amount:Number(record.facturaAmount2||record.facturaAmount||0),stage:'2° vencimiento'};
+  if(d1)return{date:d1,days:days1,amount:Number(record.facturaAmount||0),stage:'Vencimiento'};
+  return{date:null,days:null,amount:Number(record.facturaAmount||0),stage:'Sin fecha'};
+}
+function toneForDays(days){if(days===null)return'nodate';if(days<0)return'overdue';if(days<=2)return'urgent';if(days<=5)return'warning';if(days<=10)return'safe';return'far'}
+function dueLabel(meta){
+  if(meta.days===null)return'Sin fecha de vencimiento';
+  if(meta.days<0)return`Vencido hace ${Math.abs(meta.days)} día${Math.abs(meta.days)===1?'':'s'}`;
+  if(meta.days===0)return'Vence hoy';
+  if(meta.days===1)return'Vence mañana';
+  if(meta.days<=5)return`Faltan ${meta.days} días`;
+  return`Vence en ${meta.days} días`;
+}
+function pendingRecords(){
+  return state.records.filter(r=>r.status!=='pagado').sort((a,b)=>{
+    const ma=relevantDue(a),mb=relevantDue(b);
+    const ra=ma.days===null?3:(ma.days<0?0:1),rb=mb.days===null?3:(mb.days<0?0:1);
+    if(ra!==rb)return ra-rb;
+    if(ma.days!==mb.days)return (ma.days??99999)-(mb.days??99999);
+    return mb.amount-ma.amount;
+  });
+}
+function paidRecords(){return state.records.filter(r=>r.status==='pagado').sort((a,b)=>(b.paidAt||0)-(a.paidAt||0))}
+function currentAmount(record){return relevantDue(record).amount}
+function paymentAmount(record){return Number(record.comprobanteAmount||record.facturaAmount||0)}
+
+function defaultShares(){
+  const list=contributors();
+  const total=list.reduce((sum,m)=>sum+Number(m.share||0),0);
+  const out={};
+  if(!list.length)return out;
+  list.forEach((m,index)=>out[m.id]=index===list.length-1?roundMoney(100-Object.values(out).reduce((a,b)=>a+b,0)):roundMoney(total?Number(m.share||0)*100/total:100/list.length));
+  return out;
+}
+function recordShares(record){
+  const raw=record?.shares&&typeof record.shares==='object'?record.shares:null;
+  if(!raw||!Object.values(raw).some(v=>Number(v)>0))return defaultShares();
+  const cleaned={};
+  Object.entries(raw).forEach(([id,val])=>{if(memberById(id)&&Number(val)>=0)cleaned[id]=Number(val)});
+  return Object.values(cleaned).some(v=>v>0)?cleaned:defaultShares();
+}
+function recordPayments(record){
+  if(record?.payments&&typeof record.payments==='object'){
+    const out={};Object.entries(record.payments).forEach(([id,val])=>{if(memberById(id)&&Number(val)>0)out[id]=Number(val)});return out;
+  }
+  if(record?.payerId&&memberById(record.payerId))return{[record.payerId]:paymentAmount(record)};
+  return{};
+}
+function sumObject(obj){return Object.values(obj||{}).reduce((sum,val)=>sum+Number(val||0),0)}
+function sharesLabel(record){
+  const shares=recordShares(record);
+  const parts=contributors().filter(m=>Number(shares[m.id]||0)>0).map(m=>`${Math.round(Number(shares[m.id]))}%`);
+  return parts.length?parts.join(' / '):'Sin reparto';
+}
+function sharesText(record){
+  const shares=recordShares(record);
+  return contributors().filter(m=>Number(shares[m.id]||0)>0).map(m=>`${m.name}: ${Number(shares[m.id]).toLocaleString('es-AR',{maximumFractionDigits:2})}%`).join(' · ')||'Sin reparto configurado';
+}
+function paidByText(record){
+  const payments=recordPayments(record);
+  const parts=Object.entries(payments).filter(([,v])=>Number(v)>0).map(([id,val])=>`${memberById(id)?.name||'Integrante'} ${fmtMoney(val)}`);
+  return parts.length?parts.join(' · '):'Pagador sin asignar';
+}
+function paymentIsComplete(record){
+  const amount=paymentAmount(record),total=sumObject(recordPayments(record));
+  return amount>0&&Math.abs(total-amount)<=1;
+}
+function balanceData(records=paidRecords()){
+  const list=contributors();
+  const rows={};
+  list.forEach(m=>rows[m.id]={member:m,paid:0,owed:0,balance:0});
+  let totalExpenses=0,unassigned=0,usedRecords=0;
+  records.forEach(record=>{
+    const amount=paymentAmount(record);
+    if(!amount)return;
+    const payments=recordPayments(record),paidTotal=sumObject(payments);
+    if(!Object.keys(payments).length||Math.abs(paidTotal-amount)>1){unassigned++;return}
+    const shares=recordShares(record),shareTotal=sumObject(shares);
+    if(!shareTotal){unassigned++;return}
+    usedRecords++;totalExpenses+=amount;
+    list.forEach(member=>{
+      rows[member.id].paid+=Number(payments[member.id]||0);
+      rows[member.id].owed+=amount*(Number(shares[member.id]||0)/shareTotal);
+    });
+  });
+  Object.values(rows).forEach(row=>row.balance=roundMoney(row.paid-row.owed));
+  const balanced=Object.values(rows).every(row=>Math.abs(row.balance)<1);
+  return{rows:Object.values(rows),totalExpenses,unassigned,usedRecords,balanced};
+}
+function settlements(balance){
+  const creditors=balance.rows.filter(r=>r.balance>1).map(r=>({...r,remaining:r.balance}));
+  const debtors=balance.rows.filter(r=>r.balance<-1).map(r=>({...r,remaining:-r.balance}));
+  const result=[];let i=0,j=0;
+  while(i<debtors.length&&j<creditors.length){
+    const amount=Math.min(debtors[i].remaining,creditors[j].remaining);
+    if(amount>1)result.push({from:debtors[i].member,to:creditors[j].member,amount:roundMoney(amount)});
+    debtors[i].remaining-=amount;creditors[j].remaining-=amount;
+    if(debtors[i].remaining<1)i++;if(creditors[j].remaining<1)j++;
+  }
+  return result;
+}
+function balanceClass(value){return value>1?'positive':value<-1?'negative':'neutral'}
+function signedMoney(value){if(Math.abs(Number(value)||0)<1)return fmtMoney(0);return `${value>0?'+':'−'}${fmtMoney(Math.abs(value))}`}
+function recordMonth(record){return record.period||(record.comprobanteDate?record.comprobanteDate.slice(0,7):currentMonthKey())}
+function monthlyBalances(){
+  const groups={};
+  paidRecords().forEach(record=>{const key=recordMonth(record);(groups[key]||(groups[key]=[])).push(record)});
+  return Object.keys(groups).sort().reverse().map(key=>({key,balance:balanceData(groups[key])}));
+}
+
+function render(){if(!state.workspace){renderSetup();return}if(!session){renderLogin();return}renderApp()}
+function renderSetup(){
+  if(!setupChoice){
+    document.getElementById('app').innerHTML=`<div class="login-wrap"><div class="login-card setup-card"><div class="logo"><div class="logo-mark">G</div><div><strong>Gestor de gastos</strong><span>Configuración inicial</span></div></div><h1>¿Cómo se va a usar?</h1><p>Primero elegí el tipo de espacio. Después configurás quiénes participan, quiénes pueden administrar y cómo se reparten los gastos.</p><div class="workspace-options"><button class="workspace-option" data-workspace-type="family"><div class="workspace-option-icon">⌂</div><strong>Grupo familiar</strong><span>Para adultos, hijos u otros integrantes. Permite repartir gastos y arrastrar saldos a favor entre meses.</span></button><button class="workspace-option" data-workspace-type="company"><div class="workspace-option-icon">▦</div><strong>Empresa</strong><span>Para socios, responsables o áreas. Permite definir porcentajes de aporte y usuarios de solo consulta.</span></button></div><div class="login-note">En ambos casos, los administradores pueden cargar y abonar gastos. Los usuarios de consulta solo pueden observar.</div></div></div>`;
+    document.querySelectorAll('[data-workspace-type]').forEach(btn=>btn.onclick=()=>{setupChoice=btn.dataset.workspaceType;renderSetup()});
+    return;
+  }
+  const type=setupChoice;
+  const company=type==='company';
+  const members=setupMembersFor(type);
+  document.getElementById('app').innerHTML=`<div class="login-wrap"><div class="login-card setup-card"><div class="logo"><div class="logo-mark">${company?'E':'F'}</div><div><strong>${company?'Configurar empresa':'Configurar grupo familiar'}</strong><span>Integrantes, permisos y reparto</span></div></div><div class="setup-type-head"><div><strong>${company?'Empresa':'Grupo familiar'}</strong><span>${company?'Socios, responsables, colaboradores y observadores.':'Adultos, hijos y otros integrantes del hogar.'}</span></div><span class="type-chip">Paso 2 de 2</span></div><div class="field"><label>Nombre del espacio</label><input id="setupName" placeholder="${company?'Ej: Administración Mi Empresa':'Ej: Gastos de la familia'}"></div><div class="setup-members" id="setupMembers">${members.map(memberRow).join('')}</div><button class="btn soft small" id="addSetupMember">+ Agregar integrante</button><div class="balance-warning family-note">Los administradores con participación son quienes aportan. Sus porcentajes deben sumar 100%. Los usuarios de consulta llevan 0%.</div><div class="modal-actions"><button class="btn outline" id="backSetup">Volver</button><button class="btn primary" id="createWorkspace">Crear ${company?'empresa':'grupo familiar'}</button></div></div></div>`;
+  bindMemberRows();
+  addSetupMember.onclick=()=>{setupMembers.insertAdjacentHTML('beforeend',memberRow({id:'',name:'',role:'viewer',share:0,pin:''}));bindMemberRows()};
+  backSetup.onclick=()=>{setupChoice=null;renderSetup()};
+  createWorkspace.onclick=()=>{
+    const name=setupName.value.trim(),rows=[...document.querySelectorAll('[data-member-row]')],members=[];
+    if(!name){showToast('Poné un nombre para el espacio');return}
+    for(const row of rows){
+      const memberName=row.querySelector('[data-member-name]').value.trim();
+      const role=row.querySelector('[data-member-role]').value;
+      const pin=row.querySelector('[data-member-pin]').value.trim();
+      const share=role==='admin'?Number(row.querySelector('[data-member-share]').value||0):0;
+      if(!memberName||pin.length<4){showToast('Cada integrante necesita nombre y PIN de al menos 4 caracteres');return}
+      members.push({id:row.dataset.id||uid(),name:memberName,role,share,pin});
+    }
+    const adminsList=members.filter(m=>m.role==='admin');
+    if(!adminsList.length){showToast('Debe existir al menos un administrador');return}
+    const total=adminsList.reduce((sum,m)=>sum+Number(m.share||0),0);
+    if(Math.abs(total-100)>.01){showToast('La participación de los aportantes debe sumar 100%');return}
+    const firstAdmin=adminsList[0];
+    state={workspace:{name,type},members,services:[],records:[]};
+    saveState();saveSession({memberId:firstAdmin.id,role:firstAdmin.role,name:firstAdmin.name});setupChoice=null;render();
+  };
+}
+function renderLogin(){
+  const options=state.members.map(m=>`<option value="${m.id}">${escapeHtml(m.name)} · ${m.role==='admin'?'Administrador':'Solo consulta'}</option>`).join('');
+  document.getElementById('app').innerHTML=`<div class="login-wrap"><div class="login-card"><div class="logo"><div class="logo-mark">${workspaceMark()}</div><div><strong>${escapeHtml(state.workspace.name)}</strong><span>${workspaceKindLabel()} · Acceso privado</span></div></div><h1>Ingresar</h1><p>Elegí tu integrante e ingresá su código de acceso.</p><div class="field"><label>Integrante</label><select id="loginMember">${options}</select></div><div class="field"><label>Código de acceso</label><input id="loginPin" type="password" placeholder="••••"></div><button class="btn primary full" id="loginBtn">Ingresar</button></div></div>`;
+  loginBtn.onclick=login;loginPin.onkeydown=e=>{if(e.key==='Enter')login()};
+}
+function login(){const member=memberById(loginMember.value),pin=loginPin.value.trim();if(!member||pin!==member.pin){showToast('Código incorrecto');return}saveSession({memberId:member.id,role:member.role,name:member.name});render()}
+function renderApp(){
+  const pending=pendingRecords(),paid=paidRecords(),current=memberById(session.memberId),missing=monthlyOverview(selectedMonth).filter(x=>x.status==='missing').length;
+  document.getElementById('app').innerHTML=`<div class="topbar"><div class="topbar-inner"><div class="brand"><div class="logo-mark">${workspaceMark()}</div><div class="brand-copy"><strong>${escapeHtml(state.workspace.name)}</strong><span>${controlSubtitle()}</span></div></div><div class="top-actions"><span class="role-pill">${escapeHtml(current?.name||session.name)} · ${canEdit()?'Administrador':'Solo consulta'}</span>${canEdit()?`<button class="btn soft small" id="familyBtn">${groupButtonLabel()}</button>`:''}<button class="btn outline small" id="logoutBtn">Salir</button></div></div></div><main class="main"><div class="tabs"><button class="tab ${activeTab==='obligaciones'?'active':''}" data-tab="obligaciones">Servicios e impuestos <span class="tab-count">${pending.length+missing}</span></button><button class="tab ${activeTab==='abonados'?'active':''}" data-tab="abonados">Abonados <span class="tab-count">${paid.length}</span></button></div><div id="content"></div></main>`;
+  document.querySelectorAll('[data-tab]').forEach(btn=>btn.onclick=()=>{activeTab=btn.dataset.tab;renderApp()});
+  logoutBtn.onclick=()=>{sessionStorage.removeItem(SESSION_KEY);session=null;render()};
+  if(canEdit())familyBtn.onclick=openFamilyModal;
+  renderContent();
+}
+function renderContent(){const content=document.getElementById('content');content.innerHTML=activeTab==='obligaciones'?renderObligations():renderPaid();bindContent()}
+function pageHead(title,subtitle,actions=''){return `<div class="page-head"><div><h1>${title}</h1><p>${subtitle}</p></div>${actions?`<div class="head-actions">${actions}</div>`:''}</div>`}
+function renderBalancePanel(){
+  const balance=balanceData(),moves=settlements(balance);
+  const cards=balance.rows.map(row=>`<div class="balance-person"><div class="balance-person-head"><div><strong>${escapeHtml(row.member.name)}</strong><span>${Number(row.member.share).toLocaleString('es-AR',{maximumFractionDigits:2})}% de participación</span></div><div class="balance-chip ${balanceClass(row.balance)}">${row.balance>1?'A favor':row.balance<-1?'Por compensar':'Equilibrado'}</div></div><div class="balance-money ${balanceClass(row.balance)}">${signedMoney(row.balance)}</div><div class="balance-meta"><span>Le correspondía <b>${fmtMoney(row.owed)}</b></span><span>Pagó <b>${fmtMoney(row.paid)}</b></span></div></div>`).join('');
+  let recommendation='Todavía no hay pagos suficientes para calcular la compensación.';
+  if(balance.usedRecords&&balance.balanced)recommendation='Todos están compensados. El próximo gasto puede volver a dividirse según el porcentaje habitual.';
+  else if(moves.length===1)recommendation=`Para volver al equilibrio, <b>${escapeHtml(moves[0].from.name)}</b> debería cubrir <b>${fmtMoney(moves[0].amount)}</b> más que ${escapeHtml(moves[0].to.name)} en los próximos gastos.`;
+  else if(moves.length)recommendation=moves.map(m=>`<b>${escapeHtml(m.from.name)}</b> debe compensar <b>${fmtMoney(m.amount)}</b> a ${escapeHtml(m.to.name)}`).join(' · ');
+  return `<section class="panel balance-panel"><div class="panel-head"><div><h2>${balanceTitle()}</h2><p class="panel-sub">Saldo acumulado de todos los períodos. Los importes a favor se trasladan automáticamente.</p></div><button class="btn soft small" data-balance-detail>Ver cálculo</button></div><div class="balance-summary"><div><span>Gastos abonados analizados</span><strong>${fmtMoney(balance.totalExpenses)}</strong></div><span class="balance-status ${balance.balanced?'ok':'open'}">${balance.balanced?'Compensados':'Hay diferencia'}</span></div><div class="balance-grid">${cards||'<div class="empty">Configurá quiénes participan en los gastos.</div>'}</div><div class="recommendation">${recommendation}</div>${balance.unassigned?`<div class="balance-warning">Hay ${balance.unassigned} pago${balance.unassigned===1?'':'s'} anterior${balance.unassigned===1?'':'es'} sin aportantes asignados. Abrilos desde “Abonados” y elegí quién pagó para incluirlos en el equilibrio.</div>`:''}</section>`;
+}
+function renderObligations(){
+  const pending=pendingRecords(),monthRows=monthlyOverview(selectedMonth);
+  const loaded=monthRows.filter(x=>x.record),missing=monthRows.filter(x=>!x.record),monthPending=monthRows.filter(x=>x.record&&x.record.status!=='pagado'),monthPaid=monthRows.filter(x=>x.record?.status==='pagado');
+  const overdue=pending.filter(r=>relevantDue(r).days!==null&&relevantDue(r).days<0);
+  const nextFive=pending.filter(r=>{const d=relevantDue(r).days;return d!==null&&d>=0&&d<=5});
+  const total=pending.reduce((sum,r)=>sum+currentAmount(r),0),overdueTotal=overdue.reduce((sum,r)=>sum+currentAmount(r),0),monthPendingTotal=monthPending.reduce((sum,x)=>sum+currentAmount(x.record),0);
+  const actions=canEdit()?'<button class="btn outline" data-new-point>+ Pago puntual / moratoria</button><button class="btn primary" data-new-service>+ Cargar servicio o impuesto</button>':'';
+  const pct=monthRows.length?Math.round(loaded.length/monthRows.length*100):0;
+  return `${pageHead('Servicios e impuestos','Control mensual, deudas pendientes y carpetas completas de cada servicio.',actions)}
+  <section class="month-control"><div class="month-control-head"><div><h2>Servicios de ${capitalizedMonth(selectedMonth)}</h2><p>Qué facturas ya están cargadas, cuáles faltan y cuáles esperan el pago.</p></div><div class="month-nav"><button data-month-prev title="Mes anterior">‹</button><div class="month-name">${capitalizedMonth(selectedMonth)}</div><button data-month-next title="Mes siguiente">›</button>${selectedMonth!==currentMonthKey()?'<button class="month-current" data-month-current>Este mes</button>':''}</div></div>
+  <div class="month-progress"><strong>${loaded.length} de ${monthRows.length}</strong> servicios mensuales con importe cargado<div class="month-progress-track"><div class="month-progress-fill" style="width:${pct}%"></div></div><span>${pct}%</span></div>
+  ${monthRows.length?`<div class="monthly-list">${monthRows.map(monthlyServiceRow).join('')}</div>`:'<div class="empty"><div class="empty-icon">＋</div>No hay servicios mensuales configurados. Al crear uno, aparecerá automáticamente en cada mes.</div>'}</section>
+  <div class="stats"><div class="stat"><div class="stat-label">Falta cargar</div><div class="stat-value">${missing.length}</div><div class="stat-sub">servicio${missing.length===1?'':'s'} sin vencimiento ni importe en ${monthLabel(selectedMonth)}</div></div><div class="stat"><div class="stat-label">Cargados y pendientes</div><div class="stat-value">${fmtMoney(monthPendingTotal)}</div><div class="stat-sub">${monthPending.length} factura${monthPending.length===1?'':'s'} esperando pago</div></div><div class="stat"><div class="stat-label">Abonados del mes</div><div class="stat-value">${monthPaid.length}</div><div class="stat-sub">de ${monthRows.length} servicios mensuales</div></div></div>
+  <section class="panel"><div class="panel-head"><div><h2>Prioridades de pago</h2><p class="panel-sub">Incluye las deudas de meses anteriores. Primero aparecen los vencidos y luego los próximos vencimientos.</p></div><div style="text-align:right"><strong>${fmtMoney(total)}</strong><div class="panel-sub">deuda total cargada</div></div></div><div class="legend"><span class="legend-item far">Más de 10 días</span><span class="legend-item safe">6 a 10 días</span><span class="legend-item warning">3 a 5 días</span><span class="legend-item urgent">Hoy a 2 días</span><span class="legend-item overdue">Vencido</span></div>${pending.length?`<div class="obligation-list">${pending.map(obligationCard).join('')}</div>`:'<div class="empty"><div class="empty-icon">✓</div>No hay deudas ni vencimientos cargados pendientes.</div>'}</section>
+  ${renderBalancePanel()}
+  ${renderServiceMatrix()}`;
+}
+function serviceMonthItem(service,key){
+  const record=recordsForServiceMonth(service.id,key)[0]||null;
+  let status='missing';
+  if(record)status=record.status==='pagado'?'paid':(relevantDue(record).days!==null&&relevantDue(record).days<0?'overdue':'loaded');
+  return{service,record,status,key};
+}
+function serviceMonthCell(service,key){
+  const {record,status}=serviceMonthItem(service,key);
+  if(!record){
+    const inner=`<strong>Sin datos</strong><span>Falta cargar</span><small>Vencimiento e importe</small>`;
+    return canEdit()?`<button class="matrix-cell missing" data-load-month="${service.id}" data-period="${key}" title="Cargar ${monthLabel(key)}">${inner}</button>`:`<div class="matrix-cell missing">${inner}</div>`;
+  }
+  const meta=relevantDue(record),amount=record.status==='pagado'?paymentAmount(record):currentAmount(record);
+  let label='Cargado · falta pagar',detail=meta.date?`Vence ${fmtDate(meta.date)}`:'Sin fecha';
+  if(status==='paid'){label='Abonado';detail=record.comprobanteDate?`Pagado ${fmtDate(record.comprobanteDate)}`:'Pago registrado'}
+  else if(status==='overdue'){label='Vencido';detail=meta.date?`Venció ${fmtDate(meta.date)}`:'Vencido'}
+  return `<button class="matrix-cell ${status}" data-month-record="${record.id}" title="Abrir ${service.name} · ${monthLabel(key)}"><strong>${fmtMoney(amount)}</strong><span>${label}</span><small>${escapeHtml(detail)}</small></button>`;
+}
+function renderServiceMatrix(){
+  const recurring=state.services.filter(s=>s.recurring).slice().sort((a,b)=>a.name.localeCompare(b.name,'es'));
+  const eventual=state.services.filter(s=>!s.recurring).slice().sort((a,b)=>a.name.localeCompare(b.name,'es'));
+  const months=[selectedMonth,shiftMonth(selectedMonth,1),shiftMonth(selectedMonth,2)];
+  let body='';
+  if(recurring.length){
+    body=`<div class="service-matrix-wrap"><table class="service-matrix"><thead><tr><th>Servicio mensual</th>${months.map(m=>`<th>${capitalizedMonth(m)}</th>`).join('')}</tr></thead><tbody>${recurring.map(service=>`<tr><td class="matrix-service"><div class="matrix-service-main"><div class="service-icon">${categoryOf(service).abbr}</div><div class="matrix-service-copy"><strong>${escapeHtml(service.name)}</strong><span>${escapeHtml(categoryOf(service).label)} · Mensual</span></div><button class="matrix-folder" data-month-folder="${service.id}">Carpeta</button></div></td>${months.map(m=>`<td class="matrix-month">${serviceMonthCell(service,m)}</td>`).join('')}</tr>`).join('')}</tbody></table></div><div class="matrix-help">Tocá un mes con “Sin datos” para cargar su vencimiento e importe. Tocá un mes cargado para ver la factura, abonarlo o consultar el comprobante.</div>`;
+  }else body='<div class="empty"><div class="empty-icon">＋</div>No hay servicios mensuales configurados.</div>';
+  const other=eventual.length?`<h3 class="other-services-title">Servicios eventuales y otras carpetas</h3><div class="service-list">${eventual.map(serviceRow).join('')}</div>`:'';
+  return `<section class="panel"><div class="panel-head"><div><h2>Servicios por mes</h2><p class="panel-sub">Vista rápida de ${monthLabel(months[0])}, ${monthLabel(months[1])} y ${monthLabel(months[2])}. Cada fila funciona como una carpeta del servicio.</p></div>${canEdit()?'<button class="btn soft small" data-new-service>+ Agregar</button>':''}</div>${body}${other}</section>`;
+}
+
+function monthlyServiceRow(item){
+  const {service,record,status}=item,meta=record?relevantDue(record):null;
+  const statusText=status==='missing'?'Falta cargar':status==='paid'?'Abonado':status==='overdue'?'Vencido':'Cargado · falta pagar';
+  const amount=record?(record.status==='pagado'?paymentAmount(record):currentAmount(record)):null;
+  const sub=record?(record.status==='pagado'?`Pagado ${fmtDate(record.comprobanteDate)}`:`${fmtDate(meta.date)} · ${dueLabel(meta)}`):`Todavía no se cargó el vencimiento ni el importe de ${monthLabel(selectedMonth)}`;
+  let actions=`<button class="btn soft small" data-month-folder="${service.id}">Abrir carpeta</button>`;
+  if(record){actions=`<button class="btn outline small" data-month-record="${record.id}">Ver</button>${canEdit()&&record.status!=='pagado'?`<button class="btn primary small" data-month-pay="${record.id}">Abonar</button>`:''}<button class="btn soft small" data-month-folder="${service.id}">Carpeta</button>`}
+  else if(canEdit())actions=`<button class="btn primary small" data-load-month="${service.id}" data-period="${selectedMonth}">Cargar importe</button><button class="btn soft small" data-month-folder="${service.id}">Carpeta</button>`;
+  return `<div class="monthly-service ${status}"><div class="monthly-main"><div class="service-icon">${categoryOf(service).abbr}</div><div class="monthly-copy"><div class="monthly-title">${escapeHtml(service.name)}</div><div class="monthly-sub">${escapeHtml(sub)}</div></div></div><div class="monthly-amount"><strong>${amount===null?'—':fmtMoney(amount)}</strong><span class="monthly-status ${status}">${statusText}</span></div><div class="monthly-actions">${actions}</div></div>`;
+}
+function obligationCard(record){
+  const service=serviceById(record.serviceId),meta=relevantDue(record),tone=toneForDays(meta.days),kind=recordKindLabel(record),title=recordTitle(record);
+  const subtitle=[record.title&&service?service.name:null,record.period?monthLabel(record.period):'Pago puntual',meta.date?fmtDate(meta.date):null].filter(Boolean).join(' · ');
+  return `<article class="obligation ${tone}" data-open-record="${record.id}"><div class="ob-main"><div class="ob-top"><span class="kind-pill ${kind==='Moratoria'?'moratoria':''}">${kind}</span><span class="split-pill">${sharesLabel(record)}</span></div><h3>${escapeHtml(title)}</h3><div class="ob-sub">${escapeHtml(subtitle)}</div><span class="due-pill ${tone}">${dueLabel(meta)}</span></div><div class="ob-side"><div><div class="ob-amount">${fmtMoney(meta.amount)}</div><div class="ob-stage">${meta.stage}</div></div><div class="ob-actions"><button class="btn outline small" data-detail-record="${record.id}">Ver detalle</button>${canEdit()?`<button class="btn primary small" data-pay-record="${record.id}">Marcar abonado</button>`:''}</div></div></article>`;
+}
+function serviceRow(service){
+  const records=state.records.filter(r=>r.serviceId===service.id),pending=records.filter(r=>r.status!=='pagado'),next=pending.sort((a,b)=>(relevantDue(a).days??99999)-(relevantDue(b).days??99999))[0];
+  let pendingText='Sin deudas cargadas';
+  if(next){const meta=relevantDue(next);pendingText=meta.days!==null&&meta.days<0?`Deuda vencida: ${fmtDate(meta.date)}`:meta.days===0?'Vence hoy':`Pendiente: ${fmtDate(meta.date)}`}
+  return `<div class="service-row"><div class="service-main" data-open-service="${service.id}" style="cursor:pointer"><div class="service-icon">${categoryOf(service).abbr}</div><div style="min-width:0"><div class="service-title">${escapeHtml(service.name)}</div><div class="service-sub">${categoryOf(service).label} · ${service.recurring?'Mensual':'Eventual'} · ${escapeHtml(pendingText)}</div></div></div><div class="service-actions">${canEdit()?`<button class="btn outline small" data-add-due="${service.id}">+ Vencimiento</button>`:''}<button class="btn soft small" data-open-service="${service.id}">Abrir carpeta</button></div></div>`;
+}
+function renderPaid(){
+  const paid=paidRecords();
+  return `${pageHead('Abonados','Historial completo de pagos. Abrí cualquiera para ver quién aportó y cómo impactó en el equilibrio.')}<section class="panel"><div class="panel-head"><div><h2>Historial</h2><p class="panel-sub">Factura, vencimientos, aportantes, fecha de pago e importe.</p></div><input class="search" id="paidSearch" placeholder="Buscar servicio o concepto"></div><div id="paidList">${paid.length?`<div class="paid-list">${paid.map(paidRow).join('')}</div>`:'<div class="empty"><div class="empty-icon">✓</div>Todavía no hay pagos abonados.</div>'}</div></section>`;
+}
+function paidRow(record){const service=serviceById(record.serviceId);return `<div class="paid-row" data-open-paid="${record.id}"><div class="paid-main"><div class="paid-icon">✓</div><div style="min-width:0"><div class="paid-title">${escapeHtml(recordTitle(record))}</div><div class="paid-sub">${service&&record.title?escapeHtml(service.name)+' · ':''}${record.period?monthLabel(record.period):'Pago puntual'} · ${escapeHtml(paidByText(record))}</div></div></div><div class="paid-amount">${fmtMoney(paymentAmount(record))}</div><span class="paid-status">Abonado</span></div>`}
+function bindContent(){
+  document.querySelectorAll('[data-new-service]').forEach(x=>x.onclick=openServiceModal);
+  document.querySelectorAll('[data-new-point]').forEach(x=>x.onclick=openPointModal);
+  document.querySelectorAll('[data-open-record],[data-detail-record],[data-open-paid],[data-month-record]').forEach(x=>x.onclick=e=>{e.stopPropagation();openRecordDetail(x.dataset.openRecord||x.dataset.detailRecord||x.dataset.openPaid||x.dataset.monthRecord)});
+  document.querySelectorAll('[data-pay-record],[data-month-pay]').forEach(x=>x.onclick=e=>{e.stopPropagation();openPaymentModal(x.dataset.payRecord||x.dataset.monthPay)});
+  document.querySelectorAll('[data-open-service],[data-month-folder]').forEach(x=>x.onclick=e=>{e.stopPropagation();openServiceDetail(x.dataset.openService||x.dataset.monthFolder)});
+  document.querySelectorAll('[data-add-due]').forEach(x=>x.onclick=e=>{e.stopPropagation();openDueModal(x.dataset.addDue)});
+  document.querySelectorAll('[data-load-month]').forEach(x=>x.onclick=e=>{e.stopPropagation();openDueModal(x.dataset.loadMonth,null,x.dataset.period)});
+  document.querySelectorAll('[data-balance-detail]').forEach(x=>x.onclick=openBalanceDetail);
+  const prev=document.querySelector('[data-month-prev]');if(prev)prev.onclick=()=>{selectedMonth=shiftMonth(selectedMonth,-1);renderApp()};
+  const next=document.querySelector('[data-month-next]');if(next)next.onclick=()=>{selectedMonth=shiftMonth(selectedMonth,1);renderApp()};
+  const current=document.querySelector('[data-month-current]');if(current)current.onclick=()=>{selectedMonth=currentMonthKey();renderApp()};
+  const search=document.getElementById('paidSearch');if(search)search.oninput=filterPaid;
+}
+function filterPaid(){const query=paidSearch.value.trim().toLowerCase(),rows=paidRecords().filter(r=>{const s=serviceById(r.serviceId);return `${recordTitle(r)} ${s?.name||''} ${categoryOf(s).label} ${paidByText(r)}`.toLowerCase().includes(query)});paidList.innerHTML=rows.length?`<div class="paid-list">${rows.map(paidRow).join('')}</div>`:'<div class="empty">No se encontraron pagos.</div>';document.querySelectorAll('[data-open-paid]').forEach(x=>x.onclick=()=>openRecordDetail(x.dataset.openPaid))}
+
+function shareBlock(shares){
+  const list=contributors();
+  if(!list.length)return'<div class="balance-warning">Primero configurá al menos un aportante con participación.</div>';
+  return `<div class="field full"><label>Cómo se divide este gasto</label><div class="split-editor">${list.map(m=>`<div class="split-row"><span>${escapeHtml(m.name)}</span><div><input type="number" min="0" max="100" step="0.01" data-share-member="${m.id}" value="${Number(shares[m.id]??m.share)}"><b>%</b></div></div>`).join('')}<div class="split-total">Total <strong id="splitTotal">0%</strong></div></div><div class="hint">Por defecto se usa el reparto general del espacio. Podés cambiarlo solo para este gasto.</div></div>`;
+}
+function bindShareEditor(){
+  const inputs=[...document.querySelectorAll('[data-share-member]')],total=document.getElementById('splitTotal');
+  const update=()=>{const value=inputs.reduce((sum,input)=>sum+Number(input.value||0),0);if(total){total.textContent=`${value.toLocaleString('es-AR',{maximumFractionDigits:2})}%`;total.className=Math.abs(value-100)<.01?'valid':'invalid'}};
+  inputs.forEach(input=>input.oninput=update);update();
+}
+function readShares(){
+  const result={};document.querySelectorAll('[data-share-member]').forEach(input=>result[input.dataset.shareMember]=Number(input.value||0));
+  const total=sumObject(result);if(Math.abs(total-100)>.01){showToast('La división del gasto debe sumar 100%');return null}return result;
+}
+function paymentBlock(payments,amount,newRecord){
+  const list=admins();
+  return `<div class="field full"><label>Quién aportó el dinero</label><div class="split-editor payment-editor">${list.map(m=>{let value=Number(payments[m.id]||0);if(newRecord&&!Object.keys(payments).length&&m.id===session.memberId)value=amount;return `<div class="split-row"><span>${escapeHtml(m.name)}</span><div class="money-input"><b>$</b><input type="number" min="0" step="0.01" data-payment-member="${m.id}" value="${value||''}" placeholder="0"></div></div>`}).join('')}<div class="split-total">Total aportado <strong id="paymentTotal">${fmtMoney(0)}</strong></div></div><div class="hint">Puede pagar una sola persona o dividirse el pago entre varios administradores.</div></div>`;
+}
+function bindPaymentEditor(){
+  const inputs=[...document.querySelectorAll('[data-payment-member]')],total=document.getElementById('paymentTotal');
+  const update=()=>{const value=inputs.reduce((sum,input)=>sum+Number(input.value||0),0);if(total)total.textContent=fmtMoney(value)};
+  inputs.forEach(input=>input.oninput=update);update();
+}
+function readPayments(expected){
+  const result={};document.querySelectorAll('[data-payment-member]').forEach(input=>{const value=Number(input.value||0);if(value>0)result[input.dataset.paymentMember]=value});
+  const total=sumObject(result);if(!total){showToast('Indicá quién aportó el pago');return null}if(Math.abs(total-expected)>1){showToast(`Los aportes deben sumar ${fmtMoney(expected)}`);return null}return result;
+}
+
+function openServiceModal(editId=null){
+  const editing=editId?serviceById(editId):null,selectedKind=editing?categoryOf(editing).kind:'servicio';
+  openModal(`<h2>${editing?'Editar':'Cargar'} servicio o impuesto</h2><div class="modal-sub">Primero creás el concepto. Después podés agregar todos sus vencimientos.</div><div class="form-grid"><div class="field full"><label>Nombre</label><input id="svcName" value="${escapeHtml(editing?.name||'')}" placeholder="Ej: Edesur, IVA, ARCA, Expensas..."></div><div class="field"><label>Tipo</label><select id="svcKind"><option value="servicio" ${selectedKind==='servicio'?'selected':''}>Servicio</option><option value="impuesto" ${selectedKind==='impuesto'?'selected':''}>Impuesto</option></select></div><div class="field"><label>Categoría</label><select id="svcCategory"></select></div><div class="field"><label>Frecuencia</label><select id="svcFrequency"><option value="monthly" ${!editing||editing.recurring?'selected':''}>Mensual</option><option value="eventual" ${editing&&!editing.recurring?'selected':''}>Eventual</option></select></div><div class="field"><label>Día habitual de vencimiento</label><input id="svcDueDay" type="number" min="1" max="31" value="${editing?.dueDay||''}" placeholder="Opcional"></div></div><div class="modal-actions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveService">Guardar</button></div>`);
+  function fillCategories(){const kind=svcKind.value;svcCategory.innerHTML=Object.entries(CATEGORIES).filter(([,v])=>v.kind===kind&&v.label!=='Moratoria').map(([key,val])=>`<option value="${key}" ${editing?.category===key?'selected':''}>${val.label}</option>`).join('')}
+  svcKind.onchange=fillCategories;fillCategories();
+  saveService.onclick=()=>{const name=svcName.value.trim();if(!name){showToast('Ingresá un nombre');return}if(editing){editing.name=name;editing.category=svcCategory.value;editing.recurring=svcFrequency.value==='monthly';editing.dueDay=svcDueDay.value?Number(svcDueDay.value):null}else{state.services.push({id:uid(),name,category:svcCategory.value,recurring:svcFrequency.value==='monthly',dueDay:svcDueDay.value?Number(svcDueDay.value):null,createdAt:Date.now()})}saveState();closeModal();renderApp();showToast(editing?'Servicio actualizado':'Servicio agregado')};
+}
+function openDueModal(serviceId,recordId=null,periodKey=null){
+  const service=serviceById(serviceId),editing=recordId?state.records.find(r=>r.id===recordId):null;if(!service)return;
+  let image=editing?.facturaImg||null;const shares=recordShares(editing);
+  openModal(`<h2>${editing?'Editar':'Agregar'} vencimiento</h2><div class="modal-sub">${escapeHtml(service.name)} · ${categoryOf(service).label}</div><div class="form-grid"><div class="field"><label>Período</label><input id="duePeriod" type="month" value="${editing?.period||periodKey||selectedMonth||currentMonthKey()}"></div><div class="field"><label>Detalle opcional</label><input id="dueTitle" value="${escapeHtml(editing?.title||'')}" placeholder="Ej: Cuota 3 de 12"></div><div class="field"><label>1° vencimiento</label><input id="dueDate1" type="date" value="${editing?.facturaDate||''}"></div><div class="field"><label>Importe 1° vencimiento</label><input id="dueAmount1" type="number" value="${editing?.facturaAmount||''}" placeholder="0"></div><div class="field"><label>2° vencimiento</label><input id="dueDate2" type="date" value="${editing?.facturaDate2||''}"></div><div class="field"><label>Importe 2° vencimiento</label><input id="dueAmount2" type="number" value="${editing?.facturaAmount2||''}" placeholder="Opcional"></div>${shareBlock(shares)}<div class="field full"><label>Factura o imagen</label><div class="file-drop"><span>${image?'Cambiar imagen':'Elegir imagen'}</span><input id="dueFile" type="file" accept="image/*"><div id="duePreview">${image?`<img class="preview" src="${image}">`:''}</div></div></div><div class="field full"><label>Notas</label><textarea id="dueNote" rows="3" placeholder="Observaciones, número de cliente, período fiscal...">${escapeHtml(editing?.facturaNote||'')}</textarea></div></div><div class="modal-actions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveDue">Guardar vencimiento</button></div>`,'wide');
+  bindShareEditor();dueFile.onchange=e=>readImage(e.target.files[0],data=>{image=data;duePreview.innerHTML=`<img class="preview" src="${data}">`});
+  saveDue.onclick=()=>{if(!dueAmount1.value||!dueDate1.value){showToast('Ingresá el primer vencimiento y su importe');return}const duplicate=state.records.find(r=>r.id!==editing?.id&&r.serviceId===serviceId&&r.period===duePeriod.value&&r.recordType==='regular');if(duplicate){showToast('Este servicio ya tiene un vencimiento cargado para ese mes');return}const split=readShares();if(!split)return;const data={serviceId,title:dueTitle.value.trim()||null,period:duePeriod.value||null,status:editing?.status||'cargada',facturaImg:image,facturaAmount:dueAmount1.value,facturaDate:dueDate1.value,facturaAmount2:dueAmount2.value||null,facturaDate2:dueDate2.value||null,facturaNote:dueNote.value.trim()||null,recordType:'regular',shares:split};if(editing){Object.assign(editing,data)}else{state.records.push({id:uid(),...data,comprobanteImg:null,comprobanteDate:null,comprobanteAmount:null,payments:{},createdAt:Date.now(),paidAt:null})}saveState();closeModal();renderApp();showToast(editing?'Vencimiento actualizado':'Vencimiento agregado')};
+}
+function openPointModal(){
+  const options=state.services.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  openModal(`<h2>Agregar pago puntual</h2><div class="modal-sub">Para una cuota, una moratoria o cualquier pago que no querés olvidar.</div><div class="form-grid"><div class="field full"><label>¿A qué corresponde?</label><select id="pointService"><option value="__new__">Nuevo concepto puntual / moratoria</option>${options}</select></div><div class="field" id="pointNameWrap"><label>Nombre del concepto</label><input id="pointName" placeholder="Ej: Moratoria municipal"></div><div class="field" id="pointKindWrap"><label>Tipo</label><select id="pointKind"><option value="servicio">Servicio puntual</option><option value="impuesto">Impuesto puntual</option><option value="moratoria">Moratoria</option></select></div><div class="field"><label>Detalle opcional</label><input id="pointTitle" placeholder="Ej: Cuota 4 de 18"></div><div class="field"><label>Fecha de vencimiento</label><input id="pointDate" type="date"></div><div class="field"><label>Importe</label><input id="pointAmount" type="number" placeholder="0"></div>${shareBlock(defaultShares())}<div class="field full"><label>Notas</label><textarea id="pointNote" rows="3" placeholder="Información que quieras recordar..."></textarea></div></div><div class="modal-actions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="savePoint">Agregar recordatorio</button></div>`,'wide');
+  bindShareEditor();function toggleNew(){const isNew=pointService.value==='__new__';pointNameWrap.classList.toggle('hidden',!isNew);pointKindWrap.classList.toggle('hidden',!isNew)}pointService.onchange=toggleNew;toggleNew();
+  savePoint.onclick=()=>{if(!pointDate.value||!pointAmount.value){showToast('Ingresá fecha e importe');return}const split=readShares();if(!split)return;let serviceId=pointService.value,recordType='puntual';if(serviceId==='__new__'){const name=pointName.value.trim();if(!name){showToast('Ingresá el nombre del concepto');return}const kind=pointKind.value,category=kind==='moratoria'?'moratoria':kind==='impuesto'?'otro_impuesto':'otro';const service={id:uid(),name,category,recurring:false,dueDay:null,createdAt:Date.now()};state.services.push(service);serviceId=service.id;recordType=kind==='moratoria'?'moratoria':'puntual'}const period=pointDate.value.slice(0,7);state.records.push({id:uid(),serviceId,title:pointTitle.value.trim()||null,period,status:'cargada',facturaImg:null,facturaAmount:pointAmount.value,facturaDate:pointDate.value,facturaAmount2:null,facturaDate2:null,facturaNote:pointNote.value.trim()||null,recordType,shares:split,comprobanteImg:null,comprobanteDate:null,comprobanteAmount:null,payments:{},createdAt:Date.now(),paidAt:null});saveState();closeModal();renderApp();showToast('Pago puntual agregado')};
+}
+function openPaymentModal(recordId){
+  const record=state.records.find(r=>r.id===recordId),service=serviceById(record?.serviceId);if(!record)return;let image=record.comprobanteImg||null;
+  const editing=record.status==='pagado',amount=paymentAmount(record)||currentAmount(record)||Number(record.facturaAmount||0),payments=recordPayments(record);
+  openModal(`<h2>${editing?'Editar pago':'Marcar como abonado'}</h2><div class="modal-sub">${escapeHtml(recordTitle(record))}${service&&record.title?' · '+escapeHtml(service.name):''}</div><div class="form-grid"><div class="field"><label>Monto pagado</label><input id="payAmount" type="number" value="${amount||''}"></div><div class="field"><label>Fecha de pago</label><input id="payDate" type="date" value="${record.comprobanteDate||new Date().toISOString().slice(0,10)}"></div>${paymentBlock(payments,amount,!editing)}<div class="field full"><label>Comprobante</label><div class="file-drop"><span>${image?'Cambiar comprobante':'Elegir imagen'}</span><input id="payFile" type="file" accept="image/*"><div id="payPreview">${image?`<img class="preview" src="${image}">`:''}</div></div></div></div><div class="modal-actions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="savePayment">${editing?'Guardar cambios':'Confirmar pago'}</button></div>`,'wide');
+  bindPaymentEditor();payFile.onchange=e=>readImage(e.target.files[0],data=>{image=data;payPreview.innerHTML=`<img class="preview" src="${data}">`});
+  payAmount.oninput=()=>{if(!editing){const inputs=[...document.querySelectorAll('[data-payment-member]')],nonZero=inputs.filter(i=>Number(i.value)>0);if(nonZero.length===1)nonZero[0].value=payAmount.value;bindPaymentEditor()}};
+  savePayment.onclick=()=>{const paidAmount=Number(payAmount.value||0);if(!paidAmount){showToast('Ingresá el monto pagado');return}const contributions=readPayments(paidAmount);if(!contributions)return;record.status='pagado';record.comprobanteAmount=paidAmount;record.comprobanteDate=payDate.value||new Date().toISOString().slice(0,10);record.comprobanteImg=image;record.payments=contributions;record.payerId=Object.keys(contributions).length===1?Object.keys(contributions)[0]:null;record.paidAt=record.paidAt||Date.now();saveState();closeModal();renderApp();showToast(editing?'Pago actualizado':'Pago movido a Abonados')};
+}
+function breakdownShares(record,amount){const shares=recordShares(record),total=sumObject(shares);return contributors().filter(m=>Number(shares[m.id]||0)>0).map(m=>`<div><span>${escapeHtml(m.name)} · ${Number(shares[m.id]).toLocaleString('es-AR',{maximumFractionDigits:2})}%</span><strong>${fmtMoney(amount*(Number(shares[m.id]||0)/total))}</strong></div>`).join('')}
+function breakdownPayments(record){const payments=recordPayments(record);return Object.entries(payments).map(([id,val])=>`<div><span>${escapeHtml(memberById(id)?.name||'Integrante')}</span><strong>${fmtMoney(val)}</strong></div>`).join('')||'<div><span>Sin asignar</span><strong>—</strong></div>'}
+function openRecordDetail(recordId){
+  const record=state.records.find(r=>r.id===recordId),service=serviceById(record?.serviceId);if(!record)return;const meta=relevantDue(record),status=record.status==='pagado'?'Abonado':dueLabel(meta),amount=record.status==='pagado'?paymentAmount(record):currentAmount(record);
+  openModal(`<h2>${escapeHtml(recordTitle(record))}</h2><div class="modal-sub">${service&&record.title?escapeHtml(service.name)+' · ':''}${recordKindLabel(record)} · ${record.period?monthLabel(record.period):'Pago puntual'}</div><div class="detail-grid"><div class="detail-box"><label>Estado</label><strong>${escapeHtml(status)}</strong></div><div class="detail-box"><label>Categoría</label><strong>${escapeHtml(service?categoryOf(service).label:'—')}</strong></div><div class="detail-box"><label>1° vencimiento</label><strong>${fmtDate(record.facturaDate)} · ${fmtMoney(record.facturaAmount)}</strong></div><div class="detail-box"><label>2° vencimiento</label><strong>${record.facturaDate2?`${fmtDate(record.facturaDate2)} · ${fmtMoney(record.facturaAmount2||record.facturaAmount)}`:'No informado'}</strong></div><div class="detail-box"><label>Fecha de pago</label><strong>${fmtDate(record.comprobanteDate)}</strong></div><div class="detail-box"><label>Monto pagado</label><strong>${fmtMoney(record.comprobanteAmount)}</strong></div><div class="detail-box full"><label>División del gasto</label><div class="breakdown">${breakdownShares(record,amount)}</div></div><div class="detail-box full"><label>Aportes realizados</label><div class="breakdown">${record.status==='pagado'?breakdownPayments(record):'<div><span>Se completa al marcarlo abonado</span><strong>—</strong></div>'}</div></div><div class="detail-box full"><label>Notas</label><strong>${record.facturaNote?escapeHtml(record.facturaNote):'Sin notas'}</strong></div></div><div class="docs"><div class="doc-card"><strong>Factura o documento</strong>${record.facturaImg?`<img src="${record.facturaImg}" data-full-image="${record.facturaImg}">`:'<div class="doc-empty">No se adjuntó una imagen.</div>'}</div><div class="doc-card"><strong>Comprobante de pago</strong>${record.comprobanteImg?`<img src="${record.comprobanteImg}" data-full-image="${record.comprobanteImg}">`:'<div class="doc-empty">No se adjuntó un comprobante.</div>'}</div></div><div class="modal-actions">${canEdit()?`<button class="btn danger" id="deleteRecord">Eliminar</button>${record.status!=='pagado'?`<button class="btn outline" id="editRecord">Editar</button><button class="btn primary" id="payFromDetail">Marcar abonado</button>`:`<button class="btn primary" id="editPayment">Editar pago</button>`}`:''}<button class="btn outline" data-close>Cerrar</button></div>`,'wide');
+  document.querySelectorAll('[data-full-image]').forEach(img=>img.onclick=()=>openImage(img.dataset.fullImage));
+  if(canEdit()){
+    deleteRecord.onclick=()=>{if(!confirm('¿Eliminar este vencimiento?'))return;state.records=state.records.filter(r=>r.id!==recordId);saveState();closeModal();renderApp();showToast('Vencimiento eliminado')};
+    const edit=document.getElementById('editRecord');if(edit)edit.onclick=()=>{closeModal();openDueModal(record.serviceId,record.id)};
+    const pay=document.getElementById('payFromDetail');if(pay)pay.onclick=()=>{closeModal();openPaymentModal(record.id)};
+    const editPay=document.getElementById('editPayment');if(editPay)editPay.onclick=()=>{closeModal();openPaymentModal(record.id)};
+  }
+}
+function openServiceDetail(serviceId){
+  const service=serviceById(serviceId);if(!service)return;
+  const records=state.records.filter(r=>r.serviceId===serviceId).sort((a,b)=>String(b.period||b.facturaDate||'').localeCompare(String(a.period||a.facturaDate||''))||(b.createdAt||0)-(a.createdAt||0));
+  const paid=records.filter(r=>r.status==='pagado'),pending=records.filter(r=>r.status!=='pagado'),paidTotal=paid.reduce((sum,r)=>sum+paymentAmount(r),0),debtTotal=pending.reduce((sum,r)=>sum+currentAmount(r),0);
+  const rows=records.map(r=>{const isPaid=r.status==='pagado',meta=relevantDue(r),status=isPaid?'Abonado':meta.days!==null&&meta.days<0?'Vencido':'Pendiente';return `<div class="folder-record" data-service-record="${r.id}"><div><strong>${escapeHtml(r.title||capitalizedMonth(r.period))}</strong><small>${isPaid?`Pagado el ${fmtDate(r.comprobanteDate)} · ${escapeHtml(paidByText(r))}`:`${dueLabel(meta)} · vencimiento ${fmtDate(meta.date)}`}</small></div><div><strong>${fmtMoney(isPaid?paymentAmount(r):currentAmount(r))}</strong><small>${status}</small></div><div class="folder-docs"><span class="doc-chip ${r.facturaImg?'ok':''}">Factura ${r.facturaImg?'✓':'—'}</span><span class="doc-chip ${r.comprobanteImg?'ok':''}">Comprobante ${r.comprobanteImg?'✓':'—'}</span></div></div>`}).join('');
+  openModal(`<h2>Carpeta · ${escapeHtml(service.name)}</h2><div class="modal-sub">${categoryOf(service).label} · ${service.recurring?'Pago mensual':'Pago eventual'}${service.dueDay?` · suele vencer el día ${service.dueDay}`:''}. Acá queda guardada toda la información para consultar o responder un reclamo.</div><div class="folder-total"><div><span>Historial abonado</span><strong>${fmtMoney(paidTotal)}</strong></div><div><span>Deuda pendiente</span><strong>${fmtMoney(debtTotal)}</strong></div><div><span>Comprobantes</span><strong>${paid.filter(r=>r.comprobanteImg).length} de ${paid.length}</strong></div></div><div class="folder-list">${rows||'<div class="empty">No hay facturas ni movimientos para este servicio.</div>'}</div><div class="modal-actions">${canEdit()?`<button class="btn danger" id="deleteService">Eliminar servicio</button><button class="btn outline" id="editService">Editar</button><button class="btn primary" id="newDueFromService">+ Cargar vencimiento</button>`:''}<button class="btn outline" data-close>Cerrar</button></div>`,'wide');
+  document.querySelectorAll('[data-service-record]').forEach(row=>row.onclick=()=>{closeModal();openRecordDetail(row.dataset.serviceRecord)});
+  if(canEdit()){
+    editService.onclick=()=>{closeModal();openServiceModal(serviceId)};newDueFromService.onclick=()=>{closeModal();openDueModal(serviceId,null,selectedMonth)};
+    deleteService.onclick=()=>{if(!confirm(`¿Eliminar "${service.name}" y todos sus movimientos?`))return;state.services=state.services.filter(s=>s.id!==serviceId);state.records=state.records.filter(r=>r.serviceId!==serviceId);saveState();closeModal();renderApp();showToast('Servicio eliminado')};
+  }
+}
+function openBalanceDetail(){
+  const balance=balanceData(),months=monthlyBalances(),moves=settlements(balance);
+  openModal(`<h2>Cálculo del equilibrio</h2><div class="modal-sub">Cada pago se compara con el porcentaje que le correspondía a cada aportante. El saldo se acumula mes a mes hasta volver a cero.</div><div class="balance-grid modal-balance">${balance.rows.map(row=>`<div class="balance-person"><strong>${escapeHtml(row.member.name)}</strong><div class="balance-money ${balanceClass(row.balance)}">${signedMoney(row.balance)}</div><div class="balance-meta"><span>Correspondía <b>${fmtMoney(row.owed)}</b></span><span>Pagó <b>${fmtMoney(row.paid)}</b></span></div></div>`).join('')}</div>${moves.length?`<div class="recommendation">${moves.map(m=>`<b>${escapeHtml(m.from.name)}</b> debe cubrir ${fmtMoney(m.amount)} más que ${escapeHtml(m.to.name)} para compensarse`).join(' · ')}</div>`:''}<h3 class="section-title">Detalle por mes</h3><div class="month-list">${months.length?months.map(item=>`<div class="month-row"><div><strong>${monthLabel(item.key)}</strong><small>${fmtMoney(item.balance.totalExpenses)} abonados</small></div><div class="month-balances">${item.balance.rows.map(row=>`<span class="${balanceClass(row.balance)}">${escapeHtml(row.member.name)}: ${signedMoney(row.balance)}</span>`).join('')}</div></div>`).join(''):'<div class="empty">Todavía no hay pagos para analizar.</div>'}</div><div class="modal-actions"><button class="btn outline" data-close>Cerrar</button></div>`,'wide');
+}
+function memberRow(member){return `<div class="member-edit-row" data-member-row data-id="${member.id||''}"><div class="field"><label>Nombre</label><input data-member-name value="${escapeHtml(member.name||'')}"></div><div class="field"><label>Permiso</label><select data-member-role><option value="admin" ${member.role==='admin'?'selected':''}>Administrador</option><option value="viewer" ${member.role==='viewer'?'selected':''}>Solo consulta</option></select></div><div class="field"><label>Participación</label><div class="percent-input"><input data-member-share type="number" min="0" max="100" step="0.01" value="${Number(member.share||0)}" ${member.role==='viewer'?'disabled':''}><b>%</b></div></div><div class="field"><label>PIN</label><input data-member-pin type="text" value="${escapeHtml(member.pin||'')}"></div><button class="member-remove" type="button" title="Eliminar">×</button></div>`}
+function bindMemberRows(){
+  document.querySelectorAll('[data-member-row]').forEach(row=>{
+    const role=row.querySelector('[data-member-role]'),share=row.querySelector('[data-member-share]'),remove=row.querySelector('.member-remove');
+    role.onchange=()=>{const viewer=role.value==='viewer';share.disabled=viewer;if(viewer)share.value=0};
+    remove.onclick=()=>row.remove();
+  });
+}
+function openFamilyModal(){
+  openModal(`<h2>${groupTitle()}</h2><div class="modal-sub">Los administradores pueden cargar gastos. Solo quienes tengan participación mayor a 0% intervienen en la división. Este espacio está configurado como <b>${workspaceKindLabel().toLowerCase()}</b>.</div><div id="familyRows">${state.members.map(memberRow).join('')}</div><button class="btn soft small" id="addMember">+ Agregar integrante</button><div class="balance-warning family-note">La participación de los administradores que aportan debe sumar 100%.</div><div class="modal-actions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveFamily">Guardar cambios</button></div>`,'wide');
+  bindMemberRows();addMember.onclick=()=>{familyRows.insertAdjacentHTML('beforeend',memberRow({id:'',name:'',role:'viewer',share:0,pin:''}));bindMemberRows()};
+  saveFamily.onclick=()=>{
+    const rows=[...document.querySelectorAll('[data-member-row]')],members=[];
+    for(const row of rows){const name=row.querySelector('[data-member-name]').value.trim(),role=row.querySelector('[data-member-role]').value,pin=row.querySelector('[data-member-pin]').value.trim(),share=role==='admin'?Number(row.querySelector('[data-member-share]').value||0):0;if(!name||pin.length<4){showToast('Cada integrante necesita nombre y PIN de al menos 4 caracteres');return}members.push({id:row.dataset.id||uid(),name,role,share,pin})}
+    if(!members.some(m=>m.role==='admin')){showToast('Debe existir al menos un administrador');return}
+    const total=members.filter(m=>m.role==='admin').reduce((sum,m)=>sum+Number(m.share||0),0);if(Math.abs(total-100)>.01){showToast('La participación de los aportantes debe sumar 100%');return}
+    state.members=members;saveState();const current=memberById(session.memberId);if(!current){sessionStorage.removeItem(SESSION_KEY);session=null;closeModal();render();return}saveSession({memberId:current.id,role:current.role,name:current.name});closeModal();renderApp();showToast(groupUpdatedLabel());
+  };
+}
+function openImage(src){openModal(`<img src="${src}" style="width:100%;border-radius:16px"><div class="modal-actions"><button class="btn outline" data-close>Cerrar</button></div>`,'wide')}
+function openModal(html,extraClass=''){document.getElementById('modalRoot').innerHTML=`<div class="overlay" id="overlay"><div class="modal ${extraClass}"><button class="close" data-close>×</button>${html}</div></div>`;document.querySelectorAll('[data-close]').forEach(x=>x.onclick=closeModal);overlay.onclick=e=>{if(e.target.id==='overlay')closeModal()}}
+function closeModal(){document.getElementById('modalRoot').innerHTML=''}
+function readImage(file,callback){if(!file)return;const reader=new FileReader();reader.onload=()=>{const img=new Image();img.onload=()=>{const scale=Math.min(1,1000/img.width),canvas=document.createElement('canvas');canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);callback(canvas.toDataURL('image/jpeg',.72))};img.src=reader.result};reader.readAsDataURL(file)}
+
+saveState();
+render();
+
+</script>
+</body>
+</html>
