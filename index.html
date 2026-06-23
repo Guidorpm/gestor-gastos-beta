@@ -31,6 +31,12 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
 .missing{background:#fafcfa}.loaded{background:#edf8f3}.paid{background:#e7f5ff}.overdue{background:#fff0f0;border-color:#f1c7c9}.urgent{background:#fff2e5}.warning{background:#fff8db}
+.not-applicable{background:#f1f3f2;color:#8a958f;cursor:default;border-style:dashed}.not-applicable:hover{border-color:var(--line)}
+.month-picker{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.month-check{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:11px;padding:9px;background:#fff;font-size:13px;cursor:pointer}
+.month-check input{width:auto;margin:0}
+.plan-fields{border:1px solid var(--line);border-radius:15px;padding:14px;margin-top:12px;background:#fafcfa}
+@media(max-width:560px){.month-picker{grid-template-columns:repeat(3,1fr)}}
 .list{padding:4px 20px}.row{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:16px 0;border-bottom:1px solid var(--line)}.row:last-child{border-bottom:0}.row h3{margin:0 0 5px}.row p{margin:0;color:var(--muted);font-size:13px}.amountbig{font-weight:850;font-size:18px;text-align:right}
 .balance{padding:20px;margin-bottom:18px}.balance h2{margin:0 0 5px}.balance p{margin:0;color:var(--muted)}.balancegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:15px}.person{border:1px solid var(--line);border-radius:15px;padding:14px}.person strong{display:block}.person .money{font-size:22px;font-weight:850;margin:7px 0}.positive{color:var(--green)}.negative{color:var(--red)}.neutral{color:var(--muted)}
 .modalbg{position:fixed;inset:0;background:rgba(15,25,21,.55);z-index:30;display:grid;place-items:center;padding:18px}.modal{width:min(620px,100%);max-height:90vh;overflow:auto;background:white;border-radius:22px;padding:24px;box-shadow:0 25px 80px rgba(0,0,0,.25)}.modal.wide{width:min(900px,100%)}.modal h2{margin:0 0 5px}.modal .sub{color:var(--muted);margin-bottom:18px}.modalactions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
@@ -69,200 +75,49 @@ function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`
 function userName(){return session?.user?.user_metadata?.full_name||session?.user?.email?.split('@')[0]||'Usuario'}
 
 async function init(){
-  try{
-    if(!window.supabase){
-      throw new Error('No se pudo cargar la librería de Supabase');
-    }
-    const {data,error}=await sb.auth.getSession();
-    if(error) throw error;
-    session=data.session;
-    sb.auth.onAuthStateChange((_e,s)=>{
-      session=s;
-      if(!s){
-        group=null;
-        renderAuth();
-      }
-    });
-    if(session) await loadGroups();
-    else renderAuth();
-  }catch(err){
-    console.error('Error inicial:',err);
-    app.innerHTML=`<div class="authwrap"><div class="auth card">
-      <h1>No se pudo iniciar la aplicación</h1>
-      <p>${esc(err?.message||'Error desconocido')}</p>
-      <button class="btn primary" onclick="location.reload()">Reintentar</button>
-    </div></div>`;
-  }
+  const {data}=await sb.auth.getSession();session=data.session;
+  sb.auth.onAuthStateChange((_e,s)=>{session=s;if(!s){group=null;renderAuth()}});
+  if(session)await loadGroups();else renderAuth();
 }
-function renderAuth(){
-  app.innerHTML=`<div class="authwrap"><div class="auth card">
-    <div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Beta Cloud · versión estable</small></div></div>
-    <h1>Ingresar</h1>
-    <p>Accedé con el usuario creado por el administrador en Supabase.</p>
-    <div class="field"><label>Email</label><input id="email" type="email" autocomplete="email"></div>
-    <div class="field"><label>Contraseña</label><input id="password" type="password" autocomplete="current-password"></div>
-    <button class="btn primary" style="width:100%" id="authBtn">Ingresar</button>
-    <div class="notice">Durante esta beta, los usuarios se crean manualmente desde Supabase.</div>
-  </div></div>`;
-
-  const button=document.getElementById('authBtn');
-  const emailInput=document.getElementById('email');
-  const passwordInput=document.getElementById('password');
-
-  async function login(){
-    const emailValue=emailInput.value.trim();
-    const passwordValue=passwordInput.value;
-    if(!emailValue || !passwordValue){
-      toast('Completá correo y contraseña');
-      return;
-    }
-
-    const original=button.textContent;
-    button.disabled=true;
-    button.textContent='Ingresando…';
-
-    try{
-      const timeout=new Promise((_,reject)=>
-        setTimeout(()=>reject(new Error('La conexión demoró demasiado. Intentá nuevamente.')),15000)
-      );
-      const request=sb.auth.signInWithPassword({
-        email:emailValue,
-        password:passwordValue
-      });
-      const res=await Promise.race([request,timeout]);
-      if(res.error) throw res.error;
-      session=res.data.session;
-      await loadGroups();
-    }catch(err){
-      console.error('Error de ingreso:',err);
-      const msg=String(err?.message||'');
-      if(msg.toLowerCase().includes('invalid login credentials')){
-        toast('Correo o contraseña incorrectos');
-      }else{
-        toast(msg || 'No se pudo ingresar');
-      }
-    }finally{
-      if(document.getElementById('authBtn')){
-        button.disabled=false;
-        button.textContent=original;
-      }
-    }
-  }
-
-  button.onclick=login;
-  passwordInput.addEventListener('keydown',e=>{if(e.key==='Enter')login()});
+function renderAuth(signup=false){
+  app.innerHTML=`<div class="authwrap"><div class="auth card"><div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Beta conectada a Supabase</small></div></div><h1>${signup?'Crear cuenta':'Ingresar'}</h1><p>${signup?'Usá un correo real. Puede ser necesario confirmarlo antes de ingresar.':'Accedé a tus grupos familiares o empresas.'}</p>
+  ${signup?`<div class="field"><label>Nombre</label><input id="name" autocomplete="name"></div>`:''}
+  <div class="field"><label>Email</label><input id="email" type="email" autocomplete="email"></div>
+  <div class="field"><label>Contraseña</label><input id="password" type="password" autocomplete="${signup?'new-password':'current-password'}"></div>
+  <button class="btn primary" style="width:100%" id="authBtn">${signup?'Crear cuenta':'Ingresar'}</button>
+  <div class="authswitch">${signup?'¿Ya tenés cuenta?':'¿Primera vez?'} <button class="linkbtn" id="authSwitch">${signup?'Ingresar':'Crear cuenta'}</button></div></div></div>`;
+  document.getElementById('authSwitch').onclick=()=>renderAuth(!signup);
+  authBtn.onclick=async()=>{
+    authBtn.disabled=true;
+    let res;
+    if(signup)res=await sb.auth.signUp({email:email.value.trim(),password:password.value,options:{data:{full_name:name.value.trim()}}});
+    else res=await sb.auth.signInWithPassword({email:email.value.trim(),password:password.value});
+    authBtn.disabled=false;
+    if(res.error){toast(res.error.message);return}
+    if(signup&&!res.data.session){toast('Cuenta creada. Revisá tu email para confirmarla.');renderAuth(false);return}
+    session=res.data.session;await loadGroups();
+  };
 }
 async function loadGroups(){
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
-  try{
-    const timeout=new Promise((_,reject)=>
-      setTimeout(()=>reject(new Error('Supabase demoró demasiado en responder.')),15000)
-    );
-    const request=sb
-      .from('memberships')
-      .select('id,role,participation_percent,display_name,group_id,groups(id,name,type,join_code)')
-      .eq('user_id',session.user.id)
-      .eq('active',true);
-    const {data,error}=await Promise.race([request,timeout]);
-    if(error) throw error;
-
-    groups=(data||[])
-      .filter(x=>x.groups)
-      .map(x=>({...x.groups,membership:x}));
-
-    if(groups.length===1){
-      await openGroup(groups[0].id);
-      return;
-    }
-    renderGroups();
-  }catch(err){
-    console.error('Error cargando espacios:',err);
-    app.innerHTML=`<div class="authwrap"><div class="auth card">
-      <h1>No se pudieron cargar los espacios</h1>
-      <p>${esc(err?.message||'Error de conexión')}</p>
-      <button class="btn primary" id="retryGroups">Reintentar</button>
-      <button class="btn outline" id="logoutGroups" style="margin-left:8px">Salir</button>
-    </div></div>`;
-    document.getElementById('retryGroups').onclick=loadGroups;
-    document.getElementById('logoutGroups').onclick=()=>sb.auth.signOut();
-  }
+  const {data,error}=await sb.from('memberships').select('id,role,participation_percent,display_name,group_id,groups(id,name,type,join_code)').eq('user_id',session.user.id).eq('active',true);
+  if(error){toast(error.message);return}
+  groups=(data||[]).map(x=>({...x.groups,membership:x}));
+  renderGroups();
 }
 function renderGroups(){
-  app.innerHTML=`<main>
-    <div class="pagehead">
-      <div><h1>Tus espacios</h1><p>Elegí una familia o empresa.</p></div>
-      <div class="actions">
-        <button class="btn outline" id="joinBtn">Unirme con código</button>
-        <button class="btn primary" id="newGroup">+ Crear espacio</button>
-        <button class="btn soft" id="logout">Salir</button>
-      </div>
-    </div>
-    <div class="workspace-grid">
-      ${groups.map(g=>`<div class="workspace card" data-group="${g.id}">
-        <h3>${esc(g.name)}</h3>
-        <p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${g.membership.role==='admin'?'Administrador':'Solo consulta'}</p>
-      </div>`).join('')||`<div class="card workspace" style="cursor:default">
-        <h3>Tu usuario todavía no pertenece a ningún espacio</h3>
-        <p>Creá el primer espacio o ingresá un código de invitación.</p>
-      </div>`}
-    </div>
-  </main>`;
-
+  app.innerHTML=`<main><div class="pagehead"><div><h1>Tus espacios</h1><p>Elegí un grupo o creá uno nuevo.</p></div><div class="actions"><button class="btn outline" id="joinBtn">Unirme con código</button><button class="btn primary" id="newGroup">+ Crear espacio</button><button class="btn soft" id="logout">Salir</button></div></div>
+  <div class="workspace-grid">${groups.map(g=>`<div class="workspace card" data-group="${g.id}"><h3>${esc(g.name)}</h3><p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${g.membership.role==='admin'?'Administrador':'Solo consulta'}</p></div>`).join('')||'<div class="card workspace"><h3>No tenés espacios todavía</h3><p>Creá una familia o empresa, o ingresá un código de invitación.</p></div>'}</div></main>`;
   document.querySelectorAll('[data-group]').forEach(e=>e.onclick=()=>openGroup(e.dataset.group));
-  document.getElementById('logout').onclick=()=>sb.auth.signOut();
-  document.getElementById('newGroup').onclick=openCreateGroup;
-  document.getElementById('joinBtn').onclick=openJoinGroup;
+  logout.onclick=()=>sb.auth.signOut();
+  newGroup.onclick=openCreateGroup;joinBtn.onclick=openJoinGroup;
 }
-
 function openCreateGroup(){
-  modal(`<h2>Crear espacio</h2>
-    <div class="sub">Creá una familia o empresa compartida.</div>
-    <div class="field"><label>Nombre</label><input id="gname" placeholder="Ej: Familia Rizzo"></div>
-    <div class="field"><label>Tipo</label><select id="gtype">
-      <option value="family">Grupo familiar</option>
-      <option value="company">Empresa</option>
-    </select></div>
-    <div class="modalactions">
-      <button class="btn outline" data-close>Cancelar</button>
-      <button class="btn primary" id="saveGroup">Crear</button>
-    </div>`);
-
-  const button=document.getElementById('saveGroup');
-  button.onclick=async()=>{
-    const name=document.getElementById('gname').value.trim();
-    const type=document.getElementById('gtype').value;
-    if(!name) return toast('Ingresá un nombre');
-
-    button.disabled=true;
-    button.textContent='Creando…';
-    try{
-      const {data,error}=await sb.rpc('create_group',{
-        p_name:name,
-        p_type:type,
-        p_owner_name:userName()
-      });
-      if(error) throw error;
-      closeModal();
-      await loadGroups();
-      if(data) await openGroup(data);
-    }catch(err){
-      console.error('Error creando espacio:',err);
-      const message=String(err?.message||'');
-      if(message.includes('gen_random_bytes')){
-        modal(`<h2>Falta aplicar la corrección de Supabase</h2>
-          <div class="sub">La aplicación está bien, pero la función de creación del grupo todavía usa una función que no existe en tu proyecto.</div>
-          <div class="notice">Ejecutá una sola vez el archivo <strong>supabase_fix_create_group.sql</strong> incluido en el paquete.</div>
-          <div class="modalactions"><button class="btn primary" data-close>Entendido</button></div>`);
-      }else{
-        toast(message || 'No se pudo crear el espacio');
-      }
-    }finally{
-      if(document.getElementById('saveGroup')){
-        button.disabled=false;
-        button.textContent='Crear';
-      }
-    }
-  };
+  modal(`<h2>Crear espacio</h2><div class="sub">Después podrás compartir el código para sumar integrantes.</div>
+  <div class="field"><label>Nombre</label><input id="gname" placeholder="Ej: Familia Rizzo"></div>
+  <div class="field"><label>Tipo</label><select id="gtype"><option value="family">Grupo familiar</option><option value="company">Empresa</option></select></div>
+  <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveGroup">Crear</button></div>`);
+  saveGroup.onclick=async()=>{if(!gname.value.trim())return toast('Ingresá un nombre');const {data,error}=await sb.rpc('create_group',{p_name:gname.value.trim(),p_type:gtype.value,p_owner_name:userName()});if(error)return toast(error.message);closeModal();await loadGroups();await openGroup(data)};
 }
 function openJoinGroup(){
   modal(`<h2>Unirme a un espacio</h2><div class="sub">Ingresá el código que te compartió un administrador.</div>
@@ -279,55 +134,19 @@ async function openGroup(id){
   renderApp();
 }
 async function reloadGroup(){
-  try{
-    const [mRes,sRes,gRes,dRes]=await Promise.all([
-      sb.from('memberships').select('*').eq('group_id',group.id).eq('active',true).order('created_at'),
-      sb.from('services').select('*').eq('group_id',group.id).eq('active',true).order('name'),
-      sb.from('groups').select('*').eq('id',group.id).single(),
-      sb.from('documents').select('*').eq('group_id',group.id)
-    ]);
-
-    const firstError=[mRes,sRes,gRes,dRes].find(r=>r.error)?.error;
-    if(firstError) throw firstError;
-
-    members=mRes.data||[];
-    services=sRes.data||[];
-    documents=dRes.data||[];
-
-    const serviceIds=services.map(s=>s.id);
-    if(serviceIds.length){
-      const oRes=await sb.from('obligations').select('*').in('service_id',serviceIds);
-      if(oRes.error) throw oRes.error;
-      obligations=oRes.data||[];
-    }else{
-      obligations=[];
-    }
-
-    const obligationIds=obligations.map(o=>o.id);
-    if(obligationIds.length){
-      const pRes=await sb.from('payments').select('*').in('obligation_id',obligationIds);
-      if(pRes.error) throw pRes.error;
-      payments=pRes.data||[];
-    }else{
-      payments=[];
-    }
-
-    const paymentIds=payments.map(p=>p.id);
-    if(paymentIds.length){
-      const cRes=await sb.from('payment_contributions').select('*').in('payment_id',paymentIds);
-      if(cRes.error) throw cRes.error;
-      contributions=cRes.data||[];
-    }else{
-      contributions=[];
-    }
-
-    group={...(gRes.data||group),membership:groups.find(x=>x.id===group.id)?.membership};
-    membership=members.find(x=>x.user_id===session.user.id)||membership;
-  }catch(err){
-    console.error('Error sincronizando grupo:',err);
-    toast(err?.message||'No se pudo sincronizar el grupo');
-    throw err;
-  }
+  const [m,s,o,p,c,d,g]=await Promise.all([
+    sb.from('memberships').select('*').eq('group_id',group.id).eq('active',true).order('created_at'),
+    sb.from('services').select('*').eq('group_id',group.id).eq('active',true).order('name'),
+    sb.from('obligations').select('*,services!inner(group_id)').eq('services.group_id',group.id),
+    sb.from('payments').select('*,obligations!inner(service_id,services!inner(group_id))').eq('obligations.services.group_id',group.id),
+    sb.from('payment_contributions').select('*,payments!inner(obligation_id,obligations!inner(service_id,services!inner(group_id)))').eq('payments.obligations.services.group_id',group.id),
+    sb.from('documents').select('*').eq('group_id',group.id),
+    sb.from('groups').select('*').eq('id',group.id).single()
+  ]);
+  const err=[m,s,o,p,c,d,g].find(x=>x.error)?.error;if(err)toast(err.message);
+  members=m.data||[];services=s.data||[];obligations=(o.data||[]).map(({services,...x})=>x);payments=(p.data||[]).map(({obligations,...x})=>x);contributions=(c.data||[]).map(({payments,...x})=>x);documents=d.data||[];
+  group={...(g.data||group),membership:groups.find(x=>x.id===group.id)?.membership};
+  membership=members.find(x=>x.user_id===session.user.id)||membership;
 }
 function renderApp(){
   const ms=[baseMonth,shiftMonth(baseMonth,1),shiftMonth(baseMonth,2)];
@@ -340,16 +159,121 @@ function renderApp(){
   bindDashboard(ms);
 }
 function obligationFor(serviceId,key){return obligations.find(o=>o.service_id===serviceId&&o.period===periodDate(key))}
+function frequencyLabel(service){
+  if(service.frequency==='monthly')return 'Mensual';
+  if(service.frequency==='plan')return 'Plan';
+  return 'Puntual';
+}
+function planMonthNumbers(service){
+  return Array.isArray(service.plan_months)
+    ? service.plan_months.map(Number)
+    : [];
+}
+function monthAppliesToService(service,key){
+  if(service.frequency==='monthly')return true;
+  if(service.frequency==='one_time')return true;
+  if(service.frequency!=='plan')return true;
+
+  const current=periodDate(key);
+  const start=service.plan_start_month;
+  const end=service.plan_end_month;
+  const monthNumber=Number(key.split('-')[1]);
+
+  if(!start||!end)return false;
+  return current>=start
+    && current<=end
+    && planMonthNumbers(service).includes(monthNumber);
+}
+function servicePlanDescription(service){
+  if(service.frequency!=='plan')return '';
+  const months=planMonthNumbers(service);
+  const short=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const selected=months.map(m=>short[m-1]).filter(Boolean).join(', ');
+  const start=service.plan_start_month?monthLabel(service.plan_start_month.slice(0,7)):'—';
+  const end=service.plan_end_month?monthLabel(service.plan_end_month.slice(0,7)):'—';
+  return `${start} a ${end}${selected?' · '+selected:''}`;
+}
+function emptyBoxText(service){
+  if(service.frequency==='one_time')return ['Sin movimiento','Cargar si corresponde'];
+  return ['Sin datos','Cargar importe y vencimiento'];
+}
 function paymentFor(obligationId){return payments.find(p=>p.obligation_id===obligationId)}
 function boxClass(o){if(!o)return'missing';if(o.status==='paid'||paymentFor(o.id))return'paid';const d=daysUntil(o.due_date);if(d!==null&&d<0)return'overdue';if(d!==null&&d<=2)return'urgent';if(d!==null&&d<=5)return'warning';return'loaded'}
-function boxText(o){if(!o)return['Sin datos','Cargar importe y vencimiento'];if(o.status==='paid'||paymentFor(o.id))return['Abonado',fmtMoney(paymentFor(o.id)?.total_amount||o.amount)];const d=daysUntil(o.due_date);if(d!==null&&d<0)return['Vencido',fmtMoney(o.amount)];return['Cargado · falta pagar',fmtMoney(o.amount)]}
+function boxText(o,service){if(!o)return emptyBoxText(service);if(o.status==='paid'||paymentFor(o.id))return['Abonado',fmtMoney(paymentFor(o.id)?.total_amount||o.amount)];const d=daysUntil(o.due_date);if(d!==null&&d<0)return['Vencido',fmtMoney(o.amount)];return['Cargado · falta pagar',fmtMoney(o.amount)]}
 function pendingObligations(){return obligations.filter(o=>!paymentFor(o.id)&&o.status!=='cancelled').sort((a,b)=>(a.due_date||'9999').localeCompare(b.due_date||'9999'))}
 function renderServices(ms){
-  const pending=pendingObligations(),over=pending.filter(o=>daysUntil(o.due_date)<0),missing=services.filter(s=>s.frequency==='monthly'&&!obligationFor(s.id,baseMonth)).length;
-  return `<div class="pagehead"><div><h1>Servicios e impuestos</h1><p>Cuadro mensual, deudas e historial documental.</p></div>${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}</div>
+  const pending=pendingObligations();
+  const over=pending.filter(o=>daysUntil(o.due_date)<0);
+  const missing=services.filter(s=>
+    s.frequency!=='one_time'
+    && monthAppliesToService(s,baseMonth)
+    && !obligationFor(s.id,baseMonth)
+  ).length;
+
+  return `<div class="pagehead">
+    <div>
+      <h1>Servicios e impuestos</h1>
+      <p>Cuadro mensual, planes, deudas e historial documental.</p>
+    </div>
+    ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
+  </div>
+
   ${renderBalance()}
-  <div class="summary"><div class="stat card"><span>Falta cargar en ${monthLabel(baseMonth)}</span><strong>${missing}</strong></div><div class="stat card"><span>Pendiente total</span><strong>${fmtMoney(pending.reduce((a,o)=>a+Number(o.amount||0),0))}</strong></div><div class="stat card"><span>Deuda vencida</span><strong>${fmtMoney(over.reduce((a,o)=>a+Number(o.amount||0),0))}</strong></div><div class="stat card"><span>Servicios activos</span><strong>${services.length}</strong></div></div>
-  <div class="matrix card"><table><thead><tr><th>Servicio</th>${ms.map(m=>`<th>${monthLabel(m)}</th>`).join('')}<th>Carpeta</th></tr></thead><tbody>${services.map(s=>`<tr><td class="service-cell"><div class="service-name">${esc(s.name)}</div><div class="service-meta">${esc(s.category)} · ${s.frequency==='monthly'?'Mensual':'Puntual'}</div></td>${ms.map(m=>{const o=obligationFor(s.id,m),t=boxText(o);return`<td><div class="monthbox ${boxClass(o)}" data-cell="${s.id}|${m}"><div class="status">${t[0]}</div><div class="amount">${t[1]}</div>${o?.due_date?`<div class="date">Vence ${fmtDate(o.due_date)}</div>`:''}</div></td>`}).join('')}<td><button class="btn soft small" data-folder="${s.id}">Abrir</button></td></tr>`).join('')||'<tr><td colspan="5">Todavía no hay servicios.</td></tr>'}</tbody></table></div>`;
+
+  <div class="summary">
+    <div class="stat card"><span>Falta cargar en ${monthLabel(baseMonth)}</span><strong>${missing}</strong></div>
+    <div class="stat card"><span>Pendiente total</span><strong>${fmtMoney(pending.reduce((a,o)=>a+Number(o.amount||0),0))}</strong></div>
+    <div class="stat card"><span>Deuda vencida</span><strong>${fmtMoney(over.reduce((a,o)=>a+Number(o.amount||0),0))}</strong></div>
+    <div class="stat card"><span>Servicios activos</span><strong>${services.length}</strong></div>
+  </div>
+
+  <div class="matrix card">
+    <table>
+      <thead>
+        <tr>
+          <th>Servicio</th>
+          ${ms.map(m=>`<th>${monthLabel(m)}</th>`).join('')}
+          <th>Carpeta</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${services.map(s=>`
+          <tr>
+            <td class="service-cell">
+              <div class="service-name">${esc(s.name)}</div>
+              <div class="service-meta">${esc(s.category)} · ${frequencyLabel(s)}</div>
+              ${s.frequency==='plan'?`<div class="service-meta">${esc(servicePlanDescription(s))}</div>`:''}
+            </td>
+
+            ${ms.map(m=>{
+              const applies=monthAppliesToService(s,m);
+              const o=obligationFor(s.id,m);
+
+              if(s.frequency==='plan'&&!applies&&!o){
+                return `<td>
+                  <div class="monthbox not-applicable">
+                    <div class="status">No corresponde</div>
+                    <div class="date">Fuera del plan</div>
+                  </div>
+                </td>`;
+              }
+
+              const t=boxText(o,s);
+              return `<td>
+                <div class="monthbox ${boxClass(o)}" data-cell="${s.id}|${m}">
+                  <div class="status">${t[0]}</div>
+                  <div class="amount">${t[1]}</div>
+                  ${o?.due_date?`<div class="date">Vence ${fmtDate(o.due_date)}</div>`:''}
+                </div>
+              </td>`;
+            }).join('')}
+
+            <td><button class="btn soft small" data-folder="${s.id}">Abrir</button></td>
+          </tr>
+        `).join('')||'<tr><td colspan="5">Todavía no hay servicios.</td></tr>'}
+      </tbody>
+    </table>
+  </div>`;
 }
 function balanceData(){
   const rows=members.filter(m=>Number(m.participation_percent)>0).map(m=>({m,owed:0,paid:0,balance:0}));
@@ -370,25 +294,298 @@ function bindDashboard(ms){
   document.querySelectorAll('[data-payment]').forEach(e=>e.onclick=()=>openPaymentDetail(e.dataset.payment));
 }
 function openServiceModal(){
-  modal(`<h2>Agregar servicio o impuesto</h2><div class="field"><label>Nombre</label><input id="sname"></div><div class="grid2"><div class="field"><label>Categoría</label><select id="scat"><option>Luz</option><option>Gas</option><option>Agua</option><option>Internet</option><option>Alquiler</option><option>Impuesto</option><option>Moratoria</option><option>Otro</option></select></div><div class="field"><label>Frecuencia</label><select id="sfreq"><option value="monthly">Mensual</option><option value="one_time">Puntual</option></select></div></div><div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveService">Guardar</button></div>`);
-  saveService.onclick=async()=>{if(!sname.value.trim())return toast('Ingresá un nombre');const {error}=await sb.from('services').insert({group_id:group.id,name:sname.value.trim(),category:scat.value,frequency:sfreq.value,created_by:session.user.id});if(error)return toast(error.message);closeModal();await reloadGroup();renderApp()};
+  const current=baseMonth;
+  const defaultEnd=shiftMonth(current,11);
+  const monthNames=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+  modal(`<h2>Agregar servicio o impuesto</h2>
+    <div class="sub">Elegí si es mensual, puntual o un plan con meses determinados.</div>
+
+    <div class="field">
+      <label>Nombre</label>
+      <input id="sname" placeholder="Ej: Moratoria ARCA">
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label>Categoría</label>
+        <select id="scat">
+          <option>Luz</option>
+          <option>Gas</option>
+          <option>Agua</option>
+          <option>Internet</option>
+          <option>Alquiler</option>
+          <option>Impuesto</option>
+          <option>Moratoria</option>
+          <option>Otro</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Frecuencia</label>
+        <select id="sfreq">
+          <option value="monthly">Mensual</option>
+          <option value="one_time">Puntual</option>
+          <option value="plan">Plan</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="planFields" class="plan-fields hidden">
+      <div class="grid2">
+        <div class="field">
+          <label>Comienza en</label>
+          <input id="planStart" type="month" value="${current}">
+        </div>
+        <div class="field">
+          <label>Finaliza en</label>
+          <input id="planEnd" type="month" value="${defaultEnd}">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Meses en los que se paga</label>
+        <div class="month-picker">
+          ${monthNames.map((name,index)=>`
+            <label class="month-check">
+              <input type="checkbox" data-plan-month="${index+1}" checked>
+              <span>${name.slice(0,3)}</span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:var(--muted)">
+        Ejemplo: podés elegir marzo, junio, septiembre y diciembre, y definir hasta qué año continúa.
+      </div>
+    </div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cancelar</button>
+      <button class="btn primary" id="saveService">Guardar</button>
+    </div>`);
+
+  const frequency=document.getElementById('sfreq');
+  const planFields=document.getElementById('planFields');
+  const saveButton=document.getElementById('saveService');
+
+  frequency.onchange=()=>{
+    planFields.classList.toggle('hidden',frequency.value!=='plan');
+  };
+
+  saveButton.onclick=async()=>{
+    const name=document.getElementById('sname').value.trim();
+    if(!name)return toast('Ingresá un nombre');
+
+    const frequencyValue=frequency.value;
+    const payload={
+      group_id:group.id,
+      name,
+      category:document.getElementById('scat').value,
+      frequency:frequencyValue,
+      created_by:session.user.id,
+      plan_start_month:null,
+      plan_end_month:null,
+      plan_months:null
+    };
+
+    if(frequencyValue==='plan'){
+      const startValue=document.getElementById('planStart').value;
+      const endValue=document.getElementById('planEnd').value;
+      const selected=[...document.querySelectorAll('[data-plan-month]:checked')]
+        .map(input=>Number(input.dataset.planMonth));
+
+      if(!startValue||!endValue)return toast('Completá el inicio y el final del plan');
+      if(endValue<startValue)return toast('El final del plan no puede ser anterior al inicio');
+      if(!selected.length)return toast('Elegí al menos un mes de pago');
+
+      payload.plan_start_month=periodDate(startValue);
+      payload.plan_end_month=periodDate(endValue);
+      payload.plan_months=selected;
+    }
+
+    const original=saveButton.textContent;
+    saveButton.disabled=true;
+    saveButton.textContent='Guardando…';
+
+    try{
+      const {error}=await sb.from('services').insert(payload);
+      if(error)throw error;
+      closeModal();
+      await reloadGroup();
+      renderApp();
+      toast(frequencyValue==='plan'?'Plan agregado':'Servicio agregado');
+    }catch(err){
+      console.error('Error guardando servicio:',err);
+      const message=String(err?.message||'');
+      if(message.includes('invalid input value for enum')||message.includes('plan_start_month')){
+        toast('Falta ejecutar la actualización SQL para habilitar Plan');
+      }else{
+        toast(message||'No se pudo guardar');
+      }
+    }finally{
+      if(document.getElementById('saveService')){
+        saveButton.disabled=false;
+        saveButton.textContent=original;
+      }
+    }
+  };
 }
 function openObligation(serviceId,key){
-  const s=services.find(x=>x.id===serviceId),o=obligationFor(serviceId,key),p=o&&paymentFor(o.id);
-  modal(`<h2>${esc(s.name)} · ${monthLabel(key)}</h2><div class="sub">${o?'Editar la factura y consultar su estado.':'Falta cargar importe y vencimiento.'}</div>
-  <div class="grid2"><div class="field"><label>Importe</label><input id="oamount" type="number" value="${o?.amount||''}" ${!canEdit()?'disabled':''}></div><div class="field"><label>Vencimiento</label><input id="odue" type="date" value="${o?.due_date||''}" ${!canEdit()?'disabled':''}></div></div>
-  <div class="field"><label>Notas</label><textarea id="onotes" ${!canEdit()?'disabled':''}>${esc(o?.notes||'')}</textarea></div>
-  ${o?`<div class="field"><label>Factura</label><input id="invoiceFile" type="file" accept="image/*,application/pdf" ${!canEdit()?'disabled':''}></div>`:''}
+  const s=services.find(x=>x.id===serviceId);
+  const o=obligationFor(serviceId,key);
+  const p=o&&paymentFor(o.id);
+  const existingInvoices=o
+    ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')
+    : [];
+
+  modal(`<h2>${esc(s.name)} · ${monthLabel(key)}</h2>
+  <div class="sub">${o?'Editá los datos o agregá documentación.':'Cargá el importe, el vencimiento y la factura en un solo paso.'}</div>
+
+  <div class="grid2">
+    <div class="field">
+      <label>Importe</label>
+      <input id="oamount" type="number" min="0" step="0.01" value="${o?.amount||''}" ${!canEdit()?'disabled':''}>
+    </div>
+    <div class="field">
+      <label>Vencimiento</label>
+      <input id="odue" type="date" value="${o?.due_date||''}" ${!canEdit()?'disabled':''}>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Factura o boleta <span style="font-weight:400;text-transform:none">(opcional)</span></label>
+    <input id="invoiceFile" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" ${!canEdit()?'disabled':''}>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px">PDF, JPG, PNG o WEBP. Máximo 10 MB.</div>
+  </div>
+
+  ${existingInvoices.length?`
+    <div class="field">
+      <label>Facturas guardadas</label>
+      <div class="docs">
+        ${existingInvoices.map((d,i)=>`<button type="button" class="btn soft small" data-existing-invoice="${d.file_path}">Factura ${i+1}</button>`).join('')}
+      </div>
+    </div>`:''}
+
+  <div class="field">
+    <label>Notas</label>
+    <textarea id="onotes" ${!canEdit()?'disabled':''}>${esc(o?.notes||'')}</textarea>
+  </div>
+
   ${p?`<div class="notice">Abonado el ${fmtDate(p.paid_at)} por ${fmtMoney(p.total_amount)}</div>`:''}
-  <div class="modalactions"><button class="btn outline" data-close>Cerrar</button>${canEdit()?`<button class="btn soft" id="saveObligation">${o?'Guardar cambios':'Cargar datos'}</button>${o&&!p?'<button class="btn primary" id="markPaid">Marcar abonado</button>':''}`:''}</div>`);
+
+  <div class="modalactions">
+    <button class="btn outline" data-close>Cerrar</button>
+    ${canEdit()?`
+      <button class="btn soft" id="saveObligation">${o?'Guardar cambios':'Guardar factura'}</button>
+      ${o&&!p?'<button class="btn primary" id="markPaid">Marcar abonado</button>':''}
+    `:''}
+  </div>`);
+
+  document.querySelectorAll('[data-existing-invoice]').forEach(btn=>{
+    btn.onclick=async()=>{
+      const {data,error}=await sb.storage.from('documents').createSignedUrl(btn.dataset.existingInvoice,120);
+      if(error)return toast(error.message);
+      window.open(data.signedUrl,'_blank');
+    };
+  });
+
   if(!canEdit())return;
-  saveObligation.onclick=async()=>{if(!oamount.value||!odue.value)return toast('Completá importe y vencimiento');let id=o?.id;const payload={service_id:serviceId,period:periodDate(key),amount:Number(oamount.value),due_date:odue.value,status:'pending',notes:onotes.value,created_by:session.user.id};let res=o?await sb.from('obligations').update(payload).eq('id',o.id).select().single():await sb.from('obligations').insert(payload).select().single();if(res.error)return toast(res.error.message);id=res.data.id;if(invoiceFile?.files?.[0])await uploadDoc(invoiceFile.files[0],serviceId,id,null,'invoice');closeModal();await reloadGroup();renderApp();toast('Datos guardados')};
-  if(o&&!p)markPaid.onclick=()=>openPayModal(o);
+
+  const saveButton=document.getElementById('saveObligation');
+  saveButton.onclick=async()=>{
+    const amountValue=document.getElementById('oamount').value;
+    const dueValue=document.getElementById('odue').value;
+    const file=document.getElementById('invoiceFile').files[0];
+
+    if(!amountValue||!dueValue)return toast('Completá importe y vencimiento');
+    if(Number(amountValue)<0)return toast('El importe no puede ser negativo');
+    if(file&&file.size>10*1024*1024)return toast('La factura supera el límite de 10 MB');
+
+    const originalText=saveButton.textContent;
+    saveButton.disabled=true;
+    saveButton.textContent=file?'Guardando y subiendo…':'Guardando…';
+
+    try{
+      const period=periodDate(key);
+      const payload={
+        service_id:serviceId,
+        period,
+        amount:Number(amountValue),
+        due_date:dueValue,
+        status:p?'paid':'pending',
+        notes:document.getElementById('onotes').value,
+        created_by:session.user.id
+      };
+
+      const {data:saved,error}=await sb
+        .from('obligations')
+        .upsert(payload,{onConflict:'service_id,period'})
+        .select()
+        .single();
+
+      if(error)throw error;
+
+      if(file){
+        await uploadDoc(file,serviceId,saved.id,null,'invoice');
+      }
+
+      closeModal();
+      await reloadGroup();
+      renderApp();
+      toast(file?'Factura y datos guardados':'Datos guardados');
+    }catch(err){
+      console.error('Error guardando obligación:',err);
+      toast(err?.message||'No se pudo guardar');
+    }finally{
+      if(document.getElementById('saveObligation')){
+        saveButton.disabled=false;
+        saveButton.textContent=originalText;
+      }
+    }
+  };
+
+  if(o&&!p){
+    document.getElementById('markPaid').onclick=()=>openPayModal(o);
+  }
 }
+
 async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
-  const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_'),path=`${group.id}/${serviceId}/${Date.now()}_${safe}`;
-  const up=await sb.storage.from('documents').upload(path,file,{contentType:file.type,upsert:false});if(up.error){toast(up.error.message);return}
-  const {error}=await sb.from('documents').insert({group_id:group.id,obligation_id:obligationId,payment_id:paymentId,kind,file_path:path,original_name:file.name,mime_type:file.type,size_bytes:file.size,uploaded_by:session.user.id});if(error)toast(error.message);
+  const allowed=['image/jpeg','image/png','image/webp','application/pdf'];
+  if(!allowed.includes(file.type))throw new Error('Formato de archivo no admitido');
+  if(file.size>10*1024*1024)throw new Error('El archivo supera el límite de 10 MB');
+
+  const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  const filePath=`${group.id}/${serviceId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
+
+  const {error:uploadError}=await sb.storage
+    .from('documents')
+    .upload(filePath,file,{
+      contentType:file.type,
+      upsert:false,
+      cacheControl:'3600'
+    });
+
+  if(uploadError)throw uploadError;
+
+  const {error:documentError}=await sb.from('documents').insert({
+    group_id:group.id,
+    obligation_id:obligationId,
+    payment_id:paymentId,
+    kind,
+    file_path:filePath,
+    original_name:file.name,
+    mime_type:file.type,
+    size_bytes:file.size,
+    uploaded_by:session.user.id
+  });
+
+  if(documentError){
+    await sb.storage.from('documents').remove([filePath]);
+    throw documentError;
+  }
+
+  return filePath;
 }
 function openPayModal(o){
   const active=members.filter(m=>Number(m.participation_percent)>0);
@@ -401,7 +598,7 @@ function openPayModal(o){
 }
 function openFolder(serviceId){
   const s=services.find(x=>x.id===serviceId),os=obligations.filter(x=>x.service_id===serviceId).sort((a,b)=>b.period.localeCompare(a.period));
-  modal(`<h2>Carpeta · ${esc(s.name)}</h2><div class="sub">Facturas, deudas, pagos y comprobantes.</div>${os.map(o=>{const p=paymentFor(o.id),docs=documents.filter(d=>d.obligation_id===o.id||d.payment_id===p?.id);return`<div class="folderitem"><div class="folderhead"><div><strong>${monthLabel(o.period.slice(0,7))}</strong><div>${fmtMoney(o.amount)} · vence ${fmtDate(o.due_date)}</div></div><span>${p?'Abonado':'Pendiente'}</span></div>${p?`<p>Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</p>`:''}<div class="docs">${docs.map(d=>`<button class="btn soft small" data-doc="${d.file_path}">${d.kind==='invoice'?'Factura':'Comprobante'}</button>`).join('')||'<small>Sin documentos adjuntos</small>'}</div></div>`}).join('')||'<div class="notice">Todavía no hay movimientos.</div>'}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);
+  modal(`<h2>Carpeta · ${esc(s.name)}</h2><div class="sub">${frequencyLabel(s)}${s.frequency==='plan'?' · '+esc(servicePlanDescription(s)):''} · Facturas, deudas, pagos y comprobantes.</div>${os.map(o=>{const p=paymentFor(o.id),docs=documents.filter(d=>d.obligation_id===o.id||d.payment_id===p?.id);return`<div class="folderitem"><div class="folderhead"><div><strong>${monthLabel(o.period.slice(0,7))}</strong><div>${fmtMoney(o.amount)} · vence ${fmtDate(o.due_date)}</div></div><span>${p?'Abonado':'Pendiente'}</span></div>${p?`<p>Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</p>`:''}<div class="docs">${docs.map(d=>`<button class="btn soft small" data-doc="${d.file_path}">${d.kind==='invoice'?'Factura':'Comprobante'}</button>`).join('')||'<small>Sin documentos adjuntos</small>'}</div></div>`}).join('')||'<div class="notice">Todavía no hay movimientos.</div>'}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);
   document.querySelectorAll('[data-doc]').forEach(b=>b.onclick=async()=>{const {data,error}=await sb.storage.from('documents').createSignedUrl(b.dataset.doc,120);if(error)return toast(error.message);window.open(data.signedUrl,'_blank')});
 }
 function openPaymentDetail(id){const p=payments.find(x=>x.id===id),o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o.service_id),cs=contributions.filter(x=>x.payment_id===id);modal(`<h2>${esc(s.name)}</h2><div class="sub">${monthLabel(o.period.slice(0,7))}</div><div class="notice">Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</div>${cs.map(c=>`<div class="row"><span>${esc(members.find(m=>m.id===c.membership_id)?.display_name||'Integrante')}</span><strong>${fmtMoney(c.amount)}</strong></div>`).join('')}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn soft" id="openFolderBtn">Abrir carpeta</button></div>`);openFolderBtn.onclick=()=>openFolder(s.id)}
@@ -409,13 +606,6 @@ function openMembers(){
   modal(`<h2>Integrantes y acceso</h2><div class="sub">Código para unirse: <strong>${esc(group.join_code)}</strong></div>${members.map(m=>`<div class="memberline"><div><strong>${esc(m.display_name)}</strong><small style="display:block;color:var(--muted)">${m.user_id===session.user.id?'Tu usuario':''}</small></div><select data-role="${m.id}"><option value="admin" ${m.role==='admin'?'selected':''}>Administrador</option><option value="viewer" ${m.role==='viewer'?'selected':''}>Solo consulta</option></select><input data-share="${m.id}" type="number" min="0" max="100" value="${m.participation_percent}"></div>`).join('')}<div class="notice">Los porcentajes de quienes aportan deberían sumar 100%.</div><div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn primary" id="saveMembers">Guardar</button></div>`,true);
   saveMembers.onclick=async()=>{const updates=members.map(m=>({id:m.id,role:document.querySelector(`[data-role="${m.id}"]`).value,participation_percent:Number(document.querySelector(`[data-share="${m.id}"]`).value||0)}));if(Math.abs(updates.reduce((a,x)=>a+x.participation_percent,0)-100)>.01)return toast('Los porcentajes deben sumar 100%');for(const u of updates){const {error}=await sb.from('memberships').update({role:u.role,participation_percent:u.participation_percent}).eq('id',u.id);if(error)return toast(error.message)}closeModal();await reloadGroup();renderApp();toast('Integrantes actualizados')};
 }
-window.addEventListener('unhandledrejection',event=>{
-  console.error('Promesa no controlada:',event.reason);
-  toast(event.reason?.message||'Ocurrió un error inesperado');
-});
-window.addEventListener('error',event=>{
-  console.error('Error global:',event.error||event.message);
-});
 init();
 </script>
 </body>
