@@ -159,6 +159,12 @@ function renderApp(){
   bindDashboard(ms);
 }
 function obligationFor(serviceId,key){return obligations.find(o=>o.service_id===serviceId&&o.period===periodDate(key))}
+function normalizeServiceName(value){
+  return String(value||'')
+    .trim()
+    .toLocaleLowerCase('es-AR')
+    .replace(/\s+/g,' ');
+}
 function frequencyLabel(service){
   if(service.frequency==='monthly')return 'Mensual';
   if(service.frequency==='plan')return 'Plan';
@@ -377,6 +383,11 @@ function openServiceModal(){
     const name=document.getElementById('sname').value.trim();
     if(!name)return toast('Ingresá un nombre');
 
+    const duplicate=services.some(service=>
+      normalizeServiceName(service.name)===normalizeServiceName(name)
+    );
+    if(duplicate)return toast('Ya existe un servicio con ese nombre en este espacio');
+
     const frequencyValue=frequency.value;
     const payload={
       group_id:group.id,
@@ -420,6 +431,8 @@ function openServiceModal(){
       const message=String(err?.message||'');
       if(message.includes('invalid input value for enum')||message.includes('plan_start_month')){
         toast('Falta ejecutar la actualización SQL para habilitar Plan');
+      }else if(message.includes('Ya existe un servicio')||message.includes('duplicate key')||message.includes('23505')){
+        toast('Ya existe un servicio con ese nombre en este espacio');
       }else{
         toast(message||'No se pudo guardar');
       }
@@ -597,14 +610,190 @@ function openPayModal(o){
   savePay.onclick=async()=>{const vals=[...document.querySelectorAll('[data-contrib]')].map(x=>({membership_id:x.dataset.contrib,amount:Number(x.value||0)})),sum=vals.reduce((a,x)=>a+x.amount,0),total=Number(paidTotal.value||0);if(Math.abs(sum-total)>.01)return toast('Los aportes deben sumar el total pagado');const {data:p,error}=await sb.from('payments').insert({obligation_id:o.id,paid_at:paidDate.value,total_amount:total,created_by:session.user.id}).select().single();if(error)return toast(error.message);const c=await sb.from('payment_contributions').insert(vals.map(x=>({...x,payment_id:p.id})));if(c.error)return toast(c.error.message);await sb.from('obligations').update({status:'paid'}).eq('id',o.id);if(receiptFile.files[0])await uploadDoc(receiptFile.files[0],o.service_id,o.id,p.id,'receipt');closeModal();await reloadGroup();renderApp();toast('Pago registrado')};
 }
 function openFolder(serviceId){
-  const s=services.find(x=>x.id===serviceId),os=obligations.filter(x=>x.service_id===serviceId).sort((a,b)=>b.period.localeCompare(a.period));
-  modal(`<h2>Carpeta · ${esc(s.name)}</h2><div class="sub">${frequencyLabel(s)}${s.frequency==='plan'?' · '+esc(servicePlanDescription(s)):''} · Facturas, deudas, pagos y comprobantes.</div>${os.map(o=>{const p=paymentFor(o.id),docs=documents.filter(d=>d.obligation_id===o.id||d.payment_id===p?.id);return`<div class="folderitem"><div class="folderhead"><div><strong>${monthLabel(o.period.slice(0,7))}</strong><div>${fmtMoney(o.amount)} · vence ${fmtDate(o.due_date)}</div></div><span>${p?'Abonado':'Pendiente'}</span></div>${p?`<p>Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</p>`:''}<div class="docs">${docs.map(d=>`<button class="btn soft small" data-doc="${d.file_path}">${d.kind==='invoice'?'Factura':'Comprobante'}</button>`).join('')||'<small>Sin documentos adjuntos</small>'}</div></div>`}).join('')||'<div class="notice">Todavía no hay movimientos.</div>'}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);
-  document.querySelectorAll('[data-doc]').forEach(b=>b.onclick=async()=>{const {data,error}=await sb.storage.from('documents').createSignedUrl(b.dataset.doc,120);if(error)return toast(error.message);window.open(data.signedUrl,'_blank')});
+  const s=services.find(x=>x.id===serviceId);
+  const os=obligations
+    .filter(x=>x.service_id===serviceId)
+    .sort((a,b)=>b.period.localeCompare(a.period));
+
+  modal(`<h2>Carpeta · ${esc(s.name)}</h2>
+    <div class="sub">${frequencyLabel(s)}${s.frequency==='plan'?' · '+esc(servicePlanDescription(s)):''} · Facturas, deudas, pagos y comprobantes.</div>
+
+    ${os.map(o=>{
+      const p=paymentFor(o.id);
+      const docs=documents.filter(d=>d.obligation_id===o.id||d.payment_id===p?.id);
+      return `<div class="folderitem">
+        <div class="folderhead">
+          <div>
+            <strong>${monthLabel(o.period.slice(0,7))}</strong>
+            <div>${fmtMoney(o.amount)} · vence ${fmtDate(o.due_date)}</div>
+          </div>
+          <span>${p?'Abonado':'Pendiente'}</span>
+        </div>
+        ${p?`<p>Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</p>`:''}
+        <div class="docs">
+          ${docs.map(d=>`<button class="btn soft small" data-doc="${d.file_path}">${d.kind==='invoice'?'Factura':'Comprobante'}</button>`).join('')||'<small>Sin documentos adjuntos</small>'}
+        </div>
+      </div>`;
+    }).join('')||'<div class="notice">Todavía no hay movimientos.</div>'}
+
+    <div class="modalactions">
+      ${canEdit()?'<button class="btn danger" id="deleteServiceBtn">Eliminar servicio</button>':''}
+      <button class="btn outline" data-close>Cerrar</button>
+    </div>`,true);
+
+  document.querySelectorAll('[data-doc]').forEach(b=>b.onclick=async()=>{
+    const {data,error}=await sb.storage.from('documents').createSignedUrl(b.dataset.doc,120);
+    if(error)return toast(error.message);
+    window.open(data.signedUrl,'_blank');
+  });
+
+  if(canEdit()){
+    document.getElementById('deleteServiceBtn').onclick=()=>deleteService(serviceId);
+  }
+}
+
+async function deleteService(serviceId){
+  const service=services.find(s=>s.id===serviceId);
+  if(!service)return;
+
+  const serviceObligations=obligations.filter(o=>o.service_id===serviceId);
+  const obligationIds=serviceObligations.map(o=>o.id);
+  const servicePayments=payments.filter(p=>obligationIds.includes(p.obligation_id));
+  const paymentIds=servicePayments.map(p=>p.id);
+  const serviceDocs=documents.filter(d=>
+    obligationIds.includes(d.obligation_id)
+    || paymentIds.includes(d.payment_id)
+  );
+
+  const warning=serviceObligations.length
+    ? `¿Eliminar "${service.name}"? Se borrarán también ${serviceObligations.length} movimiento(s), pagos, facturas y comprobantes. Esta acción no se puede deshacer.`
+    : `¿Eliminar "${service.name}"? Esta acción no se puede deshacer.`;
+
+  if(!confirm(warning))return;
+
+  try{
+    const paths=serviceDocs.map(d=>d.file_path).filter(Boolean);
+    if(paths.length){
+      const {error:storageError}=await sb.storage.from('documents').remove(paths);
+      if(storageError)throw storageError;
+    }
+
+    const {error}=await sb.from('services').delete().eq('id',serviceId);
+    if(error)throw error;
+
+    closeModal();
+    await reloadGroup();
+    renderApp();
+    toast('Servicio eliminado');
+  }catch(err){
+    console.error('Error eliminando servicio:',err);
+    toast(err?.message||'No se pudo eliminar el servicio');
+  }
 }
 function openPaymentDetail(id){const p=payments.find(x=>x.id===id),o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o.service_id),cs=contributions.filter(x=>x.payment_id===id);modal(`<h2>${esc(s.name)}</h2><div class="sub">${monthLabel(o.period.slice(0,7))}</div><div class="notice">Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</div>${cs.map(c=>`<div class="row"><span>${esc(members.find(m=>m.id===c.membership_id)?.display_name||'Integrante')}</span><strong>${fmtMoney(c.amount)}</strong></div>`).join('')}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn soft" id="openFolderBtn">Abrir carpeta</button></div>`);openFolderBtn.onclick=()=>openFolder(s.id)}
 function openMembers(){
-  modal(`<h2>Integrantes y acceso</h2><div class="sub">Código para unirse: <strong>${esc(group.join_code)}</strong></div>${members.map(m=>`<div class="memberline"><div><strong>${esc(m.display_name)}</strong><small style="display:block;color:var(--muted)">${m.user_id===session.user.id?'Tu usuario':''}</small></div><select data-role="${m.id}"><option value="admin" ${m.role==='admin'?'selected':''}>Administrador</option><option value="viewer" ${m.role==='viewer'?'selected':''}>Solo consulta</option></select><input data-share="${m.id}" type="number" min="0" max="100" value="${m.participation_percent}"></div>`).join('')}<div class="notice">Los porcentajes de quienes aportan deberían sumar 100%.</div><div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn primary" id="saveMembers">Guardar</button></div>`,true);
-  saveMembers.onclick=async()=>{const updates=members.map(m=>({id:m.id,role:document.querySelector(`[data-role="${m.id}"]`).value,participation_percent:Number(document.querySelector(`[data-share="${m.id}"]`).value||0)}));if(Math.abs(updates.reduce((a,x)=>a+x.participation_percent,0)-100)>.01)return toast('Los porcentajes deben sumar 100%');for(const u of updates){const {error}=await sb.from('memberships').update({role:u.role,participation_percent:u.participation_percent}).eq('id',u.id);if(error)return toast(error.message)}closeModal();await reloadGroup();renderApp();toast('Integrantes actualizados')};
+  modal(`<h2>Integrantes y acceso</h2>
+    <div class="sub">
+      Código para unirse: <strong>${esc(group.join_code)}</strong><br>
+      Los nombres, roles y porcentajes se configuran solamente para este espacio.
+    </div>
+
+    ${members.map(m=>`
+      <div class="memberline">
+        <div>
+          <input
+            data-member-name="${m.id}"
+            type="text"
+            value="${esc(m.display_name)}"
+            aria-label="Nombre visible"
+            style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px"
+          >
+          <small style="display:block;color:var(--muted);margin-top:4px">
+            ${m.user_id===session.user.id?'Tu usuario':'Nombre visible en este espacio'}
+          </small>
+        </div>
+
+        <select data-role="${m.id}">
+          <option value="admin" ${m.role==='admin'?'selected':''}>Administrador</option>
+          <option value="viewer" ${m.role==='viewer'?'selected':''}>Solo consulta</option>
+        </select>
+
+        <input
+          data-share="${m.id}"
+          type="number"
+          min="0"
+          max="100"
+          step="0.01"
+          value="${m.participation_percent}"
+          title="Porcentaje de participación"
+        >
+      </div>
+    `).join('')}
+
+    <div class="notice">
+      Puede haber varios administradores en este espacio. En otro espacio, las mismas personas pueden tener roles diferentes.
+      Los porcentajes de participación deben sumar 100%.
+    </div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cerrar</button>
+      <button class="btn primary" id="saveMembers">Guardar</button>
+    </div>`,true);
+
+  document.getElementById('saveMembers').onclick=async()=>{
+    const updates=members.map(m=>({
+      id:m.id,
+      display_name:document.querySelector(`[data-member-name="${m.id}"]`).value.trim(),
+      role:document.querySelector(`[data-role="${m.id}"]`).value,
+      participation_percent:Number(document.querySelector(`[data-share="${m.id}"]`).value||0)
+    }));
+
+    if(updates.some(u=>!u.display_name)){
+      return toast('Todos los integrantes deben tener un nombre visible');
+    }
+
+    if(!updates.some(u=>u.role==='admin')){
+      return toast('El espacio debe conservar al menos un administrador');
+    }
+
+    const total=updates.reduce((sum,u)=>sum+u.participation_percent,0);
+    if(Math.abs(total-100)>.01){
+      return toast('Los porcentajes deben sumar 100%');
+    }
+
+    const saveButton=document.getElementById('saveMembers');
+    const original=saveButton.textContent;
+    saveButton.disabled=true;
+    saveButton.textContent='Guardando…';
+
+    try{
+      for(const u of updates){
+        const {error}=await sb
+          .from('memberships')
+          .update({
+            display_name:u.display_name,
+            role:u.role,
+            participation_percent:u.participation_percent
+          })
+          .eq('id',u.id);
+
+        if(error)throw error;
+      }
+
+      closeModal();
+      await reloadGroup();
+      renderApp();
+      toast('Integrantes actualizados');
+    }catch(err){
+      console.error('Error actualizando integrantes:',err);
+      toast(err?.message||'No se pudieron actualizar los integrantes');
+    }finally{
+      if(document.getElementById('saveMembers')){
+        saveButton.disabled=false;
+        saveButton.textContent=original;
+      }
+    }
+  };
 }
 init();
 </script>
