@@ -38,6 +38,16 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .legend{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.legend span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 10px;font-size:11px;color:var(--muted)}.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
 .forecast{padding:20px;margin:0 0 18px}.forecast h2{margin:0 0 5px}.forecast>p{margin:0;color:var(--muted)}.forecast-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:15px}.forecast-month{border:1px solid var(--line);border-radius:16px;padding:14px;background:#fff}.forecast-month h3{margin:0 0 8px;font-size:15px}.forecast-total{font-size:23px;font-weight:850}.forecast-detail{font-size:12px;color:var(--muted);margin-top:4px}.forecast-shares{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}.forecast-share{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0}.estimate{color:#8a6700}.confirmed{color:var(--green)}
 .invite-box{border:1px solid var(--line);border-radius:16px;padding:15px;background:#fafcfa}.invite-code{font-size:25px;font-weight:900;letter-spacing:.12em;color:var(--brand);word-break:break-all}.invite-url{font-size:12px;color:var(--muted);word-break:break-all;margin:8px 0}.qr-wrap{display:flex;justify-content:center;background:white;border:1px solid var(--line);border-radius:15px;padding:14px;margin:14px auto;width:fit-content}.access-note{font-size:12px;color:var(--muted);margin-top:6px}.alias-chip{display:inline-flex;align-items:center;border-radius:999px;background:var(--brand2);color:var(--brand);padding:4px 8px;font-size:11px;font-weight:800;margin-left:6px}
+.owner-chip{display:inline-flex;align-items:center;border-radius:999px;background:#14211d;color:#fff;padding:4px 8px;font-size:10px;font-weight:850;margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
+.access-grid{display:grid;grid-template-columns:minmax(180px,1fr) 145px 105px 120px 80px;gap:8px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
+.access-check{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted)}.access-check input{width:auto}
+.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.report-card{padding:18px}.report-card span{display:block;color:var(--muted);font-size:12px}.report-card strong{display:block;font-size:24px;margin-top:6px}
+.report-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}.report-panel{padding:20px}.report-panel h2{margin:0 0 5px}.report-panel>p{margin:0 0 16px;color:var(--muted);font-size:13px}
+.report-row{display:grid;grid-template-columns:minmax(100px,1fr) 2fr auto;gap:10px;align-items:center;padding:8px 0}.report-row+.report-row{border-top:1px solid var(--line)}.report-label{font-size:13px;font-weight:700}.report-track{height:9px;border-radius:999px;background:#edf1ef;overflow:hidden}.report-fill{height:100%;border-radius:999px;background:var(--brand)}.report-value{font-size:12px;font-weight:800;white-space:nowrap}
+.report-table{width:100%;border-collapse:collapse}.report-table th,.report-table td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:13px}.report-table th{color:var(--muted);font-size:11px;text-transform:uppercase}.permission-badge{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eef2ff;color:#4356a8;font-size:10px;font-weight:850}
+@media(max-width:900px){.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}}
+
 @media(max-width:900px){.forecast-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.forecast-grid{grid-template-columns:1fr}}
 .not-applicable{background:#f1f3f2;color:#8a958f;cursor:default;border-style:dashed}.not-applicable:hover{border-color:var(--line)}
 .month-picker{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
@@ -78,6 +88,10 @@ function esc(v){return String(v??'').replace(/[&<>'"]/g,x=>({'&':'&amp;','<':'&l
 function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
 function canEdit(){return membership?.role==='admin'}
+function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
+function canManageAccess(){return isOwner()}
+function canViewReports(){return isOwner()||membership?.can_view_reports===true}
+function currentRoleLabel(){if(isOwner())return 'Administrador principal';return canEdit()?'Administrador':'Solo consulta'}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
@@ -106,7 +120,7 @@ async function init(){
 }
 function renderAuth(signup=false){
   const inviteNotice=pendingInviteToken?`<div class="notice">Tenés una invitación pendiente. Después de ingresar o crear tu cuenta, accederás solamente al espacio autorizado.</div>`:'';
-  app.innerHTML=`<div class="authwrap"><div class="auth card"><div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Acceso privado por espacio</small></div></div><h1>${signup?'Crear cuenta':'Ingresar'}</h1><p>${signup?'Creá tu usuario para aceptar la invitación.':'Ingresá con tu correo y contraseña.'}</p>${inviteNotice}
+  app.innerHTML=`<div class="authwrap"><div class="auth card"><div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Acceso privado · permisos por espacio</small></div></div><h1>${signup?'Crear cuenta':'Ingresar'}</h1><p>${signup?'Creá tu usuario para aceptar la invitación.':'Ingresá con tu correo y contraseña.'}</p>${inviteNotice}
   ${signup?`<div class="field"><label>Nombre o alias</label><input id="name" autocomplete="name"></div>`:''}
   <div class="field"><label>Correo electrónico</label><input id="email" type="email" autocomplete="email"></div>
   <div class="field"><label>Contraseña</label><input id="password" type="password" autocomplete="${signup?'new-password':'current-password'}"></div>
@@ -158,14 +172,14 @@ async function redeemPendingInvite(alias=''){
 }
 async function loadGroups(){
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
-  const {data,error}=await sb.from('memberships').select('id,role,participation_percent,display_name,group_id,groups(id,name,type,join_code)').eq('user_id',session.user.id).eq('active',true);
+  const {data,error}=await sb.from('memberships').select('*,groups(id,name,type,join_code,created_by)').eq('user_id',session.user.id).eq('active',true);
   if(error){toast(error.message);return}
   groups=(data||[]).map(x=>({...x.groups,membership:x}));
   renderGroups();
 }
 function renderGroups(){
   app.innerHTML=`<main><div class="pagehead"><div><h1>Tus espacios</h1><p>Cada espacio tiene sus propios administradores, accesos y porcentajes.</p></div><div class="actions"><button class="btn outline" id="joinBtn">Ingresar código</button><button class="btn primary" id="newGroup">+ Crear espacio</button><button class="btn soft" id="logout">Salir</button></div></div>
-  <div class="workspace-grid">${groups.map(g=>`<div class="workspace card" data-group="${g.id}"><h3>${esc(g.name)}</h3><p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${g.membership.role==='admin'?'Administrador':'Solo consulta'} <span class="alias-chip">${esc(g.membership.display_name)}</span></p></div>`).join('')||'<div class="card workspace"><h3>No tenés espacios todavía</h3><p>Creá uno o ingresá un código de invitación.</p></div>'}</div></main>`;
+  <div class="workspace-grid">${groups.map(g=>{const owner=g.created_by===session.user.id;return `<div class="workspace card" data-group="${g.id}"><h3>${esc(g.name)}</h3><p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':'Solo consulta'} <span class="alias-chip">${esc(g.membership.display_name)}</span>${owner?'<span class="owner-chip">Titular</span>':''}</p></div>`}).join('')||'<div class="card workspace"><h3>No tenés espacios todavía</h3><p>Creá uno o ingresá un código de invitación.</p></div>'}</div></main>`;
   document.querySelectorAll('[data-group]').forEach(e=>e.onclick=()=>openGroup(e.dataset.group));
   document.getElementById('logout').onclick=()=>sb.auth.signOut();
   document.getElementById('newGroup').onclick=openCreateGroup;
@@ -209,13 +223,45 @@ async function reloadGroup(){
 }
 function renderApp(){
   const ms=[baseMonth,shiftMonth(baseMonth,1),shiftMonth(baseMonth,2)];
-  app.innerHTML=`<div class="top"><div class="topin"><div class="brand"><div class="mark">${group.type==='company'?'E':'F'}</div><div><strong>${esc(group.name)}</strong><small>${group.type==='company'?'Empresa':'Grupo familiar'} · ${canEdit()?'Administrador':'Solo consulta'} · ${esc(membership?.display_name||userName())}</small></div></div><div class="actions"><button class="btn soft small" id="aliasBtn">Mi alias</button>${canEdit()?'<button class="btn soft small" id="membersBtn">Accesos</button>':''}<button class="btn outline small" id="backBtn">Cambiar espacio</button><button class="btn outline small" id="signOut">Salir</button></div></div></div>
-  <main><div class="tabs"><button class="tab ${tab==='services'?'active':''}" data-tab="services">Servicios e impuestos</button><button class="tab ${tab==='paid'?'active':''}" data-tab="paid">Abonados</button></div><div id="content"></div></main>`;
-  document.getElementById('backBtn').onclick=()=>{group=null;loadGroups()};document.getElementById('signOut').onclick=()=>sb.auth.signOut();
+  if(tab==='reports'&&!canViewReports())tab='services';
+
+  app.innerHTML=`<div class="top"><div class="topin">
+    <div class="brand">
+      <div class="mark">${group.type==='company'?'E':'F'}</div>
+      <div>
+        <strong>${esc(group.name)}</strong>
+        <small>${group.type==='company'?'Empresa':'Grupo familiar'} · ${currentRoleLabel()} · ${esc(membership?.display_name||userName())}</small>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn soft small" id="aliasBtn">Mi alias</button>
+      ${canManageAccess()?'<button class="btn soft small" id="membersBtn">Accesos</button>':''}
+      <button class="btn outline small" id="backBtn">Cambiar espacio</button>
+      <button class="btn outline small" id="signOut">Salir</button>
+    </div>
+  </div></div>
+  <main>
+    <div class="tabs">
+      <button class="tab ${tab==='services'?'active':''}" data-tab="services">Servicios e impuestos</button>
+      <button class="tab ${tab==='paid'?'active':''}" data-tab="paid">Abonados</button>
+      ${canViewReports()?`<button class="tab ${tab==='reports'?'active':''}" data-tab="reports">Reportes</button>`:''}
+    </div>
+    <div id="content"></div>
+  </main>`;
+
+  document.getElementById('backBtn').onclick=()=>{group=null;loadGroups()};
+  document.getElementById('signOut').onclick=()=>sb.auth.signOut();
   document.getElementById('aliasBtn').onclick=openMyAlias;
-  if(canEdit())document.getElementById('membersBtn').onclick=openMembers;
-  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;renderApp()});
-  content.innerHTML=tab==='services'?renderServices(ms):renderPaid();
+  if(canManageAccess())document.getElementById('membersBtn').onclick=openMembers;
+
+  document.querySelectorAll('[data-tab]').forEach(button=>{
+    button.onclick=()=>{tab=button.dataset.tab;renderApp()};
+  });
+
+  if(tab==='services')content.innerHTML=renderServices(ms);
+  else if(tab==='paid')content.innerHTML=renderPaid();
+  else content.innerHTML=renderReports();
+
   bindDashboard(ms);
 }
 function obligationFor(serviceId,key){return obligations.find(o=>o.service_id===serviceId&&o.period===periodDate(key))}
@@ -322,7 +368,6 @@ function renderServices(ms){
 
   ${renderBalance()}
 
-  ${renderForecast()}
 
   <div class="legend"><span><i style="background:#84c9a6"></i>Más de 10 días</span><span><i style="background:#b8d99a"></i>6 a 10 días</span><span><i style="background:#ead273"></i>3 a 5 días</span><span><i style="background:#efaf6e"></i>Hoy a 2 días</span><span><i style="background:#e58f94"></i>Vencido</span></div>
 
@@ -387,6 +432,117 @@ function balanceData(){
   rows.forEach(r=>r.balance=r.paid-r.owed);return rows;
 }
 function renderBalance(){const rows=balanceData();return `<div class="balance card"><h2>Equilibrio acumulado</h2><p>Compara lo que correspondía pagar con lo efectivamente aportado.</p><div class="balancegrid">${rows.map(r=>`<div class="person"><strong>${esc(r.m.display_name)}</strong><div class="money ${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</div><small>Correspondía ${fmtMoney(r.owed)} · Pagó ${fmtMoney(r.paid)}</small></div>`).join('')||'<div class="person">Definí los porcentajes de los administradores.</div>'}</div></div>`}
+function reportMonthData(key){
+  const monthObligations=obligations.filter(o=>o.period===periodDate(key)&&o.status!=='cancelled');
+  const total=monthObligations.reduce((sum,o)=>sum+Number(o.amount||0),0);
+  const paid=monthObligations.reduce((sum,o)=>{
+    const payment=paymentFor(o.id);
+    return sum+Number(payment?.total_amount||0);
+  },0);
+  return{key,total,paid,pending:Math.max(0,total-paid)};
+}
+function reportCategoryData(){
+  const year=baseMonth.slice(0,4);
+  const totals=new Map();
+  obligations.filter(o=>o.period.startsWith(year)&&o.status!=='cancelled').forEach(o=>{
+    const service=services.find(s=>s.id===o.service_id);
+    const label=service?.category||'Otro';
+    totals.set(label,(totals.get(label)||0)+Number(o.amount||0));
+  });
+  return[...totals.entries()].map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value);
+}
+function reportServiceData(){
+  const year=baseMonth.slice(0,4);
+  const totals=new Map();
+  obligations.filter(o=>o.period.startsWith(year)&&o.status!=='cancelled').forEach(o=>{
+    const service=services.find(s=>s.id===o.service_id);
+    if(!service)return;
+    totals.set(service.name,(totals.get(service.name)||0)+Number(o.amount||0));
+  });
+  return[...totals.entries()].map(([label,value])=>({label,value})).sort((a,b)=>b.value-a.value).slice(0,6);
+}
+function renderReportBars(items,emptyText){
+  if(!items.length)return`<div class="notice">${emptyText}</div>`;
+  const max=Math.max(...items.map(item=>item.value),1);
+  return items.map(item=>`<div class="report-row">
+    <div class="report-label">${esc(item.label)}</div>
+    <div class="report-track"><div class="report-fill" style="width:${Math.max(3,item.value/max*100)}%"></div></div>
+    <div class="report-value">${fmtMoney(item.value)}</div>
+  </div>`).join('');
+}
+function renderReports(){
+  if(!canViewReports())return`<div class="notice">No tenés permiso para ver reportes de este espacio.</div>`;
+
+  const current=reportMonthData(baseMonth);
+  const pending=pendingObligations();
+  const overdue=pending.filter(o=>daysUntil(o.due_date)<0);
+  const next30=pending.filter(o=>{const d=daysUntil(o.due_date);return d!==null&&d>=0&&d<=30});
+  const forecastMonths=Array.from({length:6},(_,i)=>forecastMonth(shiftMonth(baseMonth,i)));
+  const forecastTotal=forecastMonths.reduce((sum,m)=>sum+m.total,0);
+  const sixMonths=Array.from({length:6},(_,i)=>shiftMonth(baseMonth,i-5)).map(reportMonthData);
+  const average=sixMonths.reduce((sum,m)=>sum+m.total,0)/Math.max(1,sixMonths.filter(m=>m.total>0).length||1);
+  const categories=reportCategoryData();
+  const topServices=reportServiceData();
+  const maxMonth=Math.max(...sixMonths.map(m=>m.total),1);
+  const rows=balanceData();
+
+  return `<div class="pagehead">
+    <div>
+      <h1>Reportes</h1>
+      <p>${isOwner()?'Vista exclusiva del administrador principal. Podés habilitarla individualmente desde Accesos.':'Acceso a reportes autorizado por el administrador principal.'}</p>
+    </div>
+    <span class="permission-badge">${isOwner()?'Administrador principal':'Acceso autorizado'}</span>
+  </div>
+
+  <div class="report-grid">
+    <div class="report-card card"><span>Gastos de ${monthLabel(baseMonth)}</span><strong>${fmtMoney(current.total)}</strong></div>
+    <div class="report-card card"><span>Pendiente total</span><strong>${fmtMoney(pending.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
+    <div class="report-card card"><span>Deuda vencida</span><strong>${fmtMoney(overdue.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
+    <div class="report-card card"><span>Proyección próximos 6 meses</span><strong>${fmtMoney(forecastTotal)}</strong></div>
+  </div>
+
+  ${renderForecast()}
+
+  <div class="report-columns">
+    <div class="report-panel card">
+      <h2>Evolución mensual</h2>
+      <p>Importes cargados durante los últimos seis meses. Promedio: <strong>${fmtMoney(average)}</strong>.</p>
+      ${sixMonths.map(m=>`<div class="report-row">
+        <div class="report-label">${monthLabel(m.key)}</div>
+        <div class="report-track"><div class="report-fill" style="width:${Math.max(3,m.total/maxMonth*100)}%"></div></div>
+        <div class="report-value">${fmtMoney(m.total)}</div>
+      </div>`).join('')}
+    </div>
+
+    <div class="report-panel card">
+      <h2>Gastos por categoría</h2>
+      <p>Acumulado del año ${baseMonth.slice(0,4)}.</p>
+      ${renderReportBars(categories,'Todavía no hay importes cargados para este año.')}
+    </div>
+  </div>
+
+  <div class="report-columns">
+    <div class="report-panel card">
+      <h2>Servicios de mayor impacto</h2>
+      <p>Los seis conceptos con mayor importe acumulado durante el año.</p>
+      ${renderReportBars(topServices,'Todavía no hay información suficiente.')}
+    </div>
+
+    <div class="report-panel card">
+      <h2>Situación inmediata</h2>
+      <p>Vencimientos próximos, deuda y compensación entre administradores.</p>
+      <table class="report-table">
+        <tr><th>Métrica</th><th>Resultado</th></tr>
+        <tr><td>Vencimientos próximos 30 días</td><td><strong>${next30.length}</strong> · ${fmtMoney(next30.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
+        <tr><td>Facturas vencidas</td><td><strong>${overdue.length}</strong> · ${fmtMoney(overdue.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
+        <tr><td>Pagado en ${monthLabel(baseMonth)}</td><td>${fmtMoney(current.paid)}</td></tr>
+        <tr><td>Pendiente del mes</td><td>${fmtMoney(current.pending)}</td></tr>
+      </table>
+      <div style="margin-top:14px">${rows.map(r=>`<div class="forecast-share"><span>${esc(r.m.display_name)}</span><strong class="${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</strong></div>`).join('')||'<div class="forecast-detail">Sin administradores con porcentaje asignado.</div>'}</div>
+    </div>
+  </div>`;
+}
+
 function renderPaid(){
   const list=payments.slice().sort((a,b)=>b.paid_at.localeCompare(a.paid_at));
   return `<div class="pagehead"><div><h1>Abonados</h1><p>Historial completo de pagos y comprobantes.</p></div></div><div class="list card">${list.map(p=>{const o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o?.service_id);return`<div class="row"><div><h3>${esc(s?.name||'Servicio')}</h3><p>${o?monthLabel(o.period.slice(0,7)):'Pago'} · abonado ${fmtDate(p.paid_at)}</p></div><div><div class="amountbig">${fmtMoney(p.total_amount)}</div><button class="btn soft small" data-payment="${p.id}">Abrir</button></div></div>`}).join('')||'<div class="row"><p>Todavía no hay pagos registrados.</p></div>'}</div>`;
@@ -792,29 +948,160 @@ async function deleteService(serviceId){
 }
 function openPaymentDetail(id){const p=payments.find(x=>x.id===id),o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o.service_id),cs=contributions.filter(x=>x.payment_id===id);modal(`<h2>${esc(s.name)}</h2><div class="sub">${monthLabel(o.period.slice(0,7))}</div><div class="notice">Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</div>${cs.map(c=>`<div class="row"><span>${esc(members.find(m=>m.id===c.membership_id)?.display_name||'Integrante')}</span><strong>${fmtMoney(c.amount)}</strong></div>`).join('')}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn soft" id="openFolderBtn">Abrir carpeta</button></div>`);openFolderBtn.onclick=()=>openFolder(s.id)}
 function openMembers(){
-  modal(`<h2>Accesos de ${esc(group.name)}</h2><div class="sub">Los roles y porcentajes pertenecen únicamente a este espacio. Una persona puede ser administradora en Casa y observadora en Negocio.</div>
+  if(!canManageAccess())return toast('Solo el administrador principal puede gestionar accesos');
+
+  modal(`<h2>Accesos de ${esc(group.name)}</h2>
+    <div class="sub">Solo el administrador principal puede invitar personas, cambiar permisos o habilitar Reportes. Los administradores operativos pueden cargar y pagar, pero no conceder accesos.</div>
+
     <div style="margin-bottom:14px"><button class="btn primary" id="invitePersonBtn">+ Invitar persona</button></div>
-    ${members.map(m=>`<div class="memberline"><div><input data-member-name="${m.id}" type="text" value="${esc(m.display_name)}" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px"><small class="access-note">${m.user_id===session.user.id?'Tu alias':'Alias dentro de este espacio'}</small></div><select data-role="${m.id}"><option value="admin" ${m.role==='admin'?'selected':''}>Administrador</option><option value="viewer" ${m.role==='viewer'?'selected':''}>Solo consulta</option></select><input data-share="${m.id}" type="number" min="0" max="100" step="0.01" value="${m.role==='admin'?m.participation_percent:0}" ${m.role==='viewer'?'disabled':''}></div>`).join('')}
-    <div class="notice">Solo los administradores participan en la división de gastos. Sus porcentajes deben sumar 100%. Los observadores pueden consultar, pero no modificar ni aportar.</div>
-    <div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn primary" id="saveMembers">Guardar</button></div>`,true);
+
+    ${members.map(member=>{
+      const ownerMember=member.user_id===group.created_by;
+      return `<div class="access-grid">
+        <div>
+          <input data-member-name="${member.id}" type="text" value="${esc(member.display_name)}" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px">
+          <small class="access-note">${ownerMember?'Administrador principal':member.user_id===session.user.id?'Tu alias':'Alias dentro de este espacio'}</small>
+        </div>
+
+        <select data-role="${member.id}" ${ownerMember?'disabled':''}>
+          <option value="admin" ${member.role==='admin'?'selected':''}>Administrador</option>
+          <option value="viewer" ${member.role==='viewer'?'selected':''}>Solo consulta</option>
+        </select>
+
+        <input data-share="${member.id}" type="number" min="0" max="100" step="0.01" value="${member.role==='admin'?member.participation_percent:0}" ${member.role==='viewer'?'disabled':''} title="Porcentaje de gastos">
+
+        <label class="access-check">
+          <input type="checkbox" data-report-access="${member.id}" ${ownerMember||member.can_view_reports?'checked':''} ${ownerMember?'disabled':''}>
+          Reportes
+        </label>
+
+        ${ownerMember?'<span class="owner-chip">Titular</span>':`<button class="btn danger small" data-revoke-member="${member.id}">Quitar</button>`}
+      </div>`;
+    }).join('')}
+
+    <div class="notice">Los porcentajes de quienes participan en los gastos deben sumar 100%. El permiso Reportes es independiente: podés dárselo a un administrador o a una persona de solo consulta.</div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cerrar</button>
+      <button class="btn primary" id="saveMembers">Guardar</button>
+    </div>`,true);
+
   document.getElementById('invitePersonBtn').onclick=openInviteModal;
-  document.querySelectorAll('[data-role]').forEach(select=>select.onchange=()=>{const id=select.dataset.role;const input=document.querySelector(`[data-share="${id}"]`);if(select.value==='viewer'){input.value=0;input.disabled=true}else input.disabled=false});
+  document.querySelectorAll('[data-role]').forEach(select=>{
+    select.onchange=()=>{
+      const input=document.querySelector(`[data-share="${select.dataset.role}"]`);
+      if(select.value==='viewer'){
+        input.value=0;
+        input.disabled=true;
+      }else input.disabled=false;
+    };
+  });
+  document.querySelectorAll('[data-revoke-member]').forEach(button=>{
+    button.onclick=()=>revokeMemberAccess(button.dataset.revokeMember);
+  });
+
   document.getElementById('saveMembers').onclick=async()=>{
-    const updates=members.map(m=>{const role=document.querySelector(`[data-role="${m.id}"]`).value;return{id:m.id,display_name:document.querySelector(`[data-member-name="${m.id}"]`).value.trim(),role,participation_percent:role==='admin'?Number(document.querySelector(`[data-share="${m.id}"]`).value||0):0}});
-    if(updates.some(u=>!u.display_name))return toast('Todos deben tener un alias');
-    const admins=updates.filter(u=>u.role==='admin');if(!admins.length)return toast('Debe quedar al menos un administrador');
-    if(Math.abs(admins.reduce((s,u)=>s+u.participation_percent,0)-100)>.01)return toast('Los porcentajes de los administradores deben sumar 100%');
-    try{for(const u of updates){const {error}=await sb.from('memberships').update({display_name:u.display_name,role:u.role,participation_percent:u.participation_percent}).eq('id',u.id);if(error)throw error}closeModal();await reloadGroup();renderApp();toast('Accesos actualizados')}catch(err){toast(err?.message||'No se pudieron guardar los accesos')}
+    const updates=members.map(member=>{
+      const ownerMember=member.user_id===group.created_by;
+      const role=ownerMember?'admin':document.querySelector(`[data-role="${member.id}"]`).value;
+      return{
+        id:member.id,
+        display_name:document.querySelector(`[data-member-name="${member.id}"]`).value.trim(),
+        role,
+        participation_percent:role==='admin'?Number(document.querySelector(`[data-share="${member.id}"]`).value||0):0,
+        can_view_reports:ownerMember||document.querySelector(`[data-report-access="${member.id}"]`).checked
+      };
+    });
+
+    if(updates.some(item=>!item.display_name))return toast('Todos deben tener un alias');
+    const admins=updates.filter(item=>item.role==='admin');
+    if(Math.abs(admins.reduce((sum,item)=>sum+item.participation_percent,0)-100)>.01){
+      return toast('Los porcentajes de los administradores deben sumar 100%');
+    }
+
+    const button=document.getElementById('saveMembers');
+    const original=button.textContent;button.disabled=true;button.textContent='Guardando…';
+    try{
+      const {error}=await sb.rpc('owner_update_group_members',{p_group_id:group.id,p_members:updates});
+      if(error)throw error;
+      closeModal();await reloadGroup();renderApp();toast('Accesos actualizados');
+    }catch(err){
+      console.error(err);toast(err?.message||'No se pudieron guardar los accesos');
+    }finally{
+      if(document.getElementById('saveMembers')){button.disabled=false;button.textContent=original}
+    }
   };
 }
+async function revokeMemberAccess(membershipId){
+  const member=members.find(item=>item.id===membershipId);
+  if(!member)return;
+  if(!confirm(`¿Quitar el acceso de ${member.display_name} a ${group.name}? Su historial de aportes se conservará.`))return;
+  const {error}=await sb.rpc('owner_revoke_member',{p_group_id:group.id,p_membership_id:membershipId});
+  if(error)return toast(error.message);
+  closeModal();await reloadGroup();renderApp();toast('Acceso revocado');
+}
+
 function openMyAlias(){
   modal(`<h2>Mi alias</h2><div class="sub">Este nombre se usa solamente dentro de ${esc(group.name)}.</div><div class="field"><label>Alias</label><input id="myAlias" value="${esc(membership?.display_name||userName())}"></div><div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveAlias">Guardar</button></div>`);
   document.getElementById('saveAlias').onclick=async()=>{const alias=document.getElementById('myAlias').value.trim();if(!alias)return toast('Ingresá un alias');const {error}=await sb.rpc('update_my_alias',{p_group_id:group.id,p_alias:alias});if(error)return toast(error.message);closeModal();await reloadGroup();renderApp();toast('Alias actualizado')};
 }
 function openInviteModal(){
-  modal(`<h2>Invitar a ${esc(group.name)}</h2><div class="sub">Elegí el permiso. El enlace, QR y código sirven una sola vez.</div><div class="field"><label>Alias sugerido (opcional)</label><input id="inviteAlias" placeholder="Ej: María, Socio, Contador"></div><div class="field"><label>Permiso</label><select id="inviteRole"><option value="viewer">Solo consulta</option><option value="admin">Administrador</option></select></div><div class="field"><label>Vigencia</label><select id="inviteDays"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option></select></div><div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="createInvite">Crear invitación</button></div>`);
-  document.getElementById('createInvite').onclick=async()=>{const button=document.getElementById('createInvite');button.disabled=true;button.textContent='Creando…';const {data,error}=await sb.rpc('create_group_invitation',{p_group_id:group.id,p_role:document.getElementById('inviteRole').value,p_alias:document.getElementById('inviteAlias').value.trim()||null,p_expires_days:Number(document.getElementById('inviteDays').value)});if(error){button.disabled=false;button.textContent='Crear invitación';return toast(error.message)}const token=data.token;const link=`${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;modal(`<h2>Invitación lista</h2><div class="sub">La persona abre el enlace, crea o ingresa con su usuario y accede solo a ${esc(group.name)} como ${data.role==='admin'?'administrador':'solo consulta'}.</div><div class="invite-box"><div class="invite-code">${esc(token)}</div><div class="invite-url">${esc(link)}</div><div class="qr-wrap"><div id="inviteQr"></div></div><div class="actions"><button class="btn primary" id="copyLink">Copiar enlace</button><button class="btn outline" id="copyCode">Copiar código</button></div></div><div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);if(window.QRCode)new QRCode(document.getElementById('inviteQr'),{text:link,width:190,height:190});document.getElementById('copyLink').onclick=()=>copyText(link,'Enlace copiado');document.getElementById('copyCode').onclick=()=>copyText(token,'Código copiado')};
+  if(!canManageAccess())return toast('Solo el administrador principal puede crear invitaciones');
+
+  modal(`<h2>Invitar a ${esc(group.name)}</h2>
+    <div class="sub">Vos decidís el permiso. Un administrador invitado podrá operar gastos, pero no podrá invitar ni modificar accesos.</div>
+
+    <div class="field"><label>Alias sugerido (opcional)</label><input id="inviteAlias" placeholder="Ej: María, Socio, Contador"></div>
+
+    <div class="field"><label>Permiso operativo</label><select id="inviteRole">
+      <option value="viewer">Solo consulta</option>
+      <option value="admin">Administrador</option>
+    </select></div>
+
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-size:14px;color:var(--ink)">
+        <input id="inviteReports" type="checkbox" style="width:auto">
+        Permitir también la sección Reportes
+      </label>
+    </div>
+
+    <div class="field"><label>Vigencia de la invitación</label><select id="inviteDays">
+      <option value="7" selected>7 días</option>
+      <option value="30">30 días</option>
+      <option value="90">90 días</option>
+    </select></div>
+
+    <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="createInvite">Crear invitación</button></div>`);
+
+  document.getElementById('createInvite').onclick=async()=>{
+    const button=document.getElementById('createInvite');button.disabled=true;button.textContent='Creando…';
+    const {data,error}=await sb.rpc('create_group_invitation',{
+      p_group_id:group.id,
+      p_role:document.getElementById('inviteRole').value,
+      p_alias:document.getElementById('inviteAlias').value.trim()||null,
+      p_expires_days:Number(document.getElementById('inviteDays').value),
+      p_can_view_reports:document.getElementById('inviteReports').checked
+    });
+    if(error){button.disabled=false;button.textContent='Crear invitación';return toast(error.message)}
+
+    const token=data.token;
+    const link=`${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;
+    modal(`<h2>Invitación lista</h2>
+      <div class="sub">La persona accederá solamente a ${esc(group.name)} como ${data.role==='admin'?'administrador operativo':'solo consulta'}${data.can_view_reports?' y podrá ver Reportes':''}. No podrá generar nuevos accesos.</div>
+      <div class="invite-box">
+        <div class="invite-code">${esc(token)}</div>
+        <div class="invite-url">${esc(link)}</div>
+        <div class="qr-wrap"><div id="inviteQr"></div></div>
+        <div class="actions"><button class="btn primary" id="copyLink">Copiar enlace</button><button class="btn outline" id="copyCode">Copiar código</button></div>
+      </div>
+      <div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);
+
+    if(window.QRCode)new QRCode(document.getElementById('inviteQr'),{text:link,width:190,height:190});
+    document.getElementById('copyLink').onclick=()=>copyText(link,'Enlace copiado');
+    document.getElementById('copyCode').onclick=()=>copyText(token,'Código copiado');
+  };
 }
+
 async function copyText(text,message){try{await navigator.clipboard.writeText(text);toast(message)}catch{const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();toast(message)}}
 window.addEventListener('unhandledrejection',event=>{console.error(event.reason);toast(event.reason?.message||'Ocurrió un error')});
 init();
