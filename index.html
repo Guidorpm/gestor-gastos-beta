@@ -6,6 +6,7 @@
 <title>Gestor de Gastos Cloud</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#14211d;--muted:#708078;--line:#dfe8e3;
@@ -44,7 +45,14 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.report-card{padding:18px}.report-card span{display:block;color:var(--muted);font-size:12px}.report-card strong{display:block;font-size:24px;margin-top:6px}
 .report-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}.report-panel{padding:20px}.report-panel h2{margin:0 0 5px}.report-panel>p{margin:0 0 16px;color:var(--muted);font-size:13px}
 .report-row{display:grid;grid-template-columns:minmax(100px,1fr) 2fr auto;gap:10px;align-items:center;padding:8px 0}.report-row+.report-row{border-top:1px solid var(--line)}.report-label{font-size:13px;font-weight:700}.report-track{height:9px;border-radius:999px;background:#edf1ef;overflow:hidden}.report-fill{height:100%;border-radius:999px;background:var(--brand)}.report-value{font-size:12px;font-weight:800;white-space:nowrap}
-.report-table{width:100%;border-collapse:collapse}.report-table th,.report-table td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:13px}.report-table th{color:var(--muted);font-size:11px;text-transform:uppercase}.permission-badge{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eef2ff;color:#4356a8;font-size:10px;font-weight:850}
+.report-table{width:100%;border-collapse:collapse}.report-table th,.report-table td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:13px}.report-table th{color:var(--muted);font-size:11px;text-transform:uppercase}
+.permission-badge{display:inline-flex;border-radius:999px;padding:4px 8px;background:#eef2ff;color:#4356a8;font-size:10px;font-weight:850}
+.report-printable{background:#fff}
+.print-header{display:none;margin-bottom:20px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
+.print-header h1{margin:0 0 4px;font-size:25px}.print-header p{margin:2px 0;color:#55635d;font-size:12px}
+.category-create{border:1px solid var(--line);border-radius:14px;background:#fafcfa;padding:12px;margin-top:10px}
+.category-help{font-size:12px;color:var(--muted);margin-top:6px}
+
 @media(max-width:900px){.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:560px){.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}}
 
@@ -63,6 +71,25 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#14211d;color:white;padding:11px 18px;border-radius:999px;opacity:0;pointer-events:none;transition:.2s;z-index:50}.toast.show{opacity:1}
 .spinner{padding:60px;text-align:center;color:var(--muted)}
 @media(max-width:760px){.summary{grid-template-columns:1fr 1fr}.pagehead{flex-direction:column}.grid2{grid-template-columns:1fr}.topin{align-items:flex-start}.actions{justify-content:flex-end}.memberline{grid-template-columns:1fr}.row{grid-template-columns:1fr}.amountbig{text-align:left}}
+
+@media print{
+  @page{size:A4;margin:12mm}
+  body{background:#fff!important;color:#111!important}
+  .top,.tabs,.no-print,#modalRoot,.toast{display:none!important}
+  main{max-width:none!important;padding:0!important;margin:0!important}
+  #content{display:block!important}
+  #reportPrintable{display:block!important}
+  .print-header{display:block!important}
+  .card,.report-panel,.report-card,.forecast{box-shadow:none!important;border:1px solid #cfd8d3!important;break-inside:avoid}
+  .report-columns{grid-template-columns:1fr 1fr!important;gap:10px!important}
+  .report-grid{grid-template-columns:repeat(4,1fr)!important;gap:8px!important}
+  .forecast-grid{grid-template-columns:repeat(3,1fr)!important}
+  .report-fill{background:#444!important}
+  .report-card strong{font-size:18px!important}
+  .report-panel{padding:14px!important}
+  .forecast{padding:14px!important}
+}
+
 </style>
 </head>
 <body>
@@ -74,9 +101,14 @@ const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 
 const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[];
+const DEFAULT_CATEGORIES=[
+  'Luz','Gas','Agua','Internet','Alquiler y expensas','Educación',
+  'Salud','Seguros','Tarjetas','Impuestos','Moratorias','Sueldos',
+  'Proveedores','Mantenimiento','Transporte','Otros'
+];
+let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[], serviceCategories=[], internalAccounts=[];
 let tab='services', baseMonth=monthKey(new Date());
-let pendingInviteToken=new URLSearchParams(location.search).get('invite')||localStorage.getItem('pendingInviteToken')||'';
+
 
 function monthKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
 function shiftMonth(key,n){const [y,m]=key.split('-').map(Number);return monthKey(new Date(y,m-1+n,1))}
@@ -96,79 +128,270 @@ function toast(t){const e=document.getElementById('toast');e.textContent=t;e.cla
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
 function userName(){return session?.user?.user_metadata?.full_name||session?.user?.email?.split('@')[0]||'Usuario'}
+function normalizeInternalAlias(value){
+  return String(value||'')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g,'.')
+    .replace(/[^a-z0-9._-]/g,'')
+    .replace(/[._-]{2,}/g,'.')
+    .replace(/^[._-]+|[._-]+$/g,'');
+}
+function internalEmailFromAlias(value){
+  const alias=normalizeInternalAlias(value);
+  return `${alias}@usuarios.gestor.local`;
+}
+function accountForUser(userId){
+  return internalAccounts.find(account=>account.user_id===userId)||null;
+}
+async function readFunctionError(error){
+  if(!error)return 'Error desconocido';
+  try{
+    if(error.context&&typeof error.context.json==='function'){
+      const payload=await error.context.json();
+      return payload?.error||payload?.message||error.message;
+    }
+  }catch(_){}
+  return error.message||'No se pudo completar la operación';
+}
+function normalizeCategoryName(value){
+  return String(value||'')
+    .trim()
+    .toLocaleLowerCase('es-AR')
+    .replace(/\s+/g,' ');
+}
+function availableCategories(){
+  const result=[];
+  const seen=new Set();
+  const add=value=>{
+    const name=String(value||'').trim();
+    const key=normalizeCategoryName(name);
+    if(!name||seen.has(key))return;
+    seen.add(key);
+    result.push(name);
+  };
+  DEFAULT_CATEGORIES.forEach(add);
+  serviceCategories.filter(category=>category.active!==false).forEach(category=>add(category.name));
+  services.forEach(service=>add(service.category));
+  return result;
+}
+async function createCustomCategory(name){
+  const cleaned=String(name||'').trim();
+  if(!cleaned)throw new Error('Ingresá el nombre de la categoría');
+
+  const exists=availableCategories().some(category=>
+    normalizeCategoryName(category)===normalizeCategoryName(cleaned)
+  );
+  if(exists)throw new Error('Ya existe una categoría con ese nombre');
+
+  const {data,error}=await sb
+    .from('service_categories')
+    .insert({
+      group_id:group.id,
+      name:cleaned,
+      created_by:session.user.id
+    })
+    .select()
+    .single();
+
+  if(error)throw error;
+  serviceCategories.push(data);
+  return cleaned;
+}
 
 async function init(){
   try{
-    if(pendingInviteToken)localStorage.setItem('pendingInviteToken',pendingInviteToken);
     const {data,error}=await sb.auth.getSession();
     if(error)throw error;
     session=data.session;
+
     sb.auth.onAuthStateChange((_event,newSession)=>{
       session=newSession;
-      if(!newSession){group=null;renderAuth(false)}
+      if(!newSession){
+        group=null;
+        renderAuth();
+      }
     });
-    if(session){
-      if(pendingInviteToken)await redeemPendingInvite();
-      else await loadGroups();
-    }else{
-      renderAuth(false);
-    }
+
+    if(session)await continueAfterAuthentication();
+    else renderAuth();
   }catch(err){
     console.error(err);
-    app.innerHTML=`<div class="authwrap"><div class="auth card"><h1>No se pudo iniciar</h1><p>${esc(err?.message||'Error de conexión')}</p><button class="btn primary" onclick="location.reload()">Reintentar</button></div></div>`;
+    app.innerHTML=`<div class="authwrap"><div class="auth card">
+      <h1>No se pudo iniciar</h1>
+      <p>${esc(err?.message||'Error de conexión')}</p>
+      <button class="btn primary" onclick="location.reload()">Reintentar</button>
+    </div></div>`;
   }
 }
-function renderAuth(signup=false){
-  const inviteNotice=pendingInviteToken?`<div class="notice">Tenés una invitación pendiente. Después de ingresar o crear tu cuenta, accederás solamente al espacio autorizado.</div>`:'';
-  app.innerHTML=`<div class="authwrap"><div class="auth card"><div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Acceso privado · permisos por espacio</small></div></div><h1>${signup?'Crear cuenta':'Ingresar'}</h1><p>${signup?'Creá tu usuario para aceptar la invitación.':'Ingresá con tu correo y contraseña.'}</p>${inviteNotice}
-  ${signup?`<div class="field"><label>Nombre o alias</label><input id="name" autocomplete="name"></div>`:''}
-  <div class="field"><label>Correo electrónico</label><input id="email" type="email" autocomplete="email"></div>
-  <div class="field"><label>Contraseña</label><input id="password" type="password" autocomplete="${signup?'new-password':'current-password'}"></div>
-  <button class="btn primary" style="width:100%" id="authBtn">${signup?'Crear cuenta':'Ingresar'}</button>
-  <div class="authswitch">${signup?'¿Ya tenés cuenta?':'¿Primera vez?'} <button class="linkbtn" id="authSwitch">${signup?'Ingresar':'Crear cuenta'}</button></div></div></div>`;
-  document.getElementById('authSwitch').onclick=()=>renderAuth(!signup);
+
+async function continueAfterAuthentication(){
+  const {data,error}=await sb
+    .from('internal_accounts')
+    .select('user_id,alias,must_change_password,active')
+    .eq('user_id',session.user.id)
+    .maybeSingle();
+
+  if(error){
+    console.warn('No se pudo consultar el acceso interno:',error.message);
+    return loadGroups();
+  }
+
+  if(data&&data.active===false){
+    await sb.auth.signOut();
+    return toast('Este acceso está bloqueado');
+  }
+
+  if(data?.must_change_password){
+    renderForcedPasswordChange(data.alias);
+    return;
+  }
+
+  await loadGroups();
+}
+
+function renderAuth(){
+  app.innerHTML=`<div class="authwrap"><div class="auth card">
+    <div class="brand"><div class="mark">G</div><div>
+      <strong>Gestor de Gastos</strong>
+      <small>Acceso privado por espacio</small>
+    </div></div>
+
+    <h1>Ingresar</h1>
+    <p>Los usuarios internos ingresan con su alias. El titular también puede usar su correo.</p>
+
+    <div class="field">
+      <label>Usuario o correo</label>
+      <input id="loginIdentity" autocomplete="username" placeholder="Ej: fabiana">
+    </div>
+
+    <div class="field">
+      <label>Contraseña</label>
+      <input id="loginPassword" type="password" autocomplete="current-password">
+    </div>
+
+    <button class="btn primary" style="width:100%" id="authBtn">Ingresar</button>
+
+    <div class="notice">
+      Los accesos son creados exclusivamente por el administrador principal.
+    </div>
+  </div></div>`;
+
+  const identity=document.getElementById('loginIdentity');
+  const password=document.getElementById('loginPassword');
   const button=document.getElementById('authBtn');
-  button.onclick=async()=>{
-    const emailValue=document.getElementById('email').value.trim();
-    const passwordValue=document.getElementById('password').value;
-    const aliasValue=signup?document.getElementById('name').value.trim():'';
-    if(!emailValue||!passwordValue)return toast('Completá correo y contraseña');
-    if(signup&&!aliasValue)return toast('Ingresá tu nombre o alias');
-    if(passwordValue.length<6)return toast('La contraseña debe tener al menos 6 caracteres');
-    const original=button.textContent;button.disabled=true;button.textContent=signup?'Creando…':'Ingresando…';
+
+  async function login(){
+    const rawIdentity=identity.value.trim();
+    const passwordValue=password.value;
+
+    if(!rawIdentity||!passwordValue)return toast('Completá usuario y contraseña');
+
+    const emailValue=rawIdentity.includes('@')
+      ? rawIdentity.toLowerCase()
+      : internalEmailFromAlias(rawIdentity);
+
+    if(!rawIdentity.includes('@')&&normalizeInternalAlias(rawIdentity).length<3){
+      return toast('El alias no es válido');
+    }
+
+    const original=button.textContent;
+    button.disabled=true;
+    button.textContent='Ingresando…';
+
     try{
-      let res;
-      if(signup){
-        const redirect=`${location.origin}${location.pathname}${pendingInviteToken?'?invite='+encodeURIComponent(pendingInviteToken):''}`;
-        res=await sb.auth.signUp({email:emailValue,password:passwordValue,options:{data:{full_name:aliasValue},emailRedirectTo:redirect}});
-      }else{
-        res=await sb.auth.signInWithPassword({email:emailValue,password:passwordValue});
-      }
-      if(res.error)throw res.error;
-      if(signup&&!res.data.session){
-        toast('Cuenta creada. Revisá tu correo para confirmarla.');
-        renderAuth(false);return;
-      }
-      session=res.data.session;
-      if(pendingInviteToken)await redeemPendingInvite(aliasValue||userName());
-      else await loadGroups();
+      const {data,error}=await sb.auth.signInWithPassword({
+        email:emailValue,
+        password:passwordValue
+      });
+
+      if(error)throw error;
+      session=data.session;
+      await continueAfterAuthentication();
     }catch(err){
-      console.error(err);toast(err?.message||'No se pudo completar el acceso');
+      console.error(err);
+      const message=String(err?.message||'');
+      toast(message.toLowerCase().includes('invalid login credentials')
+        ? 'Usuario o contraseña incorrectos'
+        : message||'No se pudo ingresar');
     }finally{
-      if(document.getElementById('authBtn')){button.disabled=false;button.textContent=original}
+      if(document.getElementById('authBtn')){
+        button.disabled=false;
+        button.textContent=original;
+      }
+    }
+  }
+
+  button.onclick=login;
+  password.addEventListener('keydown',event=>{
+    if(event.key==='Enter')login();
+  });
+}
+
+function renderForcedPasswordChange(alias){
+  app.innerHTML=`<div class="authwrap"><div class="auth card">
+    <div class="brand"><div class="mark">G</div><div>
+      <strong>Primer ingreso</strong>
+      <small>Usuario: ${esc(alias)}</small>
+    </div></div>
+
+    <h1>Creá tu contraseña</h1>
+    <p>La contraseña temporal debe reemplazarse antes de continuar.</p>
+
+    <div class="field">
+      <label>Nueva contraseña</label>
+      <input id="newPassword" type="password" autocomplete="new-password">
+    </div>
+
+    <div class="field">
+      <label>Repetir contraseña</label>
+      <input id="repeatPassword" type="password" autocomplete="new-password">
+    </div>
+
+    <button class="btn primary" style="width:100%" id="changePasswordBtn">
+      Guardar nueva contraseña
+    </button>
+
+    <button class="btn outline" style="width:100%;margin-top:8px" id="changeLogoutBtn">
+      Salir
+    </button>
+  </div></div>`;
+
+  document.getElementById('changeLogoutBtn').onclick=()=>sb.auth.signOut();
+
+  document.getElementById('changePasswordBtn').onclick=async()=>{
+    const first=document.getElementById('newPassword').value;
+    const second=document.getElementById('repeatPassword').value;
+    const button=document.getElementById('changePasswordBtn');
+
+    if(first.length<8)return toast('La contraseña debe tener al menos 8 caracteres');
+    if(first!==second)return toast('Las contraseñas no coinciden');
+
+    const original=button.textContent;
+    button.disabled=true;
+    button.textContent='Guardando…';
+
+    try{
+      const {error:updateError}=await sb.auth.updateUser({password:first});
+      if(updateError)throw updateError;
+
+      const {error:rpcError}=await sb.rpc('complete_internal_first_login');
+      if(rpcError)throw rpcError;
+
+      toast('Contraseña actualizada');
+      await loadGroups();
+    }catch(err){
+      console.error(err);
+      toast(err?.message||'No se pudo cambiar la contraseña');
+    }finally{
+      if(document.getElementById('changePasswordBtn')){
+        button.disabled=false;
+        button.textContent=original;
+      }
     }
   };
-}
-async function redeemPendingInvite(alias=''){
-  const token=pendingInviteToken||localStorage.getItem('pendingInviteToken');
-  if(!token)return loadGroups();
-  const {data,error}=await sb.rpc('redeem_group_invitation',{p_token:token,p_display_name:alias||userName()});
-  if(error){
-    toast(error.message);pendingInviteToken='';localStorage.removeItem('pendingInviteToken');history.replaceState({},'',location.pathname);return loadGroups();
-  }
-  pendingInviteToken='';localStorage.removeItem('pendingInviteToken');history.replaceState({},'',location.pathname);
-  await loadGroups();
-  if(data&&groups.some(g=>g.id===data))await openGroup(data);
 }
 async function loadGroups(){
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
@@ -178,12 +401,43 @@ async function loadGroups(){
   renderGroups();
 }
 function renderGroups(){
-  app.innerHTML=`<main><div class="pagehead"><div><h1>Tus espacios</h1><p>Cada espacio tiene sus propios administradores, accesos y porcentajes.</p></div><div class="actions"><button class="btn outline" id="joinBtn">Ingresar código</button><button class="btn primary" id="newGroup">+ Crear espacio</button><button class="btn soft" id="logout">Salir</button></div></div>
-  <div class="workspace-grid">${groups.map(g=>{const owner=g.created_by===session.user.id;return `<div class="workspace card" data-group="${g.id}"><h3>${esc(g.name)}</h3><p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':'Solo consulta'} <span class="alias-chip">${esc(g.membership.display_name)}</span>${owner?'<span class="owner-chip">Titular</span>':''}</p></div>`}).join('')||'<div class="card workspace"><h3>No tenés espacios todavía</h3><p>Creá uno o ingresá un código de invitación.</p></div>'}</div></main>`;
-  document.querySelectorAll('[data-group]').forEach(e=>e.onclick=()=>openGroup(e.dataset.group));
+  app.innerHTML=`<main>
+    <div class="pagehead">
+      <div>
+        <h1>Tus espacios</h1>
+        <p>Cada espacio tiene usuarios, porcentajes y permisos independientes.</p>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="newGroup">+ Crear espacio</button>
+        <button class="btn soft" id="logout">Salir</button>
+      </div>
+    </div>
+
+    <div class="workspace-grid">
+      ${groups.map(g=>{
+        const owner=g.created_by===session.user.id;
+        return `<div class="workspace card" data-group="${g.id}">
+          <h3>${esc(g.name)}</h3>
+          <p>
+            ${g.type==='company'?'Empresa':'Grupo familiar'} ·
+            ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':'Solo consulta'}
+            <span class="alias-chip">${esc(g.membership.display_name)}</span>
+            ${owner?'<span class="owner-chip">Titular</span>':''}
+          </p>
+        </div>`;
+      }).join('')||`<div class="card workspace" style="cursor:default">
+        <h3>No tenés espacios todavía</h3>
+        <p>Creá el primer espacio para comenzar.</p>
+      </div>`}
+    </div>
+  </main>`;
+
+  document.querySelectorAll('[data-group]').forEach(element=>{
+    element.onclick=()=>openGroup(element.dataset.group);
+  });
+
   document.getElementById('logout').onclick=()=>sb.auth.signOut();
   document.getElementById('newGroup').onclick=openCreateGroup;
-  document.getElementById('joinBtn').onclick=openJoinGroup;
 }
 function openCreateGroup(){
   modal(`<h2>Crear espacio</h2><div class="sub">Casa, negocio u otro grupo independiente.</div>
@@ -191,13 +445,6 @@ function openCreateGroup(){
   <div class="field"><label>Tipo</label><select id="gtype"><option value="family">Grupo familiar</option><option value="company">Empresa</option></select></div>
   <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveGroup">Crear</button></div>`);
   document.getElementById('saveGroup').onclick=async()=>{const name=document.getElementById('gname').value.trim();if(!name)return toast('Ingresá un nombre');const {data,error}=await sb.rpc('create_group',{p_name:name,p_type:document.getElementById('gtype').value,p_owner_name:userName()});if(error)return toast(error.message);closeModal();await loadGroups();await openGroup(data)};
-}
-function openJoinGroup(){
-  modal(`<h2>Ingresar con código</h2><div class="sub">Pegá el código de invitación que te envió el administrador.</div>
-  <div class="field"><label>Código</label><input id="joinCode" maxlength="40" style="text-transform:uppercase"></div>
-  <div class="field"><label>Tu alias en este espacio</label><input id="joinName" value="${esc(userName())}"></div>
-  <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="doJoin">Ingresar</button></div>`);
-  document.getElementById('doJoin').onclick=async()=>{const token=document.getElementById('joinCode').value.trim();if(!token)return toast('Ingresá el código');const {data,error}=await sb.rpc('redeem_group_invitation',{p_token:token,p_display_name:document.getElementById('joinName').value.trim()});if(error)return toast(error.message);closeModal();await loadGroups();if(data)await openGroup(data)};
 }
 async function openGroup(id){
   group=groups.find(g=>g.id===id)||{id};
@@ -216,10 +463,49 @@ async function reloadGroup(){
     sb.from('documents').select('*').eq('group_id',group.id),
     sb.from('groups').select('*').eq('id',group.id).single()
   ]);
-  const err=[m,s,o,p,c,d,g].find(x=>x.error)?.error;if(err)toast(err.message);
-  members=m.data||[];services=s.data||[];obligations=(o.data||[]).map(({services,...x})=>x);payments=(p.data||[]).map(({obligations,...x})=>x);contributions=(c.data||[]).map(({payments,...x})=>x);documents=d.data||[];
+
+  const err=[m,s,o,p,c,d,g].find(x=>x.error)?.error;
+  if(err)toast(err.message);
+
+  members=m.data||[];
+  services=s.data||[];
+  obligations=(o.data||[]).map(({services,...x})=>x);
+  payments=(p.data||[]).map(({obligations,...x})=>x);
+  contributions=(c.data||[]).map(({payments,...x})=>x);
+  documents=d.data||[];
   group={...(g.data||group),membership:groups.find(x=>x.id===group.id)?.membership};
   membership=members.find(x=>x.user_id===session.user.id)||membership;
+
+  const memberUserIds=members.map(member=>member.user_id);
+  if(memberUserIds.length){
+    const internalResult=await sb
+      .from('internal_accounts')
+      .select('user_id,alias,must_change_password,active,created_at')
+      .in('user_id',memberUserIds);
+
+    if(internalResult.error){
+      console.warn('No se pudieron cargar los accesos internos:',internalResult.error.message);
+      internalAccounts=[];
+    }else{
+      internalAccounts=internalResult.data||[];
+    }
+  }else{
+    internalAccounts=[];
+  }
+
+  const categoryResult=await sb
+    .from('service_categories')
+    .select('*')
+    .eq('group_id',group.id)
+    .eq('active',true)
+    .order('name');
+
+  if(categoryResult.error){
+    console.warn('Categorías personalizadas no disponibles:',categoryResult.error.message);
+    serviceCategories=[];
+  }else{
+    serviceCategories=categoryResult.data||[];
+  }
 }
 function renderApp(){
   const ms=[baseMonth,shiftMonth(baseMonth,1),shiftMonth(baseMonth,2)];
@@ -235,7 +521,7 @@ function renderApp(){
     </div>
     <div class="actions">
       <button class="btn soft small" id="aliasBtn">Mi alias</button>
-      ${canManageAccess()?'<button class="btn soft small" id="membersBtn">Accesos</button>':''}
+      ${canManageAccess()?'<button class="btn soft small" id="membersBtn">Panel de control</button>':''}
       <button class="btn outline small" id="backBtn">Cambiar espacio</button>
       <button class="btn outline small" id="signOut">Salir</button>
     </div>
@@ -485,64 +771,126 @@ function renderReports(){
   const topServices=reportServiceData();
   const maxMonth=Math.max(...sixMonths.map(m=>m.total),1);
   const rows=balanceData();
+  const generatedAt=new Date().toLocaleString('es-AR');
 
-  return `<div class="pagehead">
+  return `<div class="pagehead no-print">
     <div>
       <h1>Reportes</h1>
       <p>${isOwner()?'Vista exclusiva del administrador principal. Podés habilitarla individualmente desde Accesos.':'Acceso a reportes autorizado por el administrador principal.'}</p>
     </div>
-    <span class="permission-badge">${isOwner()?'Administrador principal':'Acceso autorizado'}</span>
-  </div>
-
-  <div class="report-grid">
-    <div class="report-card card"><span>Gastos de ${monthLabel(baseMonth)}</span><strong>${fmtMoney(current.total)}</strong></div>
-    <div class="report-card card"><span>Pendiente total</span><strong>${fmtMoney(pending.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
-    <div class="report-card card"><span>Deuda vencida</span><strong>${fmtMoney(overdue.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
-    <div class="report-card card"><span>Proyección próximos 6 meses</span><strong>${fmtMoney(forecastTotal)}</strong></div>
-  </div>
-
-  ${renderForecast()}
-
-  <div class="report-columns">
-    <div class="report-panel card">
-      <h2>Evolución mensual</h2>
-      <p>Importes cargados durante los últimos seis meses. Promedio: <strong>${fmtMoney(average)}</strong>.</p>
-      ${sixMonths.map(m=>`<div class="report-row">
-        <div class="report-label">${monthLabel(m.key)}</div>
-        <div class="report-track"><div class="report-fill" style="width:${Math.max(3,m.total/maxMonth*100)}%"></div></div>
-        <div class="report-value">${fmtMoney(m.total)}</div>
-      </div>`).join('')}
-    </div>
-
-    <div class="report-panel card">
-      <h2>Gastos por categoría</h2>
-      <p>Acumulado del año ${baseMonth.slice(0,4)}.</p>
-      ${renderReportBars(categories,'Todavía no hay importes cargados para este año.')}
+    <div class="actions">
+      <span class="permission-badge">${isOwner()?'Administrador principal':'Acceso autorizado'}</span>
+      <button class="btn outline" id="printReportBtn">Imprimir</button>
+      <button class="btn primary" id="downloadReportBtn">Descargar PDF</button>
     </div>
   </div>
 
-  <div class="report-columns">
-    <div class="report-panel card">
-      <h2>Servicios de mayor impacto</h2>
-      <p>Los seis conceptos con mayor importe acumulado durante el año.</p>
-      ${renderReportBars(topServices,'Todavía no hay información suficiente.')}
+  <div id="reportPrintable" class="report-printable">
+    <div class="print-header">
+      <h1>Reporte de gastos · ${esc(group.name)}</h1>
+      <p>Período de referencia: ${monthLabel(baseMonth)}</p>
+      <p>Generado el ${generatedAt} · ${esc(group.type==='company'?'Empresa':'Grupo familiar')}</p>
     </div>
 
-    <div class="report-panel card">
-      <h2>Situación inmediata</h2>
-      <p>Vencimientos próximos, deuda y compensación entre administradores.</p>
-      <table class="report-table">
-        <tr><th>Métrica</th><th>Resultado</th></tr>
-        <tr><td>Vencimientos próximos 30 días</td><td><strong>${next30.length}</strong> · ${fmtMoney(next30.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
-        <tr><td>Facturas vencidas</td><td><strong>${overdue.length}</strong> · ${fmtMoney(overdue.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
-        <tr><td>Pagado en ${monthLabel(baseMonth)}</td><td>${fmtMoney(current.paid)}</td></tr>
-        <tr><td>Pendiente del mes</td><td>${fmtMoney(current.pending)}</td></tr>
-      </table>
-      <div style="margin-top:14px">${rows.map(r=>`<div class="forecast-share"><span>${esc(r.m.display_name)}</span><strong class="${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</strong></div>`).join('')||'<div class="forecast-detail">Sin administradores con porcentaje asignado.</div>'}</div>
+    <div class="report-grid">
+      <div class="report-card card"><span>Gastos de ${monthLabel(baseMonth)}</span><strong>${fmtMoney(current.total)}</strong></div>
+      <div class="report-card card"><span>Pendiente total</span><strong>${fmtMoney(pending.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
+      <div class="report-card card"><span>Deuda vencida</span><strong>${fmtMoney(overdue.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
+      <div class="report-card card"><span>Proyección próximos 6 meses</span><strong>${fmtMoney(forecastTotal)}</strong></div>
+    </div>
+
+    ${renderForecast()}
+
+    <div class="report-columns">
+      <div class="report-panel card">
+        <h2>Evolución mensual</h2>
+        <p>Importes cargados durante los últimos seis meses. Promedio: <strong>${fmtMoney(average)}</strong>.</p>
+        ${sixMonths.map(m=>`<div class="report-row">
+          <div class="report-label">${monthLabel(m.key)}</div>
+          <div class="report-track"><div class="report-fill" style="width:${Math.max(3,m.total/maxMonth*100)}%"></div></div>
+          <div class="report-value">${fmtMoney(m.total)}</div>
+        </div>`).join('')}
+      </div>
+
+      <div class="report-panel card">
+        <h2>Gastos por categoría</h2>
+        <p>Acumulado del año ${baseMonth.slice(0,4)}.</p>
+        ${renderReportBars(categories,'Todavía no hay importes cargados para este año.')}
+      </div>
+    </div>
+
+    <div class="report-columns">
+      <div class="report-panel card">
+        <h2>Servicios de mayor impacto</h2>
+        <p>Los seis conceptos con mayor importe acumulado durante el año.</p>
+        ${renderReportBars(topServices,'Todavía no hay información suficiente.')}
+      </div>
+
+      <div class="report-panel card">
+        <h2>Situación inmediata</h2>
+        <p>Vencimientos próximos, deuda y compensación entre administradores.</p>
+        <table class="report-table">
+          <tr><th>Métrica</th><th>Resultado</th></tr>
+          <tr><td>Vencimientos próximos 30 días</td><td><strong>${next30.length}</strong> · ${fmtMoney(next30.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
+          <tr><td>Facturas vencidas</td><td><strong>${overdue.length}</strong> · ${fmtMoney(overdue.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
+          <tr><td>Pagado en ${monthLabel(baseMonth)}</td><td>${fmtMoney(current.paid)}</td></tr>
+          <tr><td>Pendiente del mes</td><td>${fmtMoney(current.pending)}</td></tr>
+        </table>
+        <div style="margin-top:14px">
+          ${rows.map(r=>`<div class="forecast-share">
+            <span>${esc(r.m.display_name)}</span>
+            <strong class="${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</strong>
+          </div>`).join('')||'<div class="forecast-detail">Sin administradores con porcentaje asignado.</div>'}
+        </div>
+      </div>
     </div>
   </div>`;
 }
 
+function safeFileName(value){
+  return String(value||'reporte')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-zA-Z0-9_-]+/g,'_')
+    .replace(/^_+|_+$/g,'');
+}
+function printReport(){
+  window.print();
+}
+async function downloadReportPdf(){
+  const element=document.getElementById('reportPrintable');
+  const button=document.getElementById('downloadReportBtn');
+  if(!element)return toast('No se encontró el reporte');
+
+  if(typeof window.html2pdf!=='function'){
+    toast('No se pudo cargar el generador de PDF. Se abrirá la impresión.');
+    return window.print();
+  }
+
+  const original=button?.textContent||'Descargar PDF';
+  if(button){button.disabled=true;button.textContent='Generando PDF…'}
+
+  try{
+    const filename=`Reporte_${safeFileName(group.name)}_${baseMonth}.pdf`;
+    await window.html2pdf()
+      .set({
+        margin:[8,8,8,8],
+        filename,
+        image:{type:'jpeg',quality:0.98},
+        html2canvas:{scale:2,useCORS:true,backgroundColor:'#ffffff'},
+        jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
+        pagebreak:{mode:['css','legacy'],avoid:['.report-card','.report-panel','.forecast-month']}
+      })
+      .from(element)
+      .save();
+    toast('Reporte descargado');
+  }catch(err){
+    console.error('Error generando PDF:',err);
+    toast('No se pudo generar el PDF. Usá el botón Imprimir.');
+  }finally{
+    if(button){button.disabled=false;button.textContent=original}
+  }
+}
 function renderPaid(){
   const list=payments.slice().sort((a,b)=>b.paid_at.localeCompare(a.paid_at));
   return `<div class="pagehead"><div><h1>Abonados</h1><p>Historial completo de pagos y comprobantes.</p></div></div><div class="list card">${list.map(p=>{const o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o?.service_id);return`<div class="row"><div><h3>${esc(s?.name||'Servicio')}</h3><p>${o?monthLabel(o.period.slice(0,7)):'Pago'} · abonado ${fmtDate(p.paid_at)}</p></div><div><div class="amountbig">${fmtMoney(p.total_amount)}</div><button class="btn soft small" data-payment="${p.id}">Abrir</button></div></div>`}).join('')||'<div class="row"><p>Todavía no hay pagos registrados.</p></div>'}</div>`;
@@ -554,6 +902,8 @@ function bindDashboard(ms){
   document.querySelectorAll('[data-cell]').forEach(e=>e.onclick=()=>{const [s,m]=e.dataset.cell.split('|');openObligation(s,m)});
   document.querySelectorAll('[data-folder]').forEach(e=>e.onclick=()=>openFolder(e.dataset.folder));
   document.querySelectorAll('[data-payment]').forEach(e=>e.onclick=()=>openPaymentDetail(e.dataset.payment));
+  if(document.getElementById('printReportBtn'))document.getElementById('printReportBtn').onclick=printReport;
+  if(document.getElementById('downloadReportBtn'))document.getElementById('downloadReportBtn').onclick=downloadReportPdf;
 }
 function openServiceModal(){
   const current=baseMonth;
@@ -572,15 +922,14 @@ function openServiceModal(){
       <div class="field">
         <label>Categoría</label>
         <select id="scat">
-          <option>Luz</option>
-          <option>Gas</option>
-          <option>Agua</option>
-          <option>Internet</option>
-          <option>Alquiler</option>
-          <option>Impuesto</option>
-          <option>Moratoria</option>
-          <option>Otro</option>
+          ${availableCategories().map(category=>`<option value="${esc(category)}">${esc(category)}</option>`).join('')}
+          <option value="__new__">+ Crear nueva categoría</option>
         </select>
+        <div id="newCategoryBox" class="category-create hidden">
+          <label>Nueva categoría</label>
+          <input id="newCategoryName" type="text" maxlength="60" placeholder="Ej: Publicidad">
+          <div class="category-help">Se guardará solamente dentro de ${esc(group.name)} y no puede repetir un nombre existente.</div>
+        </div>
       </div>
 
       <div class="field">
@@ -628,11 +977,17 @@ function openServiceModal(){
     </div>`);
 
   const frequency=document.getElementById('sfreq');
+  const categorySelect=document.getElementById('scat');
+  const newCategoryBox=document.getElementById('newCategoryBox');
   const planFields=document.getElementById('planFields');
   const saveButton=document.getElementById('saveService');
 
   frequency.onchange=()=>{
     planFields.classList.toggle('hidden',frequency.value!=='plan');
+  };
+  categorySelect.onchange=()=>{
+    newCategoryBox.classList.toggle('hidden',categorySelect.value!=='__new__');
+    if(categorySelect.value==='__new__')document.getElementById('newCategoryName').focus();
   };
 
   saveButton.onclick=async()=>{
@@ -645,10 +1000,24 @@ function openServiceModal(){
     if(duplicate)return toast('Ya existe un servicio con ese nombre en este espacio');
 
     const frequencyValue=frequency.value;
+    let categoryValue=categorySelect.value;
+
+    if(categoryValue==='__new__'){
+      const customName=document.getElementById('newCategoryName').value.trim();
+      if(!customName)return toast('Ingresá el nombre de la nueva categoría');
+
+      try{
+        categoryValue=await createCustomCategory(customName);
+      }catch(err){
+        console.error('Error creando categoría:',err);
+        return toast(err?.message||'No se pudo crear la categoría');
+      }
+    }
+
     const payload={
       group_id:group.id,
       name,
-      category:document.getElementById('scat').value,
+      category:categoryValue,
       frequency:frequencyValue,
       created_by:session.user.id,
       plan_start_month:null,
@@ -950,17 +1319,35 @@ function openPaymentDetail(id){const p=payments.find(x=>x.id===id),o=obligations
 function openMembers(){
   if(!canManageAccess())return toast('Solo el administrador principal puede gestionar accesos');
 
-  modal(`<h2>Accesos de ${esc(group.name)}</h2>
-    <div class="sub">Solo el administrador principal puede invitar personas, cambiar permisos o habilitar Reportes. Los administradores operativos pueden cargar y pagar, pero no conceder accesos.</div>
+  modal(`<h2>Panel de control · ${esc(group.name)}</h2>
+    <div class="sub">
+      Creá usuarios internos, cambiá permisos y restablecé contraseñas.
+      Ningún administrador operativo puede acceder a este panel.
+    </div>
 
-    <div style="margin-bottom:14px"><button class="btn primary" id="invitePersonBtn">+ Invitar persona</button></div>
+    <div style="margin-bottom:14px">
+      <button class="btn primary" id="createInternalAccessBtn">+ Crear acceso interno</button>
+    </div>
 
     ${members.map(member=>{
       const ownerMember=member.user_id===group.created_by;
+      const internal=accountForUser(member.user_id);
+
       return `<div class="access-grid">
         <div>
-          <input data-member-name="${member.id}" type="text" value="${esc(member.display_name)}" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px">
-          <small class="access-note">${ownerMember?'Administrador principal':member.user_id===session.user.id?'Tu alias':'Alias dentro de este espacio'}</small>
+          <input
+            data-member-name="${member.id}"
+            type="text"
+            value="${esc(member.display_name)}"
+            style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px"
+          >
+          <small class="access-note">
+            ${ownerMember
+              ? 'Administrador principal'
+              : internal
+                ? `Usuario: ${esc(internal.alias)}${internal.must_change_password?' · contraseña temporal':''}`
+                : member.user_id===session.user.id?'Tu alias':'Acceso externo'}
+          </small>
         </div>
 
         <select data-role="${member.id}" ${ownerMember?'disabled':''}>
@@ -968,34 +1355,64 @@ function openMembers(){
           <option value="viewer" ${member.role==='viewer'?'selected':''}>Solo consulta</option>
         </select>
 
-        <input data-share="${member.id}" type="number" min="0" max="100" step="0.01" value="${member.role==='admin'?member.participation_percent:0}" ${member.role==='viewer'?'disabled':''} title="Porcentaje de gastos">
+        <input
+          data-share="${member.id}"
+          type="number"
+          min="0"
+          max="100"
+          step="0.01"
+          value="${member.role==='admin'?member.participation_percent:0}"
+          ${member.role==='viewer'?'disabled':''}
+          title="Porcentaje de gastos"
+        >
 
         <label class="access-check">
-          <input type="checkbox" data-report-access="${member.id}" ${ownerMember||member.can_view_reports?'checked':''} ${ownerMember?'disabled':''}>
+          <input
+            type="checkbox"
+            data-report-access="${member.id}"
+            ${ownerMember||member.can_view_reports?'checked':''}
+            ${ownerMember?'disabled':''}
+          >
           Reportes
         </label>
 
-        ${ownerMember?'<span class="owner-chip">Titular</span>':`<button class="btn danger small" data-revoke-member="${member.id}">Quitar</button>`}
+        ${ownerMember
+          ? '<span class="owner-chip">Titular</span>'
+          : `<div style="display:flex;gap:6px;flex-wrap:wrap">
+              ${internal?`<button class="btn outline small" data-reset-password="${member.id}">Nueva clave</button>`:''}
+              <button class="btn danger small" data-revoke-member="${member.id}">Quitar</button>
+            </div>`}
       </div>`;
     }).join('')}
 
-    <div class="notice">Los porcentajes de quienes participan en los gastos deben sumar 100%. El permiso Reportes es independiente: podés dárselo a un administrador o a una persona de solo consulta.</div>
+    <div class="notice">
+      Los administradores operativos pueden cargar y pagar, pero no crear usuarios.
+      Los porcentajes de los administradores deben sumar 100%.
+    </div>
 
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
-      <button class="btn primary" id="saveMembers">Guardar</button>
+      <button class="btn primary" id="saveMembers">Guardar permisos</button>
     </div>`,true);
 
-  document.getElementById('invitePersonBtn').onclick=openInviteModal;
+  document.getElementById('createInternalAccessBtn').onclick=openCreateInternalAccess;
+
   document.querySelectorAll('[data-role]').forEach(select=>{
     select.onchange=()=>{
       const input=document.querySelector(`[data-share="${select.dataset.role}"]`);
       if(select.value==='viewer'){
         input.value=0;
         input.disabled=true;
-      }else input.disabled=false;
+      }else{
+        input.disabled=false;
+      }
     };
   });
+
+  document.querySelectorAll('[data-reset-password]').forEach(button=>{
+    button.onclick=()=>openResetInternalPassword(button.dataset.resetPassword);
+  });
+
   document.querySelectorAll('[data-revoke-member]').forEach(button=>{
     button.onclick=()=>revokeMemberAccess(button.dataset.revokeMember);
   });
@@ -1003,105 +1420,329 @@ function openMembers(){
   document.getElementById('saveMembers').onclick=async()=>{
     const updates=members.map(member=>{
       const ownerMember=member.user_id===group.created_by;
-      const role=ownerMember?'admin':document.querySelector(`[data-role="${member.id}"]`).value;
+      const role=ownerMember
+        ? 'admin'
+        : document.querySelector(`[data-role="${member.id}"]`).value;
+
       return{
         id:member.id,
         display_name:document.querySelector(`[data-member-name="${member.id}"]`).value.trim(),
         role,
-        participation_percent:role==='admin'?Number(document.querySelector(`[data-share="${member.id}"]`).value||0):0,
-        can_view_reports:ownerMember||document.querySelector(`[data-report-access="${member.id}"]`).checked
+        participation_percent:role==='admin'
+          ? Number(document.querySelector(`[data-share="${member.id}"]`).value||0)
+          : 0,
+        can_view_reports:ownerMember
+          || document.querySelector(`[data-report-access="${member.id}"]`).checked
       };
     });
 
     if(updates.some(item=>!item.display_name))return toast('Todos deben tener un alias');
+
     const admins=updates.filter(item=>item.role==='admin');
     if(Math.abs(admins.reduce((sum,item)=>sum+item.participation_percent,0)-100)>.01){
       return toast('Los porcentajes de los administradores deben sumar 100%');
     }
 
     const button=document.getElementById('saveMembers');
-    const original=button.textContent;button.disabled=true;button.textContent='Guardando…';
+    const original=button.textContent;
+    button.disabled=true;
+    button.textContent='Guardando…';
+
     try{
-      const {error}=await sb.rpc('owner_update_group_members',{p_group_id:group.id,p_members:updates});
+      const {error}=await sb.rpc('owner_update_group_members',{
+        p_group_id:group.id,
+        p_members:updates
+      });
       if(error)throw error;
-      closeModal();await reloadGroup();renderApp();toast('Accesos actualizados');
+
+      closeModal();
+      await reloadGroup();
+      renderApp();
+      toast('Permisos actualizados');
     }catch(err){
-      console.error(err);toast(err?.message||'No se pudieron guardar los accesos');
+      console.error(err);
+      toast(err?.message||'No se pudieron guardar los permisos');
     }finally{
-      if(document.getElementById('saveMembers')){button.disabled=false;button.textContent=original}
+      if(document.getElementById('saveMembers')){
+        button.disabled=false;
+        button.textContent=original;
+      }
     }
   };
 }
-async function revokeMemberAccess(membershipId){
-  const member=members.find(item=>item.id===membershipId);
-  if(!member)return;
-  if(!confirm(`¿Quitar el acceso de ${member.display_name} a ${group.name}? Su historial de aportes se conservará.`))return;
-  const {error}=await sb.rpc('owner_revoke_member',{p_group_id:group.id,p_membership_id:membershipId});
-  if(error)return toast(error.message);
-  closeModal();await reloadGroup();renderApp();toast('Acceso revocado');
-}
 
-function openMyAlias(){
-  modal(`<h2>Mi alias</h2><div class="sub">Este nombre se usa solamente dentro de ${esc(group.name)}.</div><div class="field"><label>Alias</label><input id="myAlias" value="${esc(membership?.display_name||userName())}"></div><div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveAlias">Guardar</button></div>`);
-  document.getElementById('saveAlias').onclick=async()=>{const alias=document.getElementById('myAlias').value.trim();if(!alias)return toast('Ingresá un alias');const {error}=await sb.rpc('update_my_alias',{p_group_id:group.id,p_alias:alias});if(error)return toast(error.message);closeModal();await reloadGroup();renderApp();toast('Alias actualizado')};
-}
-function openInviteModal(){
-  if(!canManageAccess())return toast('Solo el administrador principal puede crear invitaciones');
+function openCreateInternalAccess(){
+  if(!canManageAccess())return toast('Solo el administrador principal puede crear accesos');
 
-  modal(`<h2>Invitar a ${esc(group.name)}</h2>
-    <div class="sub">Vos decidís el permiso. Un administrador invitado podrá operar gastos, pero no podrá invitar ni modificar accesos.</div>
-
-    <div class="field"><label>Alias sugerido (opcional)</label><input id="inviteAlias" placeholder="Ej: María, Socio, Contador"></div>
-
-    <div class="field"><label>Permiso operativo</label><select id="inviteRole">
-      <option value="viewer">Solo consulta</option>
-      <option value="admin">Administrador</option>
-    </select></div>
-
-    <div class="field">
-      <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-size:14px;color:var(--ink)">
-        <input id="inviteReports" type="checkbox" style="width:auto">
-        Permitir también la sección Reportes
-      </label>
+  modal(`<h2>Crear acceso interno</h2>
+    <div class="sub">
+      La persona ingresará con un alias y una contraseña temporal.
+      En su primer ingreso deberá cambiarla.
     </div>
 
-    <div class="field"><label>Vigencia de la invitación</label><select id="inviteDays">
-      <option value="7" selected>7 días</option>
-      <option value="30">30 días</option>
-      <option value="90">90 días</option>
-    </select></div>
+    <div class="field">
+      <label>Alias de ingreso</label>
+      <input id="internalAlias" maxlength="32" placeholder="Ej: fabiana">
+      <div class="field-hint">Sin correo. Puede usar letras, números, punto, guion o guion bajo.</div>
+    </div>
 
-    <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="createInvite">Crear invitación</button></div>`);
+    <div class="field">
+      <label>Nombre visible</label>
+      <input id="internalDisplayName" maxlength="100" placeholder="Ej: Fabiana">
+    </div>
 
-  document.getElementById('createInvite').onclick=async()=>{
-    const button=document.getElementById('createInvite');button.disabled=true;button.textContent='Creando…';
-    const {data,error}=await sb.rpc('create_group_invitation',{
-      p_group_id:group.id,
-      p_role:document.getElementById('inviteRole').value,
-      p_alias:document.getElementById('inviteAlias').value.trim()||null,
-      p_expires_days:Number(document.getElementById('inviteDays').value),
-      p_can_view_reports:document.getElementById('inviteReports').checked
-    });
-    if(error){button.disabled=false;button.textContent='Crear invitación';return toast(error.message)}
+    <div class="field">
+      <label>Contraseña temporal</label>
+      <input id="internalTempPassword" type="text" minlength="8" placeholder="Mínimo 8 caracteres">
+    </div>
 
-    const token=data.token;
-    const link=`${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;
-    modal(`<h2>Invitación lista</h2>
-      <div class="sub">La persona accederá solamente a ${esc(group.name)} como ${data.role==='admin'?'administrador operativo':'solo consulta'}${data.can_view_reports?' y podrá ver Reportes':''}. No podrá generar nuevos accesos.</div>
-      <div class="invite-box">
-        <div class="invite-code">${esc(token)}</div>
-        <div class="invite-url">${esc(link)}</div>
-        <div class="qr-wrap"><div id="inviteQr"></div></div>
-        <div class="actions"><button class="btn primary" id="copyLink">Copiar enlace</button><button class="btn outline" id="copyCode">Copiar código</button></div>
+    <div class="grid2">
+      <div class="field">
+        <label>Permiso</label>
+        <select id="internalRole">
+          <option value="viewer">Solo consulta</option>
+          <option value="admin">Administrador operativo</option>
+        </select>
       </div>
-      <div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);
 
-    if(window.QRCode)new QRCode(document.getElementById('inviteQr'),{text:link,width:190,height:190});
-    document.getElementById('copyLink').onclick=()=>copyText(link,'Enlace copiado');
-    document.getElementById('copyCode').onclick=()=>copyText(token,'Código copiado');
+      <div class="field">
+        <label>Reportes</label>
+        <select id="internalReports">
+          <option value="false">Sin acceso</option>
+          <option value="true">Puede ver Reportes</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cancelar</button>
+      <button class="btn primary" id="createInternalUserBtn">Crear usuario</button>
+    </div>`);
+
+  const aliasInput=document.getElementById('internalAlias');
+  const displayInput=document.getElementById('internalDisplayName');
+
+  aliasInput.oninput=()=>{
+    if(!displayInput.value.trim()){
+      displayInput.value=aliasInput.value.trim();
+    }
+  };
+
+  document.getElementById('createInternalUserBtn').onclick=async()=>{
+    const alias=normalizeInternalAlias(aliasInput.value);
+    const displayName=displayInput.value.trim();
+    const tempPassword=document.getElementById('internalTempPassword').value;
+    const role=document.getElementById('internalRole').value;
+    const canViewReports=document.getElementById('internalReports').value==='true';
+    const button=document.getElementById('createInternalUserBtn');
+
+    if(alias.length<3)return toast('El alias debe tener al menos 3 caracteres');
+    if(!displayName)return toast('Ingresá el nombre visible');
+    if(tempPassword.length<8)return toast('La contraseña temporal debe tener al menos 8 caracteres');
+
+    const original=button.textContent;
+    button.disabled=true;
+    button.textContent='Creando…';
+
+    try{
+      const {data,error}=await sb.functions.invoke('manage-internal-users',{
+        body:{
+          action:'create_access',
+          group_id:group.id,
+          alias,
+          display_name:displayName,
+          temporary_password:tempPassword,
+          role,
+          can_view_reports:canViewReports
+        }
+      });
+
+      if(error)throw new Error(await readFunctionError(error));
+      if(!data?.ok)throw new Error(data?.error||'No se pudo crear el acceso');
+
+      modal(`<h2>Acceso creado</h2>
+        <div class="sub">
+          ${data.created_new
+            ? 'Entregale estos datos a la persona.'
+            : 'El alias ya existía y fue agregado a este espacio. Su contraseña no fue modificada.'}
+        </div>
+
+        <div class="invite-box">
+          <div><strong>Espacio:</strong> ${esc(group.name)}</div>
+          <div><strong>Usuario:</strong> ${esc(data.alias)}</div>
+          ${data.created_new?`<div><strong>Contraseña temporal:</strong> ${esc(tempPassword)}</div>`:''}
+          <div><strong>Permiso:</strong> ${role==='admin'?'Administrador operativo':'Solo consulta'}</div>
+        </div>
+
+        <div class="notice">
+          ${data.created_new
+            ? 'En el primer ingreso deberá crear una contraseña nueva.'
+            : 'La persona debe ingresar con la contraseña que ya utiliza.'}
+        </div>
+
+        <div class="actions">
+          <button class="btn primary" id="copyCredentialsBtn">Copiar datos</button>
+        </div>
+
+        <div class="modalactions">
+          <button class="btn outline" id="finishInternalAccessBtn">Cerrar</button>
+        </div>`);
+
+      document.getElementById('copyCredentialsBtn').onclick=()=>copyText(
+        data.created_new
+          ? `Gestor de Gastos\nEspacio: ${group.name}\nUsuario: ${data.alias}\nContraseña temporal: ${tempPassword}\nEnlace: ${location.origin}${location.pathname}`
+          : `Gestor de Gastos\nEspacio: ${group.name}\nUsuario: ${data.alias}\nEnlace: ${location.origin}${location.pathname}`,
+        'Datos copiados'
+      );
+
+      document.getElementById('finishInternalAccessBtn').onclick=async()=>{
+        closeModal();
+        await reloadGroup();
+        openMembers();
+      };
+    }catch(err){
+      console.error(err);
+      toast(err?.message||'No se pudo crear el usuario');
+    }finally{
+      if(document.getElementById('createInternalUserBtn')){
+        button.disabled=false;
+        button.textContent=original;
+      }
+    }
   };
 }
 
+function openResetInternalPassword(membershipId){
+  const member=members.find(item=>item.id===membershipId);
+  const account=member?accountForUser(member.user_id):null;
+  if(!member||!account)return toast('Este integrante no usa un acceso interno');
+
+  modal(`<h2>Nueva contraseña temporal</h2>
+    <div class="sub">
+      Usuario: <strong>${esc(account.alias)}</strong>. En el próximo ingreso deberá cambiarla.
+    </div>
+
+    <div class="field">
+      <label>Contraseña temporal</label>
+      <input id="resetTempPassword" type="text" minlength="8">
+    </div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cancelar</button>
+      <button class="btn primary" id="resetInternalPasswordBtn">Restablecer</button>
+    </div>`);
+
+  document.getElementById('resetInternalPasswordBtn').onclick=async()=>{
+    const tempPassword=document.getElementById('resetTempPassword').value;
+    const button=document.getElementById('resetInternalPasswordBtn');
+
+    if(tempPassword.length<8)return toast('La contraseña debe tener al menos 8 caracteres');
+
+    const original=button.textContent;
+    button.disabled=true;
+    button.textContent='Restableciendo…';
+
+    try{
+      const {data,error}=await sb.functions.invoke('manage-internal-users',{
+        body:{
+          action:'reset_password',
+          group_id:group.id,
+          membership_id:membershipId,
+          temporary_password:tempPassword
+        }
+      });
+
+      if(error)throw new Error(await readFunctionError(error));
+      if(!data?.ok)throw new Error(data?.error||'No se pudo restablecer');
+
+      modal(`<h2>Contraseña restablecida</h2>
+        <div class="sub">Entregale estos datos a ${esc(member.display_name)}.</div>
+
+        <div class="invite-box">
+          <div><strong>Usuario:</strong> ${esc(account.alias)}</div>
+          <div><strong>Contraseña temporal:</strong> ${esc(tempPassword)}</div>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary" id="copyResetBtn">Copiar datos</button>
+        </div>
+
+        <div class="modalactions">
+          <button class="btn outline" id="finishResetBtn">Cerrar</button>
+        </div>`);
+
+      document.getElementById('copyResetBtn').onclick=()=>copyText(
+        `Gestor de Gastos\nUsuario: ${account.alias}\nContraseña temporal: ${tempPassword}\nEnlace: ${location.origin}${location.pathname}`,
+        'Datos copiados'
+      );
+
+      document.getElementById('finishResetBtn').onclick=async()=>{
+        closeModal();
+        await reloadGroup();
+        openMembers();
+      };
+    }catch(err){
+      console.error(err);
+      toast(err?.message||'No se pudo restablecer la contraseña');
+    }finally{
+      if(document.getElementById('resetInternalPasswordBtn')){
+        button.disabled=false;
+        button.textContent=original;
+      }
+    }
+  };
+}
+
+async function revokeMemberAccess(membershipId){
+  const member=members.find(item=>item.id===membershipId);
+  if(!member)return;
+
+  if(!confirm(`¿Quitar el acceso de ${member.display_name} a ${group.name}? Su historial se conservará.`)){
+    return;
+  }
+
+  const {error}=await sb.rpc('owner_revoke_member',{
+    p_group_id:group.id,
+    p_membership_id:membershipId
+  });
+
+  if(error)return toast(error.message);
+
+  closeModal();
+  await reloadGroup();
+  renderApp();
+  toast('Acceso revocado');
+}
+
+function openMyAlias(){
+  modal(`<h2>Mi alias</h2>
+    <div class="sub">Este nombre se usa solamente dentro de ${esc(group.name)}.</div>
+    <div class="field">
+      <label>Alias visible</label>
+      <input id="myAlias" value="${esc(membership?.display_name||userName())}">
+    </div>
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cancelar</button>
+      <button class="btn primary" id="saveAlias">Guardar</button>
+    </div>`);
+
+  document.getElementById('saveAlias').onclick=async()=>{
+    const alias=document.getElementById('myAlias').value.trim();
+    if(!alias)return toast('Ingresá un alias');
+
+    const {error}=await sb.rpc('update_my_alias',{
+      p_group_id:group.id,
+      p_alias:alias
+    });
+
+    if(error)return toast(error.message);
+
+    closeModal();
+    await reloadGroup();
+    renderApp();
+    toast('Alias actualizado');
+  };
+}
 async function copyText(text,message){try{await navigator.clipboard.writeText(text);toast(message)}catch{const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();toast(message)}}
 window.addEventListener('unhandledrejection',event=>{console.error(event.reason);toast(event.reason?.message||'Ocurrió un error')});
 init();
