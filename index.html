@@ -82,14 +82,70 @@ function renderAuth(signup=false){
   <div class="authswitch">${signup?'¿Ya tenés cuenta?':'¿Primera vez?'} <button class="linkbtn" id="authSwitch">${signup?'Ingresar':'Crear cuenta'}</button></div></div></div>`;
   document.getElementById('authSwitch').onclick=()=>renderAuth(!signup);
   authBtn.onclick=async()=>{
+    const emailValue=email.value.trim();
+    const passwordValue=password.value;
+    const nameValue=signup ? name.value.trim() : '';
+
+    if(!emailValue || !passwordValue){
+      toast('Completá correo y contraseña');
+      return;
+    }
+    if(signup && !nameValue){
+      toast('Completá tu nombre');
+      return;
+    }
+    if(passwordValue.length < 6){
+      toast('La contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+
+    const originalText=authBtn.textContent;
     authBtn.disabled=true;
-    let res;
-    if(signup)res=await sb.auth.signUp({email:email.value.trim(),password:password.value,options:{data:{full_name:name.value.trim()}}});
-    else res=await sb.auth.signInWithPassword({email:email.value.trim(),password:password.value});
-    authBtn.disabled=false;
-    if(res.error){toast(res.error.message);return}
-    if(signup&&!res.data.session){toast('Cuenta creada. Revisá tu email para confirmarla.');renderAuth(false);return}
-    session=res.data.session;await loadGroups();
+    authBtn.textContent=signup?'Creando cuenta…':'Ingresando…';
+
+    try{
+      const timeout=new Promise((_,reject)=>
+        setTimeout(()=>reject(new Error('Supabase demoró demasiado en responder. Revisá tu conexión e intentá nuevamente.')),15000)
+      );
+
+      const request=signup
+        ? sb.auth.signUp({
+            email:emailValue,
+            password:passwordValue,
+            options:{data:{full_name:nameValue}}
+          })
+        : sb.auth.signInWithPassword({
+            email:emailValue,
+            password:passwordValue
+          });
+
+      const res=await Promise.race([request,timeout]);
+
+      if(res.error){
+        toast(res.error.message);
+        return;
+      }
+
+      if(signup && !res.data.session){
+        modal(`<h2>Cuenta creada</h2>
+          <div class="sub">Supabase envió un correo de confirmación a <strong>${esc(emailValue)}</strong>.</div>
+          <div class="notice">Abrí ese correo, confirmá la cuenta y después volvé para ingresar.</div>
+          <div class="modalactions"><button class="btn primary" id="goLogin">Ir a ingresar</button></div>`);
+        goLogin.onclick=()=>{closeModal();renderAuth(false)};
+        return;
+      }
+
+      session=res.data.session;
+      await loadGroups();
+    }catch(err){
+      console.error('Error de autenticación:',err);
+      toast(err?.message || 'No se pudo conectar con Supabase');
+    }finally{
+      if(document.getElementById('authBtn')){
+        authBtn.disabled=false;
+        authBtn.textContent=originalText;
+      }
+    }
   };
 }
 async function loadGroups(){
