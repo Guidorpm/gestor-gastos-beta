@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gestor de Gastos Cloud</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <style>
 :root{
   --bg:#f4f7f5;--card:#fff;--ink:#14211d;--muted:#708078;--line:#dfe8e3;
@@ -30,7 +31,14 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.stat{padding:18px}.stat span{display:block;color:var(--muted);font-size:13px}.stat strong{display:block;font-size:24px;margin-top:6px}
 .matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
-.missing{background:#fafcfa}.loaded{background:#edf8f3}.paid{background:#e7f5ff}.overdue{background:#fff0f0;border-color:#f1c7c9}.urgent{background:#fff2e5}.warning{background:#fff8db}
+.missing{background:#fafcfa}.paid{background:#e7f5ff;border-color:#a8d4f5}
+.due-green{background:#e7f7ee;border-color:#84c9a6}.due-green-soft{background:#f0f8e8;border-color:#b8d99a}
+.warning{background:#fff8db;border-color:#ead273}.urgent{background:#fff0df;border-color:#efaf6e}.overdue{background:#ffe9ea;border-color:#e58f94}
+.due-green .status,.due-green-soft .status{color:#19734f}.warning .status{color:#8a6700}.urgent .status{color:#b4560b}.overdue .status{color:#b72e35}.paid .status{color:#245fa8}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}.legend span{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 10px;font-size:11px;color:var(--muted)}.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.forecast{padding:20px;margin:0 0 18px}.forecast h2{margin:0 0 5px}.forecast>p{margin:0;color:var(--muted)}.forecast-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:15px}.forecast-month{border:1px solid var(--line);border-radius:16px;padding:14px;background:#fff}.forecast-month h3{margin:0 0 8px;font-size:15px}.forecast-total{font-size:23px;font-weight:850}.forecast-detail{font-size:12px;color:var(--muted);margin-top:4px}.forecast-shares{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}.forecast-share{display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0}.estimate{color:#8a6700}.confirmed{color:var(--green)}
+.invite-box{border:1px solid var(--line);border-radius:16px;padding:15px;background:#fafcfa}.invite-code{font-size:25px;font-weight:900;letter-spacing:.12em;color:var(--brand);word-break:break-all}.invite-url{font-size:12px;color:var(--muted);word-break:break-all;margin:8px 0}.qr-wrap{display:flex;justify-content:center;background:white;border:1px solid var(--line);border-radius:15px;padding:14px;margin:14px auto;width:fit-content}.access-note{font-size:12px;color:var(--muted);margin-top:6px}.alias-chip{display:inline-flex;align-items:center;border-radius:999px;background:var(--brand2);color:var(--brand);padding:4px 8px;font-size:11px;font-weight:800;margin-left:6px}
+@media(max-width:900px){.forecast-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.forecast-grid{grid-template-columns:1fr}}
 .not-applicable{background:#f1f3f2;color:#8a958f;cursor:default;border-style:dashed}.not-applicable:hover{border-color:var(--line)}
 .month-picker{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
 .month-check{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:11px;padding:9px;background:#fff;font-size:13px;cursor:pointer}
@@ -58,6 +66,7 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[];
 let tab='services', baseMonth=monthKey(new Date());
+let pendingInviteToken=new URLSearchParams(location.search).get('invite')||localStorage.getItem('pendingInviteToken')||'';
 
 function monthKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
 function shiftMonth(key,n){const [y,m]=key.split('-').map(Number);return monthKey(new Date(y,m-1+n,1))}
@@ -75,28 +84,77 @@ function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`
 function userName(){return session?.user?.user_metadata?.full_name||session?.user?.email?.split('@')[0]||'Usuario'}
 
 async function init(){
-  const {data}=await sb.auth.getSession();session=data.session;
-  sb.auth.onAuthStateChange((_e,s)=>{session=s;if(!s){group=null;renderAuth()}});
-  if(session)await loadGroups();else renderAuth();
+  try{
+    if(pendingInviteToken)localStorage.setItem('pendingInviteToken',pendingInviteToken);
+    const {data,error}=await sb.auth.getSession();
+    if(error)throw error;
+    session=data.session;
+    sb.auth.onAuthStateChange((_event,newSession)=>{
+      session=newSession;
+      if(!newSession){group=null;renderAuth(false)}
+    });
+    if(session){
+      if(pendingInviteToken)await redeemPendingInvite();
+      else await loadGroups();
+    }else{
+      renderAuth(false);
+    }
+  }catch(err){
+    console.error(err);
+    app.innerHTML=`<div class="authwrap"><div class="auth card"><h1>No se pudo iniciar</h1><p>${esc(err?.message||'Error de conexión')}</p><button class="btn primary" onclick="location.reload()">Reintentar</button></div></div>`;
+  }
 }
 function renderAuth(signup=false){
-  app.innerHTML=`<div class="authwrap"><div class="auth card"><div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Beta conectada a Supabase</small></div></div><h1>${signup?'Crear cuenta':'Ingresar'}</h1><p>${signup?'Usá un correo real. Puede ser necesario confirmarlo antes de ingresar.':'Accedé a tus grupos familiares o empresas.'}</p>
-  ${signup?`<div class="field"><label>Nombre</label><input id="name" autocomplete="name"></div>`:''}
-  <div class="field"><label>Email</label><input id="email" type="email" autocomplete="email"></div>
+  const inviteNotice=pendingInviteToken?`<div class="notice">Tenés una invitación pendiente. Después de ingresar o crear tu cuenta, accederás solamente al espacio autorizado.</div>`:'';
+  app.innerHTML=`<div class="authwrap"><div class="auth card"><div class="brand"><div class="mark">G</div><div><strong>Gestor de Gastos</strong><small>Acceso privado por espacio</small></div></div><h1>${signup?'Crear cuenta':'Ingresar'}</h1><p>${signup?'Creá tu usuario para aceptar la invitación.':'Ingresá con tu correo y contraseña.'}</p>${inviteNotice}
+  ${signup?`<div class="field"><label>Nombre o alias</label><input id="name" autocomplete="name"></div>`:''}
+  <div class="field"><label>Correo electrónico</label><input id="email" type="email" autocomplete="email"></div>
   <div class="field"><label>Contraseña</label><input id="password" type="password" autocomplete="${signup?'new-password':'current-password'}"></div>
   <button class="btn primary" style="width:100%" id="authBtn">${signup?'Crear cuenta':'Ingresar'}</button>
   <div class="authswitch">${signup?'¿Ya tenés cuenta?':'¿Primera vez?'} <button class="linkbtn" id="authSwitch">${signup?'Ingresar':'Crear cuenta'}</button></div></div></div>`;
   document.getElementById('authSwitch').onclick=()=>renderAuth(!signup);
-  authBtn.onclick=async()=>{
-    authBtn.disabled=true;
-    let res;
-    if(signup)res=await sb.auth.signUp({email:email.value.trim(),password:password.value,options:{data:{full_name:name.value.trim()}}});
-    else res=await sb.auth.signInWithPassword({email:email.value.trim(),password:password.value});
-    authBtn.disabled=false;
-    if(res.error){toast(res.error.message);return}
-    if(signup&&!res.data.session){toast('Cuenta creada. Revisá tu email para confirmarla.');renderAuth(false);return}
-    session=res.data.session;await loadGroups();
+  const button=document.getElementById('authBtn');
+  button.onclick=async()=>{
+    const emailValue=document.getElementById('email').value.trim();
+    const passwordValue=document.getElementById('password').value;
+    const aliasValue=signup?document.getElementById('name').value.trim():'';
+    if(!emailValue||!passwordValue)return toast('Completá correo y contraseña');
+    if(signup&&!aliasValue)return toast('Ingresá tu nombre o alias');
+    if(passwordValue.length<6)return toast('La contraseña debe tener al menos 6 caracteres');
+    const original=button.textContent;button.disabled=true;button.textContent=signup?'Creando…':'Ingresando…';
+    try{
+      let res;
+      if(signup){
+        const redirect=`${location.origin}${location.pathname}${pendingInviteToken?'?invite='+encodeURIComponent(pendingInviteToken):''}`;
+        res=await sb.auth.signUp({email:emailValue,password:passwordValue,options:{data:{full_name:aliasValue},emailRedirectTo:redirect}});
+      }else{
+        res=await sb.auth.signInWithPassword({email:emailValue,password:passwordValue});
+      }
+      if(res.error)throw res.error;
+      if(signup&&!res.data.session){
+        toast('Cuenta creada. Revisá tu correo para confirmarla.');
+        renderAuth(false);return;
+      }
+      session=res.data.session;
+      if(pendingInviteToken)await redeemPendingInvite(aliasValue||userName());
+      else await loadGroups();
+    }catch(err){
+      console.error(err);toast(err?.message||'No se pudo completar el acceso');
+    }finally{
+      if(document.getElementById('authBtn')){button.disabled=false;button.textContent=original}
+    }
   };
+}
+async function redeemPendingInvite(alias=''){
+  const token=pendingInviteToken||localStorage.getItem('pendingInviteToken');
+  if(!token)return loadGroups();
+  const {data,error}=await sb.rpc('redeem_group_invitation',{p_token:token,p_display_name:alias||userName()});
+  if(error){
+    toast(error.message);pendingInviteToken='';localStorage.removeItem('pendingInviteToken');history.replaceState({},'',location.pathname);return loadGroups();
+  }
+  pendingInviteToken='';localStorage.removeItem('pendingInviteToken');history.replaceState({},'',location.pathname);
+  await loadGroups();
+  if(data&&groups.some(g=>g.id===data))await openGroup(data);
 }
 async function loadGroups(){
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
@@ -106,25 +164,26 @@ async function loadGroups(){
   renderGroups();
 }
 function renderGroups(){
-  app.innerHTML=`<main><div class="pagehead"><div><h1>Tus espacios</h1><p>Elegí un grupo o creá uno nuevo.</p></div><div class="actions"><button class="btn outline" id="joinBtn">Unirme con código</button><button class="btn primary" id="newGroup">+ Crear espacio</button><button class="btn soft" id="logout">Salir</button></div></div>
-  <div class="workspace-grid">${groups.map(g=>`<div class="workspace card" data-group="${g.id}"><h3>${esc(g.name)}</h3><p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${g.membership.role==='admin'?'Administrador':'Solo consulta'}</p></div>`).join('')||'<div class="card workspace"><h3>No tenés espacios todavía</h3><p>Creá una familia o empresa, o ingresá un código de invitación.</p></div>'}</div></main>`;
+  app.innerHTML=`<main><div class="pagehead"><div><h1>Tus espacios</h1><p>Cada espacio tiene sus propios administradores, accesos y porcentajes.</p></div><div class="actions"><button class="btn outline" id="joinBtn">Ingresar código</button><button class="btn primary" id="newGroup">+ Crear espacio</button><button class="btn soft" id="logout">Salir</button></div></div>
+  <div class="workspace-grid">${groups.map(g=>`<div class="workspace card" data-group="${g.id}"><h3>${esc(g.name)}</h3><p>${g.type==='company'?'Empresa':'Grupo familiar'} · ${g.membership.role==='admin'?'Administrador':'Solo consulta'} <span class="alias-chip">${esc(g.membership.display_name)}</span></p></div>`).join('')||'<div class="card workspace"><h3>No tenés espacios todavía</h3><p>Creá uno o ingresá un código de invitación.</p></div>'}</div></main>`;
   document.querySelectorAll('[data-group]').forEach(e=>e.onclick=()=>openGroup(e.dataset.group));
-  logout.onclick=()=>sb.auth.signOut();
-  newGroup.onclick=openCreateGroup;joinBtn.onclick=openJoinGroup;
+  document.getElementById('logout').onclick=()=>sb.auth.signOut();
+  document.getElementById('newGroup').onclick=openCreateGroup;
+  document.getElementById('joinBtn').onclick=openJoinGroup;
 }
 function openCreateGroup(){
-  modal(`<h2>Crear espacio</h2><div class="sub">Después podrás compartir el código para sumar integrantes.</div>
-  <div class="field"><label>Nombre</label><input id="gname" placeholder="Ej: Familia Rizzo"></div>
+  modal(`<h2>Crear espacio</h2><div class="sub">Casa, negocio u otro grupo independiente.</div>
+  <div class="field"><label>Nombre</label><input id="gname" placeholder="Ej: Casa"></div>
   <div class="field"><label>Tipo</label><select id="gtype"><option value="family">Grupo familiar</option><option value="company">Empresa</option></select></div>
   <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveGroup">Crear</button></div>`);
-  saveGroup.onclick=async()=>{if(!gname.value.trim())return toast('Ingresá un nombre');const {data,error}=await sb.rpc('create_group',{p_name:gname.value.trim(),p_type:gtype.value,p_owner_name:userName()});if(error)return toast(error.message);closeModal();await loadGroups();await openGroup(data)};
+  document.getElementById('saveGroup').onclick=async()=>{const name=document.getElementById('gname').value.trim();if(!name)return toast('Ingresá un nombre');const {data,error}=await sb.rpc('create_group',{p_name:name,p_type:document.getElementById('gtype').value,p_owner_name:userName()});if(error)return toast(error.message);closeModal();await loadGroups();await openGroup(data)};
 }
 function openJoinGroup(){
-  modal(`<h2>Unirme a un espacio</h2><div class="sub">Ingresá el código que te compartió un administrador.</div>
-  <div class="field"><label>Código</label><input id="joinCode" maxlength="8" style="text-transform:uppercase"></div>
-  <div class="field"><label>Nombre visible</label><input id="joinName" value="${esc(userName())}"></div>
-  <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="doJoin">Unirme</button></div>`);
-  doJoin.onclick=async()=>{const {data,error}=await sb.rpc('join_group',{p_join_code:joinCode.value,p_display_name:joinName.value});if(error)return toast(error.message);closeModal();await loadGroups();await openGroup(data)};
+  modal(`<h2>Ingresar con código</h2><div class="sub">Pegá el código de invitación que te envió el administrador.</div>
+  <div class="field"><label>Código</label><input id="joinCode" maxlength="40" style="text-transform:uppercase"></div>
+  <div class="field"><label>Tu alias en este espacio</label><input id="joinName" value="${esc(userName())}"></div>
+  <div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="doJoin">Ingresar</button></div>`);
+  document.getElementById('doJoin').onclick=async()=>{const token=document.getElementById('joinCode').value.trim();if(!token)return toast('Ingresá el código');const {data,error}=await sb.rpc('redeem_group_invitation',{p_token:token,p_display_name:document.getElementById('joinName').value.trim()});if(error)return toast(error.message);closeModal();await loadGroups();if(data)await openGroup(data)};
 }
 async function openGroup(id){
   group=groups.find(g=>g.id===id)||{id};
@@ -150,10 +209,11 @@ async function reloadGroup(){
 }
 function renderApp(){
   const ms=[baseMonth,shiftMonth(baseMonth,1),shiftMonth(baseMonth,2)];
-  app.innerHTML=`<div class="top"><div class="topin"><div class="brand"><div class="mark">${group.type==='company'?'E':'F'}</div><div><strong>${esc(group.name)}</strong><small>${group.type==='company'?'Empresa':'Grupo familiar'} · ${canEdit()?'Administrador':'Solo consulta'}</small></div></div><div class="actions">${canEdit()?'<button class="btn soft small" id="membersBtn">Integrantes</button>':''}<button class="btn outline small" id="backBtn">Cambiar espacio</button><button class="btn outline small" id="signOut">Salir</button></div></div></div>
+  app.innerHTML=`<div class="top"><div class="topin"><div class="brand"><div class="mark">${group.type==='company'?'E':'F'}</div><div><strong>${esc(group.name)}</strong><small>${group.type==='company'?'Empresa':'Grupo familiar'} · ${canEdit()?'Administrador':'Solo consulta'} · ${esc(membership?.display_name||userName())}</small></div></div><div class="actions"><button class="btn soft small" id="aliasBtn">Mi alias</button>${canEdit()?'<button class="btn soft small" id="membersBtn">Accesos</button>':''}<button class="btn outline small" id="backBtn">Cambiar espacio</button><button class="btn outline small" id="signOut">Salir</button></div></div></div>
   <main><div class="tabs"><button class="tab ${tab==='services'?'active':''}" data-tab="services">Servicios e impuestos</button><button class="tab ${tab==='paid'?'active':''}" data-tab="paid">Abonados</button></div><div id="content"></div></main>`;
-  backBtn.onclick=()=>{group=null;loadGroups()};signOut.onclick=()=>sb.auth.signOut();
-  if(canEdit())membersBtn.onclick=openMembers;
+  document.getElementById('backBtn').onclick=()=>{group=null;loadGroups()};document.getElementById('signOut').onclick=()=>sb.auth.signOut();
+  document.getElementById('aliasBtn').onclick=openMyAlias;
+  if(canEdit())document.getElementById('membersBtn').onclick=openMembers;
   document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;renderApp()});
   content.innerHTML=tab==='services'?renderServices(ms):renderPaid();
   bindDashboard(ms);
@@ -204,8 +264,44 @@ function emptyBoxText(service){
   return ['Sin datos','Cargar importe y vencimiento'];
 }
 function paymentFor(obligationId){return payments.find(p=>p.obligation_id===obligationId)}
-function boxClass(o){if(!o)return'missing';if(o.status==='paid'||paymentFor(o.id))return'paid';const d=daysUntil(o.due_date);if(d!==null&&d<0)return'overdue';if(d!==null&&d<=2)return'urgent';if(d!==null&&d<=5)return'warning';return'loaded'}
-function boxText(o,service){if(!o)return emptyBoxText(service);if(o.status==='paid'||paymentFor(o.id))return['Abonado',fmtMoney(paymentFor(o.id)?.total_amount||o.amount)];const d=daysUntil(o.due_date);if(d!==null&&d<0)return['Vencido',fmtMoney(o.amount)];return['Cargado · falta pagar',fmtMoney(o.amount)]}
+function dueState(o){
+  if(!o)return{cls:'missing',label:'Sin datos'};
+  if(o.status==='paid'||paymentFor(o.id))return{cls:'paid',label:'Abonado'};
+  const d=daysUntil(o.due_date);
+  if(d===null)return{cls:'missing',label:'Falta vencimiento'};
+  if(d<0)return{cls:'overdue',label:`Vencido hace ${Math.abs(d)} día${Math.abs(d)===1?'':'s'}`};
+  if(d===0)return{cls:'urgent',label:'Vence hoy'};
+  if(d<=2)return{cls:'urgent',label:`Faltan ${d} días`};
+  if(d<=5)return{cls:'warning',label:`Faltan ${d} días`};
+  if(d<=10)return{cls:'due-green-soft',label:`Faltan ${d} días`};
+  return{cls:'due-green',label:`Faltan ${d} días`};
+}
+function boxClass(o){return dueState(o).cls}
+function boxText(o,service){if(!o)return emptyBoxText(service);if(o.status==='paid'||paymentFor(o.id))return['Abonado',fmtMoney(paymentFor(o.id)?.total_amount||o.amount)];return[dueState(o).label,fmtMoney(o.amount)]}
+function lastKnownAmount(serviceId,beforeKey){
+  const limit=periodDate(beforeKey);
+  return obligations.filter(o=>o.service_id===serviceId&&o.period<limit&&Number(o.amount)>0).sort((a,b)=>b.period.localeCompare(a.period))[0]?.amount||null;
+}
+function forecastMonth(key){
+  let confirmed=0,estimated=0,missing=0;
+  services.forEach(service=>{
+    const obligation=obligationFor(service.id,key);
+    if(obligation){
+      if(!paymentFor(obligation.id)&&obligation.status!=='cancelled')confirmed+=Number(obligation.amount||0);
+      return;
+    }
+    if(service.frequency==='one_time'||!monthAppliesToService(service,key))return;
+    const previous=lastKnownAmount(service.id,key);
+    if(previous)estimated+=Number(previous);else missing++;
+  });
+  return{key,confirmed,estimated,total:confirmed+estimated,missing};
+}
+function renderForecast(){
+  const months=Array.from({length:6},(_,i)=>shiftMonth(baseMonth,i));
+  const admins=members.filter(m=>m.role==='admin'&&Number(m.participation_percent)>0);
+  const totalShares=admins.reduce((sum,m)=>sum+Number(m.participation_percent),0)||100;
+  return `<div class="forecast card"><h2>Gastos a afrontar</h2><p>Importes confirmados más una estimación basada en el último valor cargado. Los estimados se muestran separados.</p><div class="forecast-grid">${months.map(key=>{const f=forecastMonth(key);return `<div class="forecast-month"><h3>${monthLabel(key)}</h3><div class="forecast-total">${fmtMoney(f.total)}</div><div class="forecast-detail"><span class="confirmed">Confirmado ${fmtMoney(f.confirmed)}</span> · <span class="estimate">Estimado ${fmtMoney(f.estimated)}</span>${f.missing?` · ${f.missing} sin referencia`:''}</div><div class="forecast-shares">${admins.map(a=>`<div class="forecast-share"><span>${esc(a.display_name)} (${Number(a.participation_percent)}%)</span><strong>${fmtMoney(f.total*Number(a.participation_percent)/totalShares)}</strong></div>`).join('')||'<div class="forecast-detail">Configurá porcentajes entre administradores.</div>'}</div></div>`}).join('')}</div></div>`;
+}
 function pendingObligations(){return obligations.filter(o=>!paymentFor(o.id)&&o.status!=='cancelled').sort((a,b)=>(a.due_date||'9999').localeCompare(b.due_date||'9999'))}
 function renderServices(ms){
   const pending=pendingObligations();
@@ -225,6 +321,10 @@ function renderServices(ms){
   </div>
 
   ${renderBalance()}
+
+  ${renderForecast()}
+
+  <div class="legend"><span><i style="background:#84c9a6"></i>Más de 10 días</span><span><i style="background:#b8d99a"></i>6 a 10 días</span><span><i style="background:#ead273"></i>3 a 5 días</span><span><i style="background:#efaf6e"></i>Hoy a 2 días</span><span><i style="background:#e58f94"></i>Vencido</span></div>
 
   <div class="summary">
     <div class="stat card"><span>Falta cargar en ${monthLabel(baseMonth)}</span><strong>${missing}</strong></div>
@@ -282,11 +382,11 @@ function renderServices(ms){
   </div>`;
 }
 function balanceData(){
-  const rows=members.filter(m=>Number(m.participation_percent)>0).map(m=>({m,owed:0,paid:0,balance:0}));
+  const rows=members.filter(m=>m.role==='admin'&&Number(m.participation_percent)>0).map(m=>({m,owed:0,paid:0,balance:0}));
   payments.forEach(p=>{const o=obligations.find(x=>x.id===p.obligation_id);if(!o)return;const amount=Number(p.total_amount||0),sumShares=rows.reduce((a,r)=>a+Number(r.m.participation_percent||0),0)||100;rows.forEach(r=>r.owed+=amount*Number(r.m.participation_percent||0)/sumShares);contributions.filter(c=>c.payment_id===p.id).forEach(c=>{const r=rows.find(x=>x.m.id===c.membership_id);if(r)r.paid+=Number(c.amount||0)})});
   rows.forEach(r=>r.balance=r.paid-r.owed);return rows;
 }
-function renderBalance(){const rows=balanceData();return `<div class="balance card"><h2>Equilibrio acumulado</h2><p>Compara lo que correspondía pagar con lo efectivamente aportado.</p><div class="balancegrid">${rows.map(r=>`<div class="person"><strong>${esc(r.m.display_name)}</strong><div class="money ${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</div><small>Correspondía ${fmtMoney(r.owed)} · Pagó ${fmtMoney(r.paid)}</small></div>`).join('')||'<div class="person">Definí porcentajes de participación.</div>'}</div></div>`}
+function renderBalance(){const rows=balanceData();return `<div class="balance card"><h2>Equilibrio acumulado</h2><p>Compara lo que correspondía pagar con lo efectivamente aportado.</p><div class="balancegrid">${rows.map(r=>`<div class="person"><strong>${esc(r.m.display_name)}</strong><div class="money ${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</div><small>Correspondía ${fmtMoney(r.owed)} · Pagó ${fmtMoney(r.paid)}</small></div>`).join('')||'<div class="person">Definí los porcentajes de los administradores.</div>'}</div></div>`}
 function renderPaid(){
   const list=payments.slice().sort((a,b)=>b.paid_at.localeCompare(a.paid_at));
   return `<div class="pagehead"><div><h1>Abonados</h1><p>Historial completo de pagos y comprobantes.</p></div></div><div class="list card">${list.map(p=>{const o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o?.service_id);return`<div class="row"><div><h3>${esc(s?.name||'Servicio')}</h3><p>${o?monthLabel(o.period.slice(0,7)):'Pago'} · abonado ${fmtDate(p.paid_at)}</p></div><div><div class="amountbig">${fmtMoney(p.total_amount)}</div><button class="btn soft small" data-payment="${p.id}">Abrir</button></div></div>`}).join('')||'<div class="row"><p>Todavía no hay pagos registrados.</p></div>'}</div>`;
@@ -692,109 +792,31 @@ async function deleteService(serviceId){
 }
 function openPaymentDetail(id){const p=payments.find(x=>x.id===id),o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o.service_id),cs=contributions.filter(x=>x.payment_id===id);modal(`<h2>${esc(s.name)}</h2><div class="sub">${monthLabel(o.period.slice(0,7))}</div><div class="notice">Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</div>${cs.map(c=>`<div class="row"><span>${esc(members.find(m=>m.id===c.membership_id)?.display_name||'Integrante')}</span><strong>${fmtMoney(c.amount)}</strong></div>`).join('')}<div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn soft" id="openFolderBtn">Abrir carpeta</button></div>`);openFolderBtn.onclick=()=>openFolder(s.id)}
 function openMembers(){
-  modal(`<h2>Integrantes y acceso</h2>
-    <div class="sub">
-      Código para unirse: <strong>${esc(group.join_code)}</strong><br>
-      Los nombres, roles y porcentajes se configuran solamente para este espacio.
-    </div>
-
-    ${members.map(m=>`
-      <div class="memberline">
-        <div>
-          <input
-            data-member-name="${m.id}"
-            type="text"
-            value="${esc(m.display_name)}"
-            aria-label="Nombre visible"
-            style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px"
-          >
-          <small style="display:block;color:var(--muted);margin-top:4px">
-            ${m.user_id===session.user.id?'Tu usuario':'Nombre visible en este espacio'}
-          </small>
-        </div>
-
-        <select data-role="${m.id}">
-          <option value="admin" ${m.role==='admin'?'selected':''}>Administrador</option>
-          <option value="viewer" ${m.role==='viewer'?'selected':''}>Solo consulta</option>
-        </select>
-
-        <input
-          data-share="${m.id}"
-          type="number"
-          min="0"
-          max="100"
-          step="0.01"
-          value="${m.participation_percent}"
-          title="Porcentaje de participación"
-        >
-      </div>
-    `).join('')}
-
-    <div class="notice">
-      Puede haber varios administradores en este espacio. En otro espacio, las mismas personas pueden tener roles diferentes.
-      Los porcentajes de participación deben sumar 100%.
-    </div>
-
-    <div class="modalactions">
-      <button class="btn outline" data-close>Cerrar</button>
-      <button class="btn primary" id="saveMembers">Guardar</button>
-    </div>`,true);
-
+  modal(`<h2>Accesos de ${esc(group.name)}</h2><div class="sub">Los roles y porcentajes pertenecen únicamente a este espacio. Una persona puede ser administradora en Casa y observadora en Negocio.</div>
+    <div style="margin-bottom:14px"><button class="btn primary" id="invitePersonBtn">+ Invitar persona</button></div>
+    ${members.map(m=>`<div class="memberline"><div><input data-member-name="${m.id}" type="text" value="${esc(m.display_name)}" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:9px"><small class="access-note">${m.user_id===session.user.id?'Tu alias':'Alias dentro de este espacio'}</small></div><select data-role="${m.id}"><option value="admin" ${m.role==='admin'?'selected':''}>Administrador</option><option value="viewer" ${m.role==='viewer'?'selected':''}>Solo consulta</option></select><input data-share="${m.id}" type="number" min="0" max="100" step="0.01" value="${m.role==='admin'?m.participation_percent:0}" ${m.role==='viewer'?'disabled':''}></div>`).join('')}
+    <div class="notice">Solo los administradores participan en la división de gastos. Sus porcentajes deben sumar 100%. Los observadores pueden consultar, pero no modificar ni aportar.</div>
+    <div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn primary" id="saveMembers">Guardar</button></div>`,true);
+  document.getElementById('invitePersonBtn').onclick=openInviteModal;
+  document.querySelectorAll('[data-role]').forEach(select=>select.onchange=()=>{const id=select.dataset.role;const input=document.querySelector(`[data-share="${id}"]`);if(select.value==='viewer'){input.value=0;input.disabled=true}else input.disabled=false});
   document.getElementById('saveMembers').onclick=async()=>{
-    const updates=members.map(m=>({
-      id:m.id,
-      display_name:document.querySelector(`[data-member-name="${m.id}"]`).value.trim(),
-      role:document.querySelector(`[data-role="${m.id}"]`).value,
-      participation_percent:Number(document.querySelector(`[data-share="${m.id}"]`).value||0)
-    }));
-
-    if(updates.some(u=>!u.display_name)){
-      return toast('Todos los integrantes deben tener un nombre visible');
-    }
-
-    if(!updates.some(u=>u.role==='admin')){
-      return toast('El espacio debe conservar al menos un administrador');
-    }
-
-    const total=updates.reduce((sum,u)=>sum+u.participation_percent,0);
-    if(Math.abs(total-100)>.01){
-      return toast('Los porcentajes deben sumar 100%');
-    }
-
-    const saveButton=document.getElementById('saveMembers');
-    const original=saveButton.textContent;
-    saveButton.disabled=true;
-    saveButton.textContent='Guardando…';
-
-    try{
-      for(const u of updates){
-        const {error}=await sb
-          .from('memberships')
-          .update({
-            display_name:u.display_name,
-            role:u.role,
-            participation_percent:u.participation_percent
-          })
-          .eq('id',u.id);
-
-        if(error)throw error;
-      }
-
-      closeModal();
-      await reloadGroup();
-      renderApp();
-      toast('Integrantes actualizados');
-    }catch(err){
-      console.error('Error actualizando integrantes:',err);
-      toast(err?.message||'No se pudieron actualizar los integrantes');
-    }finally{
-      if(document.getElementById('saveMembers')){
-        saveButton.disabled=false;
-        saveButton.textContent=original;
-      }
-    }
+    const updates=members.map(m=>{const role=document.querySelector(`[data-role="${m.id}"]`).value;return{id:m.id,display_name:document.querySelector(`[data-member-name="${m.id}"]`).value.trim(),role,participation_percent:role==='admin'?Number(document.querySelector(`[data-share="${m.id}"]`).value||0):0}});
+    if(updates.some(u=>!u.display_name))return toast('Todos deben tener un alias');
+    const admins=updates.filter(u=>u.role==='admin');if(!admins.length)return toast('Debe quedar al menos un administrador');
+    if(Math.abs(admins.reduce((s,u)=>s+u.participation_percent,0)-100)>.01)return toast('Los porcentajes de los administradores deben sumar 100%');
+    try{for(const u of updates){const {error}=await sb.from('memberships').update({display_name:u.display_name,role:u.role,participation_percent:u.participation_percent}).eq('id',u.id);if(error)throw error}closeModal();await reloadGroup();renderApp();toast('Accesos actualizados')}catch(err){toast(err?.message||'No se pudieron guardar los accesos')}
   };
 }
+function openMyAlias(){
+  modal(`<h2>Mi alias</h2><div class="sub">Este nombre se usa solamente dentro de ${esc(group.name)}.</div><div class="field"><label>Alias</label><input id="myAlias" value="${esc(membership?.display_name||userName())}"></div><div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveAlias">Guardar</button></div>`);
+  document.getElementById('saveAlias').onclick=async()=>{const alias=document.getElementById('myAlias').value.trim();if(!alias)return toast('Ingresá un alias');const {error}=await sb.rpc('update_my_alias',{p_group_id:group.id,p_alias:alias});if(error)return toast(error.message);closeModal();await reloadGroup();renderApp();toast('Alias actualizado')};
+}
+function openInviteModal(){
+  modal(`<h2>Invitar a ${esc(group.name)}</h2><div class="sub">Elegí el permiso. El enlace, QR y código sirven una sola vez.</div><div class="field"><label>Alias sugerido (opcional)</label><input id="inviteAlias" placeholder="Ej: María, Socio, Contador"></div><div class="field"><label>Permiso</label><select id="inviteRole"><option value="viewer">Solo consulta</option><option value="admin">Administrador</option></select></div><div class="field"><label>Vigencia</label><select id="inviteDays"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option></select></div><div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="createInvite">Crear invitación</button></div>`);
+  document.getElementById('createInvite').onclick=async()=>{const button=document.getElementById('createInvite');button.disabled=true;button.textContent='Creando…';const {data,error}=await sb.rpc('create_group_invitation',{p_group_id:group.id,p_role:document.getElementById('inviteRole').value,p_alias:document.getElementById('inviteAlias').value.trim()||null,p_expires_days:Number(document.getElementById('inviteDays').value)});if(error){button.disabled=false;button.textContent='Crear invitación';return toast(error.message)}const token=data.token;const link=`${location.origin}${location.pathname}?invite=${encodeURIComponent(token)}`;modal(`<h2>Invitación lista</h2><div class="sub">La persona abre el enlace, crea o ingresa con su usuario y accede solo a ${esc(group.name)} como ${data.role==='admin'?'administrador':'solo consulta'}.</div><div class="invite-box"><div class="invite-code">${esc(token)}</div><div class="invite-url">${esc(link)}</div><div class="qr-wrap"><div id="inviteQr"></div></div><div class="actions"><button class="btn primary" id="copyLink">Copiar enlace</button><button class="btn outline" id="copyCode">Copiar código</button></div></div><div class="modalactions"><button class="btn outline" data-close>Cerrar</button></div>`,true);if(window.QRCode)new QRCode(document.getElementById('inviteQr'),{text:link,width:190,height:190});document.getElementById('copyLink').onclick=()=>copyText(link,'Enlace copiado');document.getElementById('copyCode').onclick=()=>copyText(token,'Código copiado')};
+}
+async function copyText(text,message){try{await navigator.clipboard.writeText(text);toast(message)}catch{const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();toast(message)}}
+window.addEventListener('unhandledrejection',event=>{console.error(event.reason);toast(event.reason?.message||'Ocurrió un error')});
 init();
 </script>
 </body>
