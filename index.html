@@ -1819,8 +1819,43 @@ async function bindNotifications(){
   if(test)test.onclick=sendTestNotification;
 }
 function renderPaid(){
-  const list=payments.slice().sort((a,b)=>b.paid_at.localeCompare(a.paid_at));
-  return `<div class="pagehead"><div><h1>Abonados</h1><p>Historial completo de pagos y comprobantes.</p></div></div><div class="list card">${list.map(p=>{const o=obligations.find(x=>x.id===p.obligation_id),s=services.find(x=>x.id===o?.service_id);return`<div class="row"><div><h3>${esc(s?.name||'Servicio')}</h3><p>${o?monthLabel(o.period.slice(0,7)):'Pago'} · abonado ${fmtDate(p.paid_at)}</p></div><div><div class="amountbig">${fmtMoney(p.total_amount)}</div><button class="btn soft small" data-payment="${p.id}">Abrir</button></div></div>`}).join('')||'<div class="row"><p>Todavía no hay pagos registrados.</p></div>'}</div>`;
+  const seenObligations=new Set();
+  const list=payments
+    .slice()
+    .sort((a,b)=>{
+      const dateOrder=b.paid_at.localeCompare(a.paid_at);
+      return dateOrder||String(b.created_at||'').localeCompare(String(a.created_at||''));
+    })
+    .filter(payment=>{
+      if(seenObligations.has(payment.obligation_id))return false;
+      seenObligations.add(payment.obligation_id);
+      return true;
+    });
+
+  return `<div class="pagehead">
+    <div>
+      <h1>Abonados</h1>
+      <p>Historial completo de pagos y comprobantes. Cada factura mensual aparece una sola vez.</p>
+    </div>
+  </div>
+
+  <div class="list card">
+    ${list.map(p=>{
+      const o=obligations.find(x=>x.id===p.obligation_id);
+      const s=services.find(x=>x.id===o?.service_id);
+
+      return `<div class="row">
+        <div>
+          <h3>${esc(s?.name||'Servicio')}</h3>
+          <p>${o?monthLabel(o.period.slice(0,7)):'Pago'} · abonado ${fmtDate(p.paid_at)}</p>
+        </div>
+        <div>
+          <div class="amountbig">${fmtMoney(p.total_amount)}</div>
+          <button class="btn soft small" data-payment="${p.id}">Abrir</button>
+        </div>
+      </div>`;
+    }).join('')||'<div class="row"><p>Todavía no hay pagos registrados.</p></div>'}
+  </div>`;
 }
 function bindDashboard(ms){
   if(document.getElementById('prevMonth'))prevMonth.onclick=()=>{baseMonth=shiftMonth(baseMonth,-1);renderApp()};
@@ -2081,8 +2116,8 @@ function openObligation(serviceId,key){
       ${sourceLink
         ? `Esta deuda quedó incluida en la factura de ${monthLabel(target.period.slice(0,7))}. Se conserva como historial y no se suma dos veces.`
         : o
-          ? 'Podés revisar las facturas cargadas, quitarlas o agregar otra.'
-          : 'Cargá la factura de este mes y definí si se suma a la deuda anterior o si ya la incluye.'}
+          ? 'Podés corregir los datos del mes, administrar sus facturas o borrar la carga mensual completa.'
+          : 'Cargá los datos del mes. La factura se agrega con un botón independiente.'}
     </div>
 
     ${sourceLink?`
@@ -2153,18 +2188,19 @@ function openObligation(serviceId,key){
       </div>`:''}
 
     <div class="field">
-      <label>${existingInvoices.length?'Agregar otra factura o boleta':'Factura o boleta'} <span style="font-weight:400;text-transform:none">(opcional)</span></label>
+      <label>Archivo de factura <span style="font-weight:400;text-transform:none">(opcional)</span></label>
       <input id="invoiceFile" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" ${!canEdit()?'disabled':''}>
       <div style="font-size:12px;color:var(--muted);margin-top:6px">
+        Primero seleccioná el archivo. Después presioná <strong>Agregar factura</strong>.
         PDF, JPG, PNG o WEBP. Máximo 10 MB.
       </div>
       <div id="invoiceLocalPreview" class="local-preview hidden"></div>
     </div>
 
     <div class="document-group">
-      <h3>Factura del servicio</h3>
+      <h3>Facturas del servicio</h3>
       <p>${existingInvoices.length
-        ? 'Podés abrirla en tamaño completo o quitar una factura cargada por error.'
+        ? 'Podés abrirlas en tamaño completo o quitar una cargada por error.'
         : 'Todavía no hay una factura adjunta.'}</p>
 
       ${existingInvoices.length?`
@@ -2201,17 +2237,18 @@ function openObligation(serviceId,key){
 
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
+
       ${sourceLink&&target
         ? `<button class="btn soft" id="openConsolidatedTarget">Abrir ${monthLabel(target.period.slice(0,7))}</button>`
         : ''}
+
+      ${canEdit()&&o
+        ? `<button class="btn danger" id="deleteMonthData">Borrar datos del mes</button>`
+        : ''}
+
       ${canEdit()?`
-        <button class="btn soft" id="saveObligation">${
-          o
-            ? existingInvoices.length
-              ? 'Guardar cambios / agregar factura'
-              : 'Guardar cambios'
-            : 'Guardar factura'
-        }</button>
+        <button class="btn soft" id="saveObligation">Guardar cambios</button>
+        <button class="btn primary" id="addInvoiceButton">Agregar factura</button>
         ${o&&!p&&!sourceLink?'<button class="btn primary" id="markPaid">Marcar abonado</button>':''}
       `:''}
     </div>`);
@@ -2226,12 +2263,21 @@ function openObligation(serviceId,key){
 
   const invoiceInput=document.getElementById('invoiceFile');
   const localPreview=document.getElementById('invoiceLocalPreview');
+  const addInvoiceButton=document.getElementById('addInvoiceButton');
+
   if(invoiceInput){
-    invoiceInput.onchange=()=>renderLocalFilePreview(
-      invoiceInput,
-      localPreview,
-      'Vista previa antes de guardar'
-    );
+    invoiceInput.onchange=()=>{
+      renderLocalFilePreview(
+        invoiceInput,
+        localPreview,
+        'Vista previa antes de guardar'
+      );
+      if(addInvoiceButton){
+        addInvoiceButton.textContent=invoiceInput.files[0]
+          ? 'Guardar factura'
+          : 'Agregar factura';
+      }
+    };
   }
 
   const updateConsolidationUI=()=>{
@@ -2268,22 +2314,31 @@ function openObligation(serviceId,key){
 
   if(!canEdit())return;
 
-  const saveButton=document.getElementById('saveObligation');
-
-  saveButton.onclick=async()=>{
+  async function saveMonthData({uploadInvoice=false}={}){
     const amountValue=parseMoneyField(document.getElementById('oamount').value);
     const dueValue=document.getElementById('odue').value;
-    const file=invoiceInput.files[0];
+    const file=invoiceInput?.files?.[0]||null;
     const mode=document.querySelector('input[name="invoiceMode"]:checked')?.value||'additional';
     const selectedSourceIds=mode==='consolidated'
       ? [...document.querySelectorAll('[data-consolidation-source]:checked')]
           .map(input=>input.dataset.consolidationSource)
       : [];
 
-    if(amountValue<=0||!dueValue)return toast('Completá importe y vencimiento');
-    if(file&&file.size>10*1024*1024)return toast('La factura supera el límite de 10 MB');
+    if(amountValue<=0||!dueValue){
+      throw new Error('Completá importe y vencimiento');
+    }
+
+    if(uploadInvoice&&!file){
+      invoiceInput.click();
+      return null;
+    }
+
+    if(file&&file.size>10*1024*1024){
+      throw new Error('La factura supera el límite de 10 MB');
+    }
+
     if(mode==='consolidated'&&!selectedSourceIds.length){
-      return toast('Elegí al menos una deuda anterior incluida');
+      throw new Error('Elegí al menos una deuda anterior incluida');
     }
 
     const selectedTotal=selectedSourceIds
@@ -2292,84 +2347,192 @@ function openObligation(serviceId,key){
       .reduce((sum,item)=>sum+Number(item.amount||0),0);
 
     if(mode==='consolidated'&&amountValue<selectedTotal){
-      return toast('El total de la nueva factura no puede ser menor que las deudas incluidas');
+      throw new Error('El total de la nueva factura no puede ser menor que las deudas incluidas');
     }
 
-    const originalText=saveButton.textContent;
+    const period=periodDate(key);
+    const payload={
+      service_id:serviceId,
+      period,
+      amount:amountValue,
+      due_date:dueValue,
+      status:p?'paid':'pending',
+      notes:document.getElementById('onotes').value,
+      created_by:session.user.id
+    };
+
+    const {data:saved,error}=await sb
+      .from('obligations')
+      .upsert(payload,{onConflict:'service_id,period'})
+      .select()
+      .single();
+
+    if(error)throw error;
+
+    const {error:deleteLinkError}=await sb
+      .from('obligation_consolidations')
+      .delete()
+      .eq('target_obligation_id',saved.id);
+
+    if(deleteLinkError)throw deleteLinkError;
+
+    if(mode==='consolidated'&&selectedSourceIds.length){
+      const {error:insertLinkError}=await sb
+        .from('obligation_consolidations')
+        .insert(selectedSourceIds.map(sourceId=>({
+          source_obligation_id:sourceId,
+          target_obligation_id:saved.id,
+          created_by:session.user.id
+        })));
+
+      if(insertLinkError)throw insertLinkError;
+    }
+
+    if(uploadInvoice&&file){
+      await uploadDoc(file,serviceId,saved.id,null,'invoice');
+    }
+
+    return saved;
+  }
+
+  const saveButton=document.getElementById('saveObligation');
+  saveButton.onclick=async()=>{
+    const original=saveButton.textContent;
     saveButton.disabled=true;
-    saveButton.textContent=file?'Guardando y subiendo…':'Guardando…';
+    saveButton.textContent='Guardando…';
 
     try{
-      const period=periodDate(key);
-      const payload={
-        service_id:serviceId,
-        period,
-        amount:amountValue,
-        due_date:dueValue,
-        status:p?'paid':'pending',
-        notes:document.getElementById('onotes').value,
-        created_by:session.user.id
-      };
-
-      const {data:saved,error}=await sb
-        .from('obligations')
-        .upsert(payload,{onConflict:'service_id,period'})
-        .select()
-        .single();
-
-      if(error)throw error;
-
-      const {error:deleteLinkError}=await sb
-        .from('obligation_consolidations')
-        .delete()
-        .eq('target_obligation_id',saved.id);
-
-      if(deleteLinkError)throw deleteLinkError;
-
-      if(mode==='consolidated'&&selectedSourceIds.length){
-        const {error:insertLinkError}=await sb
-          .from('obligation_consolidations')
-          .insert(selectedSourceIds.map(sourceId=>({
-            source_obligation_id:sourceId,
-            target_obligation_id:saved.id,
-            created_by:session.user.id
-          })));
-
-        if(insertLinkError)throw insertLinkError;
-      }
-
-      if(file){
-        await uploadDoc(file,serviceId,saved.id,null,'invoice');
-      }
-
+      await saveMonthData({uploadInvoice:false});
       closeModal();
       await reloadGroup();
       renderApp();
-      toast(
-        mode==='consolidated'
-          ? 'Factura consolidada guardada sin duplicar la deuda'
-          : file
-            ? 'Factura adicional guardada'
-            : 'Datos guardados'
-      );
+      toast('Cambios guardados');
     }catch(err){
-      console.error('Error guardando obligación:',err);
+      console.error('Error guardando cambios:',err);
       const message=String(err?.message||'');
       toast(
         message.includes('duplicate key')||message.includes('23505')
           ? 'Una de las deudas seleccionadas ya está incluida en otra factura'
-          : message||'No se pudo guardar'
+          : message||'No se pudieron guardar los cambios'
       );
     }finally{
       if(document.getElementById('saveObligation')){
         saveButton.disabled=false;
-        saveButton.textContent=originalText;
+        saveButton.textContent=original;
       }
     }
   };
 
+  addInvoiceButton.onclick=async()=>{
+    if(!invoiceInput.files[0]){
+      invoiceInput.click();
+      return;
+    }
+
+    const original=addInvoiceButton.textContent;
+    addInvoiceButton.disabled=true;
+    addInvoiceButton.textContent='Subiendo…';
+
+    try{
+      await saveMonthData({uploadInvoice:true});
+      closeModal();
+      await reloadGroup();
+      renderApp();
+      toast('Factura agregada');
+    }catch(err){
+      console.error('Error agregando factura:',err);
+      const message=String(err?.message||'');
+      toast(
+        message.includes('duplicate key')||message.includes('23505')
+          ? 'Una de las deudas seleccionadas ya está incluida en otra factura'
+          : message||'No se pudo agregar la factura'
+      );
+    }finally{
+      if(document.getElementById('addInvoiceButton')){
+        addInvoiceButton.disabled=false;
+        addInvoiceButton.textContent=original;
+      }
+    }
+  };
+
+  if(document.getElementById('deleteMonthData')){
+    document.getElementById('deleteMonthData').onclick=()=>{
+      deleteObligationMonth(o.id,serviceId,key);
+    };
+  }
+
   if(o&&!p&&!sourceLink){
     document.getElementById('markPaid').onclick=()=>openPayModal(o);
+  }
+}
+
+async function deleteObligationMonth(obligationId,serviceId,key){
+  if(!canEdit())return toast('No tenés permiso para borrar esta carga');
+
+  const obligation=obligations.find(item=>item.id===obligationId);
+  if(!obligation)return toast('No se encontró la carga del mes');
+
+  const payment=paymentFor(obligationId);
+  const invoiceDocs=documents.filter(item=>item.obligation_id===obligationId);
+  const receiptDocs=payment
+    ? documents.filter(item=>item.payment_id===payment.id)
+    : [];
+  const allDocs=[...invoiceDocs,...receiptDocs];
+  const sourceLink=consolidationForSource(obligationId);
+  const targetLinks=consolidationsForTarget(obligationId);
+
+  const consequences=[
+    `${monthLabel(key)} de ${services.find(item=>item.id===serviceId)?.name||'este servicio'}`,
+    invoiceDocs.length
+      ? `${invoiceDocs.length} factura${invoiceDocs.length===1?'':'s'}`
+      : null,
+    payment
+      ? 'el pago registrado y sus aportes'
+      : null,
+    receiptDocs.length
+      ? `${receiptDocs.length} comprobante${receiptDocs.length===1?'':'s'} de pago`
+      : null,
+    sourceLink
+      ? 'la relación con la factura que incluía esta deuda'
+      : null,
+    targetLinks.length
+      ? `${targetLinks.length} deuda${targetLinks.length===1?'':'s'} anterior${targetLinks.length===1?'':'es'} volverá${targetLinks.length===1?'':'n'} a quedar pendiente${targetLinks.length===1?'':'s'}`
+      : null
+  ].filter(Boolean);
+
+  const confirmed=confirm(
+    `¿Borrar todos los datos de este mes?\n\nSe eliminará:\n• ${consequences.join('\n• ')}\n\nEl servicio seguirá existiendo en los demás meses. Esta acción no se puede deshacer.`
+  );
+
+  if(!confirmed)return;
+
+  try{
+    const paths=allDocs.map(item=>item.file_path).filter(Boolean);
+
+    const {error}=await sb
+      .from('obligations')
+      .delete()
+      .eq('id',obligationId);
+
+    if(error)throw error;
+
+    if(paths.length){
+      const {error:storageError}=await sb.storage
+        .from('documents')
+        .remove(paths);
+
+      if(storageError){
+        console.warn('La carga se borró, pero quedaron archivos físicos:',storageError.message);
+      }
+    }
+
+    closeModal();
+    await reloadGroup();
+    renderApp();
+    toast(`Datos de ${monthLabel(key)} eliminados`);
+  }catch(err){
+    console.error('Error borrando datos del mes:',err);
+    toast(err?.message||'No se pudieron borrar los datos del mes');
   }
 }
 async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
@@ -2410,6 +2573,11 @@ async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
   return filePath;
 }
 function openPayModal(o){
+  if(paymentFor(o.id)){
+    toast('Esta factura ya está marcada como abonada');
+    return openPaymentDetail(paymentFor(o.id).id);
+  }
+
   const active=members.filter(m=>Number(m.participation_percent)>0);
   const defaults={};
   let left=Number(o.amount||0);
@@ -2423,7 +2591,10 @@ function openPayModal(o){
   });
 
   modal(`<h2>Registrar pago</h2>
-    <div class="sub">Indicá cuánto aportó realmente cada integrante.</div>
+    <div class="sub">
+      Indicá cuánto aportó realmente cada integrante.
+      Una factura mensual solo puede tener un pago activo.
+    </div>
 
     <div class="grid2">
       <div class="field">
@@ -2486,7 +2657,24 @@ function openPayModal(o){
     saveButton.disabled=true;
     saveButton.textContent='Registrando…';
 
+    let createdPaymentId=null;
+
     try{
+      const {data:existing,error:existingError}=await sb
+        .from('payments')
+        .select('id')
+        .eq('obligation_id',o.id)
+        .limit(1);
+
+      if(existingError)throw existingError;
+
+      if(existing?.length){
+        closeModal();
+        await reloadGroup();
+        renderApp();
+        return toast('Esta factura ya tenía un pago registrado');
+      }
+
       const {data:payment,error}=await sb
         .from('payments')
         .insert({
@@ -2499,6 +2687,7 @@ function openPayModal(o){
         .single();
 
       if(error)throw error;
+      createdPaymentId=payment.id;
 
       const contributionResult=await sb
         .from('payment_contributions')
@@ -2523,13 +2712,27 @@ function openPayModal(o){
         );
       }
 
+      createdPaymentId=null;
       closeModal();
       await reloadGroup();
       renderApp();
       toast('Pago registrado');
     }catch(err){
       console.error('Error registrando pago:',err);
-      toast(err?.message||'No se pudo registrar el pago');
+
+      if(createdPaymentId){
+        await sb.from('payments').delete().eq('id',createdPaymentId);
+        await sb.from('obligations').update({status:'pending'}).eq('id',o.id);
+      }
+
+      const message=String(err?.message||'');
+      toast(
+        message.includes('duplicate key')
+        || message.includes('23505')
+        || message.includes('payments_one_per_obligation')
+          ? 'Esta factura ya tiene un pago registrado'
+          : message||'No se pudo registrar el pago'
+      );
     }finally{
       if(document.getElementById('savePay')){
         saveButton.disabled=false;
@@ -2723,7 +2926,9 @@ async function deleteService(serviceId){
 }
 function openPaymentDetail(id){
   const p=payments.find(x=>x.id===id);
-  const o=obligations.find(x=>x.id===p?.obligation_id);
+  if(!p)return toast('No se encontró el pago');
+
+  const o=obligations.find(x=>x.id===p.obligation_id);
   const s=services.find(x=>x.id===o?.service_id);
   const cs=contributions.filter(x=>x.payment_id===id);
   const invoices=o
@@ -2776,6 +2981,7 @@ function openPaymentDetail(id){
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
       <button class="btn soft" id="openFolderBtn">Abrir carpeta</button>
+      ${canEdit()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
     </div>`);
 
   bindDocumentCards({
@@ -2783,6 +2989,90 @@ function openPaymentDetail(id){
   });
 
   document.getElementById('openFolderBtn').onclick=()=>openFolder(s.id);
+
+  if(document.getElementById('annulPaymentBtn')){
+    document.getElementById('annulPaymentBtn').onclick=()=>annulPayment(id);
+  }
+}
+
+async function annulPayment(paymentId){
+  if(!canEdit())return toast('No tenés permiso para anular pagos');
+
+  const payment=payments.find(item=>item.id===paymentId);
+  const obligation=obligations.find(item=>item.id===payment?.obligation_id);
+  const service=services.find(item=>item.id===obligation?.service_id);
+
+  if(!payment||!obligation)return toast('No se encontró el pago');
+
+  const receipts=documents.filter(
+    item=>item.payment_id===paymentId&&item.kind==='receipt'
+  );
+
+  const confirmed=confirm(
+    `¿Anular el pago de ${service?.name||'este servicio'} correspondiente a ${monthLabel(obligation.period.slice(0,7))}?\n\n`+
+    `Se eliminarán el pago, los aportes registrados y ${receipts.length} comprobante${receipts.length===1?'':'s'}.\n`+
+    `La factura volverá a quedar pendiente y las notificaciones podrán reanudarse.\n\n`+
+    `Esta acción no se puede deshacer.`
+  );
+
+  if(!confirmed)return;
+
+  const button=document.getElementById('annulPaymentBtn');
+  if(button){
+    button.disabled=true;
+    button.textContent='Anulando…';
+  }
+
+  try{
+    const receiptPaths=receipts.map(item=>item.file_path).filter(Boolean);
+
+    const {error:deleteError}=await sb
+      .from('payments')
+      .delete()
+      .eq('id',paymentId);
+
+    if(deleteError)throw deleteError;
+
+    const {data:remaining,error:remainingError}=await sb
+      .from('payments')
+      .select('id')
+      .eq('obligation_id',obligation.id)
+      .limit(1);
+
+    if(remainingError)throw remainingError;
+
+    if(!remaining?.length){
+      const {error:statusError}=await sb
+        .from('obligations')
+        .update({status:'pending'})
+        .eq('id',obligation.id);
+
+      if(statusError)throw statusError;
+    }
+
+    if(receiptPaths.length){
+      const {error:storageError}=await sb.storage
+        .from('documents')
+        .remove(receiptPaths);
+
+      if(storageError){
+        console.warn('El pago se anuló, pero quedaron archivos físicos:',storageError.message);
+      }
+    }
+
+    closeModal();
+    await reloadGroup();
+    renderApp();
+    toast('Pago anulado; la factura volvió a pendiente');
+  }catch(err){
+    console.error('Error anulando pago:',err);
+    toast(err?.message||'No se pudo anular el pago');
+  }finally{
+    if(document.getElementById('annulPaymentBtn')){
+      document.getElementById('annulPaymentBtn').disabled=false;
+      document.getElementById('annulPaymentBtn').textContent='Anular pago';
+    }
+  }
 }
 function permissionSummary(member){
   const ownerMember=member.user_id===group.created_by;
