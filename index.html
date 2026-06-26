@@ -53,7 +53,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .document-card-actions{display:flex;gap:6px;flex-wrap:wrap}.document-card-actions .btn{flex:1}
 .local-preview{margin-top:10px}.local-preview.hidden{display:none}.local-preview-title{font-size:12px;font-weight:850;margin-bottom:6px}
 
-.stat{padding:18px}.stat span{display:block;color:var(--muted);font-size:13px}.stat strong{display:block;font-size:24px;margin-top:6px}
+.stat{padding:18px}.stat span{display:block;color:var(--muted);font-size:13px}.stat strong{display:block;font-size:24px;margin-top:6px}.stat .hint{display:block;color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.stat .mini{display:block;color:var(--ink);font-size:12px;line-height:1.35;margin-top:8px}
 .matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
 .missing{background:#fafcfa}.paid{background:#e7f5ff;border-color:#a8d4f5}
@@ -87,7 +87,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 
 .access-grid{display:grid;grid-template-columns:minmax(180px,1fr) 145px 105px 120px 80px;gap:8px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center}
 .access-check{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--muted)}.access-check input{width:auto}
-.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.report-card{padding:18px}.report-card span{display:block;color:var(--muted);font-size:12px}.report-card strong{display:block;font-size:24px;margin-top:6px}
+.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.report-card{padding:18px}.report-card span{display:block;color:var(--muted);font-size:12px}.report-card strong{display:block;font-size:24px;margin-top:6px}.report-card small{display:block;color:var(--muted);font-size:12px;line-height:1.35;margin-top:7px}
 .report-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}.report-panel{padding:20px}.report-panel h2{margin:0 0 5px}.report-panel>p{margin:0 0 16px;color:var(--muted);font-size:13px}
 .report-row{display:grid;grid-template-columns:minmax(100px,1fr) 2fr auto;gap:10px;align-items:center;padding:8px 0}.report-row+.report-row{border-top:1px solid var(--line)}.report-label{font-size:13px;font-weight:700}.report-track{height:9px;border-radius:999px;background:#edf1ef;overflow:hidden}.report-fill{height:100%;border-radius:999px;background:var(--brand)}.report-value{font-size:12px;font-weight:800;white-space:nowrap}
 .report-table{width:100%;border-collapse:collapse}.report-table th,.report-table td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:13px}.report-table th{color:var(--muted);font-size:11px;text-transform:uppercase}
@@ -1385,6 +1385,16 @@ function renderServices(ms){
   const previousDebts=carriedDebts();
   const currentTotals=monthTotals(baseMonth);
   const displayedTotals=ms.map(monthTotals);
+  const basePeriod=periodDate(baseMonth);
+  const previousPendingAmount=previousDebts.reduce((a,o)=>a+Number(o.amount||0),0);
+  const currentPendingAmount=pending
+    .filter(o=>o.period===basePeriod)
+    .reduce((a,o)=>a+Number(o.amount||0),0);
+  const futurePendingAmount=pending
+    .filter(o=>o.period>basePeriod)
+    .reduce((a,o)=>a+Number(o.amount||0),0);
+  const pendingTotalAmount=pending.reduce((a,o)=>a+Number(o.amount||0),0);
+  const overdueAmount=over.reduce((a,o)=>a+Number(o.amount||0),0);
   const missing=services.filter(s=>
     s.frequency!=='one_time'
     && monthAppliesToService(s,baseMonth)
@@ -1411,24 +1421,31 @@ function renderServices(ms){
 
   <div class="summary">
     <div class="stat card">
-      <span>Falta cargar en ${monthLabel(baseMonth)}</span>
+      <span>Servicios todavía sin cargar · ${monthLabel(baseMonth)}</span>
       <strong>${missing}</strong>
+      <small class="hint">Son servicios que deberían tener carga este mes pero todavía no tienen importe, vencimiento o factura.</small>
     </div>
     <div class="stat card">
-      <span>Total de ${monthLabel(baseMonth)}</span>
+      <span>Total cargado de ${monthLabel(baseMonth)}</span>
       <strong>${fmtMoney(currentTotals.total)}</strong>
+      <small class="mini">Pagado ${fmtMoney(currentTotals.paid)} · Pendiente ${fmtMoney(currentTotals.pending)}</small>
+      <small class="hint">Este número mira solo el mes que estás viendo.</small>
     </div>
     <div class="stat card">
-      <span>Pendiente total</span>
-      <strong>${fmtMoney(pending.reduce((a,o)=>a+Number(o.amount||0),0))}</strong>
+      <span>Pendiente acumulado de todos los meses</span>
+      <strong>${fmtMoney(pendingTotalAmount)}</strong>
+      <small class="mini">Meses anteriores ${fmtMoney(previousPendingAmount)} · ${monthLabel(baseMonth)} ${fmtMoney(currentPendingAmount)} · Meses futuros cargados ${fmtMoney(futurePendingAmount)}</small>
+      <small class="hint">Incluye todo lo pendiente, aunque sea de otro mes.</small>
     </div>
     <div class="stat card">
-      <span>Deuda vencida</span>
-      <strong>${fmtMoney(over.reduce((a,o)=>a+Number(o.amount||0),0))}</strong>
+      <span>Ya vencido</span>
+      <strong>${fmtMoney(overdueAmount)}</strong>
+      <small class="hint">Facturas pendientes cuyo vencimiento ya pasó.</small>
     </div>
     <div class="stat card">
-      <span>Deuda de meses anteriores</span>
-      <strong>${fmtMoney(previousDebts.reduce((a,o)=>a+Number(o.amount||0),0))}</strong>
+      <span>Arrastre de meses anteriores</span>
+      <strong>${fmtMoney(previousPendingAmount)}</strong>
+      <small class="hint">Deudas pendientes de meses anteriores al mes que estás viendo.</small>
     </div>
   </div>
 
@@ -1621,10 +1638,26 @@ function renderReports(){
     </div>
 
     <div class="report-grid">
-      <div class="report-card card"><span>Gastos de ${monthLabel(baseMonth)}</span><strong>${fmtMoney(current.total)}</strong></div>
-      <div class="report-card card"><span>Pendiente total</span><strong>${fmtMoney(pending.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
-      <div class="report-card card"><span>Deuda vencida</span><strong>${fmtMoney(overdue.reduce((sum,o)=>sum+Number(o.amount||0),0))}</strong></div>
-      <div class="report-card card"><span>Proyección próximos 6 meses</span><strong>${fmtMoney(forecastTotal)}</strong></div>
+      <div class="report-card card">
+        <span>Total cargado de ${monthLabel(baseMonth)}</span>
+        <strong>${fmtMoney(current.total)}</strong>
+        <small>Pagado ${fmtMoney(current.paid)} · Pendiente ${fmtMoney(current.pending)}</small>
+      </div>
+      <div class="report-card card">
+        <span>Pendiente acumulado de todos los meses</span>
+        <strong>${fmtMoney(pendingTotalAmount)}</strong>
+        <small>Anteriores ${fmtMoney(previousPendingAmount)} · ${monthLabel(baseMonth)} ${fmtMoney(currentPendingAmount)} · Futuros ${fmtMoney(futurePendingAmount)}</small>
+      </div>
+      <div class="report-card card">
+        <span>Facturas ya vencidas</span>
+        <strong>${fmtMoney(overdueAmount)}</strong>
+        <small>Corresponde solo a deudas pendientes cuyo vencimiento ya pasó.</small>
+      </div>
+      <div class="report-card card">
+        <span>Proyección próximos 6 meses</span>
+        <strong>${fmtMoney(forecastTotal)}</strong>
+        <small>Estimación de gastos futuros según servicios mensuales y planes ya configurados.</small>
+      </div>
     </div>
 
     ${renderForecast()}
