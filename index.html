@@ -32,7 +32,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;background:white;color:var(--ink)}.field textarea{min-height:80px}
 .authswitch{margin-top:16px;text-align:center;color:var(--muted)}.linkbtn{border:0;background:none;color:var(--brand);font-weight:800;cursor:pointer}
 .notice{padding:12px 14px;border-radius:12px;background:#fff8db;color:#725700;margin:14px 0;font-size:14px}
-.workspace-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}.workspace{padding:22px;cursor:pointer}.workspace:hover{border-color:var(--brand)}.workspace h3{margin:0 0 6px}.workspace p{color:var(--muted);margin:0}
+.workspace-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}.workspace{padding:22px;cursor:pointer}.workspace:hover{border-color:var(--brand)}.workspace h3{margin:0 0 6px}.workspace p{color:var(--muted);margin:0}.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.space-status{display:inline-block;margin-top:10px;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800}.space-status.suspended{background:#fff1d8;color:#9a5a00}.space-status.archived{background:#eef0f2;color:#5d6670}.archived-section{margin-top:26px}.archived-section summary{cursor:pointer;font-weight:850;margin-bottom:12px}
 .pagehead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:18px}.pagehead h1{margin:0 0 5px;font-size:28px}.pagehead p{margin:0;color:var(--muted)}
 .tabs{display:flex;gap:6px;margin:18px 0}.tab{border:0;background:transparent;padding:10px 14px;border-radius:12px;font-weight:800;color:var(--muted);cursor:pointer}.tab.active{background:white;color:var(--brand);box-shadow:0 3px 15px rgba(20,33,29,.06)}
 .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-bottom:18px}
@@ -907,17 +907,46 @@ async function loadGroups(){
     };
   }
 
-  const {data,error}=await sb.from('memberships').select('*,groups(id,name,type,join_code,created_by)').eq('user_id',session.user.id).eq('active',true);
+  const {data,error}=await sb.from('memberships').select('*,groups(id,name,type,join_code,created_by,status)').eq('user_id',session.user.id).eq('active',true);
   if(error){toast(error.message);return}
   groups=(data||[]).map(x=>({...x.groups,membership:x}));
   renderGroups();
 }
 function renderGroups(){
+  const activeGroups=groups.filter(g=>(g.status||'active')==='active');
+  const suspendedGroups=groups.filter(g=>g.status==='suspended');
+  const archivedGroups=groups.filter(g=>g.status==='archived');
+
+  const spaceCard=(g)=>{
+    const owner=g.created_by===session.user.id;
+    const status=g.status||'active';
+    const canOpen=status==='active';
+    return `<div class="workspace card" ${canOpen?`data-group="${g.id}"`:''} style="${canOpen?'':'cursor:default'}">
+      <h3>${esc(g.name)}</h3>
+      <p>
+        ${g.type==='company'?'Empresa':'Grupo familiar'} ·
+        ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':'Solo consulta'}
+        <span class="alias-chip">${esc(g.membership.display_name)}</span>
+        ${owner?'<span class="owner-chip">Titular</span>':''}
+      </p>
+      ${status==='suspended'?'<span class="space-status suspended">Suspendido</span>':''}
+      ${status==='archived'?'<span class="space-status archived">Archivado</span>':''}
+      ${owner?`<div class="workspace-actions">
+        ${status==='active'?`
+          <button class="btn outline small" data-space-action="suspended" data-space-id="${g.id}">Suspender</button>
+          <button class="btn soft small" data-space-action="archived" data-space-id="${g.id}">Archivar</button>
+        `:`
+          <button class="btn primary small" data-space-action="active" data-space-id="${g.id}">Reactivar</button>
+        `}
+      </div>`:''}
+    </div>`;
+  };
+
   app.innerHTML=`<main>
     <div class="pagehead">
       <div>
         <h1>Tus espacios</h1>
-        <p>Accedé únicamente a los espacios que tenés habilitados. La creación de nuevos espacios requiere autorización central.</p>
+        <p>Accedé únicamente a los espacios que tenés habilitados. Suspender o archivar nunca borra información.</p>
       </div>
       <div class="actions">
         ${platformPermissions.can_create_spaces?'<button class="btn primary" id="newGroup">+ Crear espacio</button>':''}
@@ -926,26 +955,57 @@ function renderGroups(){
     </div>
 
     <div class="workspace-grid">
-      ${groups.map(g=>{
-        const owner=g.created_by===session.user.id;
-        return `<div class="workspace card" data-group="${g.id}">
-          <h3>${esc(g.name)}</h3>
-          <p>
-            ${g.type==='company'?'Empresa':'Grupo familiar'} ·
-            ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':'Solo consulta'}
-            <span class="alias-chip">${esc(g.membership.display_name)}</span>
-            ${owner?'<span class="owner-chip">Titular</span>':''}
-          </p>
-        </div>`;
-      }).join('')||`<div class="card workspace" style="cursor:default">
-        <h3>Sin espacios habilitados</h3>
-        <p>Tu cuenta está activa, pero todavía no tiene acceso a ningún espacio. El administrador de la plataforma debe habilitarte.</p>
+      ${activeGroups.map(spaceCard).join('')||`<div class="card workspace" style="cursor:default">
+        <h3>Sin espacios activos</h3>
+        <p>No tenés espacios activos disponibles en este momento.</p>
       </div>`}
     </div>
+
+    ${suspendedGroups.length?`
+      <div class="archived-section">
+        <h2>Espacios suspendidos</h2>
+        <p class="sub">No pueden utilizarse hasta que el titular los reactive.</p>
+        <div class="workspace-grid">${suspendedGroups.map(spaceCard).join('')}</div>
+      </div>
+    `:''}
+
+    ${archivedGroups.length?`
+      <details class="archived-section">
+        <summary>Espacios archivados (${archivedGroups.length})</summary>
+        <p class="sub">Están ocultos de la vista principal y conservan toda su información.</p>
+        <div class="workspace-grid">${archivedGroups.map(spaceCard).join('')}</div>
+      </details>
+    `:''}
   </main>`;
 
   document.querySelectorAll('[data-group]').forEach(element=>{
     element.onclick=()=>openGroup(element.dataset.group);
+  });
+
+  document.querySelectorAll('[data-space-action]').forEach(button=>{
+    button.onclick=async event=>{
+      event.stopPropagation();
+      const status=button.dataset.spaceAction;
+      const id=button.dataset.spaceId;
+      const labels={
+        suspended:'suspender',
+        archived:'archivar',
+        active:'reactivar'
+      };
+      const message=status==='active'
+        ? '¿Reactivar este espacio? Volverá a estar disponible para sus integrantes.'
+        : `¿${labels[status][0].toUpperCase()+labels[status].slice(1)} este espacio? Toda la información se conservará.`;
+      if(!confirm(message))return;
+
+      button.disabled=true;
+      const {error}=await sb.rpc('set_group_status',{p_group_id:id,p_status:status});
+      if(error){
+        button.disabled=false;
+        return toast(error.message);
+      }
+      toast(status==='active'?'Espacio reactivado':status==='suspended'?'Espacio suspendido':'Espacio archivado');
+      await loadGroups();
+    };
   });
 
   document.getElementById('logout').onclick=()=>sb.auth.signOut();
@@ -961,6 +1021,10 @@ function openCreateGroup(){
 }
 async function openGroup(id){
   group=groups.find(g=>g.id===id)||{id};
+  if((group.status||'active')!=='active'){
+    toast(group.status==='suspended'?'Este espacio está suspendido':'Este espacio está archivado');
+    return;
+  }
   membership=group.membership||null;
   app.innerHTML='<div class="spinner">Sincronizando información…</div>';
   await reloadGroup();
