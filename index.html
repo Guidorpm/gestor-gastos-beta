@@ -417,7 +417,7 @@ function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth()
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
 function canEdit(){return membership?.role==='admin'}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
-function canManageAccess(){return isOwner()&&platformPermissions.can_manage_access===true}
+function canManageAccess(){return isOwner()}
 function canViewReports(){return isOwner()||membership?.can_view_reports===true}
 function currentRoleLabel(){if(isOwner())return 'Administrador principal';return canEdit()?'Administrador':'Solo consulta'}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
@@ -3316,7 +3316,7 @@ async function saveUsersAccess(){
   }
 }
 function openCreateInternalAccess(){
-  if(!canManageAccess())return toast('Solo un titular autorizado por la plataforma puede crear accesos');
+  if(!canManageAccess())return toast('Solo el titular del espacio puede crear y administrar accesos');
 
   modal(`<h2>Crear acceso interno</h2>
     <div class="sub">
