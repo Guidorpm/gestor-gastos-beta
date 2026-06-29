@@ -164,6 +164,7 @@ const DEFAULT_CATEGORIES=[
   'Proveedores','Mantenimiento','Transporte','Otros'
 ];
 let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[], serviceCategories=[], internalAccounts=[], consolidations=[];
+let platformPermissions={is_platform_admin:false,can_create_spaces:false,can_manage_access:false};
 let tab='services', baseMonth=monthKey(new Date()), authMode='login';
 let notificationState={
   supported:false,
@@ -416,7 +417,7 @@ function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth()
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
 function canEdit(){return membership?.role==='admin'}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
-function canManageAccess(){return isOwner()}
+function canManageAccess(){return isOwner()&&platformPermissions.can_manage_access===true}
 function canViewReports(){return isOwner()||membership?.can_view_reports===true}
 function currentRoleLabel(){if(isOwner())return 'Administrador principal';return canEdit()?'Administrador':'Solo consulta'}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
@@ -551,9 +552,9 @@ async function continueAfterAuthentication(){
 function renderAuth(mode='login'){
   authMode=mode;
 
+  if(mode==='register')mode='login';
   const tabs=`<div class="auth-tabs">
     <button class="auth-tab ${mode==='login'?'active':''}" data-auth-mode="login">Ingresar</button>
-    <button class="auth-tab ${mode==='register'?'active':''}" data-auth-mode="register">Crear cuenta</button>
     <button class="auth-tab ${mode==='recover'?'active':''}" data-auth-mode="recover">Recuperar</button>
   </div>`;
 
@@ -892,6 +893,20 @@ function renderForcedPasswordChange(alias){
 }
 async function loadGroups(){
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
+
+  const {data:permissionData,error:permissionError}=await sb.rpc('current_platform_permissions');
+  if(permissionError){
+    console.warn('No se pudieron consultar los permisos centrales:',permissionError.message);
+    platformPermissions={is_platform_admin:false,can_create_spaces:false,can_manage_access:false};
+  }else{
+    const permission=Array.isArray(permissionData)?permissionData[0]:permissionData;
+    platformPermissions={
+      is_platform_admin:permission?.is_platform_admin===true,
+      can_create_spaces:permission?.can_create_spaces===true,
+      can_manage_access:permission?.can_manage_access===true
+    };
+  }
+
   const {data,error}=await sb.from('memberships').select('*,groups(id,name,type,join_code,created_by)').eq('user_id',session.user.id).eq('active',true);
   if(error){toast(error.message);return}
   groups=(data||[]).map(x=>({...x.groups,membership:x}));
@@ -902,10 +917,10 @@ function renderGroups(){
     <div class="pagehead">
       <div>
         <h1>Tus espacios</h1>
-        <p>Creá y administrá tus propios espacios. Los datos de otros titulares no son visibles.</p>
+        <p>Accedé únicamente a los espacios que tenés habilitados. La creación de nuevos espacios requiere autorización central.</p>
       </div>
       <div class="actions">
-        <button class="btn primary" id="newGroup">+ Crear espacio</button>
+        ${platformPermissions.can_create_spaces?'<button class="btn primary" id="newGroup">+ Crear espacio</button>':''}
         <button class="btn soft" id="logout">Salir</button>
       </div>
     </div>
@@ -923,8 +938,8 @@ function renderGroups(){
           </p>
         </div>`;
       }).join('')||`<div class="card workspace" style="cursor:default">
-        <h3>Tu cuenta ya está lista</h3>
-        <p>Creá tu primer espacio. Vas a ser su administrador titular y podrás delegar accesos.</p>
+        <h3>Sin espacios habilitados</h3>
+        <p>Tu cuenta está activa, pero todavía no tiene acceso a ningún espacio. El administrador de la plataforma debe habilitarte.</p>
       </div>`}
     </div>
   </main>`;
@@ -934,9 +949,10 @@ function renderGroups(){
   });
 
   document.getElementById('logout').onclick=()=>sb.auth.signOut();
-  document.getElementById('newGroup').onclick=openCreateGroup;
+  if(document.getElementById('newGroup'))document.getElementById('newGroup').onclick=openCreateGroup;
 }
 function openCreateGroup(){
+  if(!platformPermissions.can_create_spaces)return toast('No tenés autorización para crear espacios');
   modal(`<h2>Crear espacio</h2><div class="sub">Casa, negocio u otro grupo independiente.</div>
   <div class="field"><label>Nombre</label><input id="gname" placeholder="Ej: Casa"></div>
   <div class="field"><label>Tipo</label><select id="gtype"><option value="family">Grupo familiar</option><option value="company">Empresa</option></select></div>
@@ -1893,7 +1909,7 @@ function renderPaid(){
 function bindDashboard(ms){
   if(document.getElementById('prevMonth'))prevMonth.onclick=()=>{baseMonth=shiftMonth(baseMonth,-1);renderApp()};
   if(document.getElementById('nextMonth'))nextMonth.onclick=()=>{baseMonth=shiftMonth(baseMonth,1);renderApp()};
-  if(document.getElementById('addService'))addService.onclick=openServiceModal;
+  if(document.getElementById('addService'))document.getElementById('addService').onclick=()=>openServiceModal();
   document.querySelectorAll('[data-cell]').forEach(e=>e.onclick=()=>{const [s,m]=e.dataset.cell.split('|');openObligation(s,m)});
   document.querySelectorAll('[data-folder]').forEach(e=>e.onclick=()=>openFolder(e.dataset.folder));
   document.querySelectorAll('[data-old-debt]').forEach(e=>e.onclick=()=>{
@@ -3300,7 +3316,7 @@ async function saveUsersAccess(){
   }
 }
 function openCreateInternalAccess(){
-  if(!canManageAccess())return toast('Solo el administrador principal puede crear accesos');
+  if(!canManageAccess())return toast('Solo un titular autorizado por la plataforma puede crear accesos');
 
   modal(`<h2>Crear acceso interno</h2>
     <div class="sub">
