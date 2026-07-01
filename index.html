@@ -260,7 +260,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260701-6',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260701-7',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1487,7 +1487,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Actualización comprobantes v6 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Actualización comprobantes v7 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
@@ -2344,6 +2344,14 @@ function openObligation(serviceId,key){
               documentCard(document,`Comprobante ${index+1}`,canEdit())
             ).join('')}
           </div>`:''}
+
+        ${canEdit()?`
+          <div class="workspace-actions">
+            <button class="btn primary small" id="addReceiptToPayment">
+              ${existingReceipts.length?'Agregar otro comprobante':'Cargar comprobante'}
+            </button>
+          </div>
+        `:''}
       </div>`:''}
 
     <div class="field">
@@ -2427,6 +2435,12 @@ function openObligation(serviceId,key){
   bindDocumentCards({
     onDelete:()=>openObligation(serviceId,key)
   });
+
+  if(document.getElementById('addReceiptToPayment')){
+    document.getElementById('addReceiptToPayment').onclick=()=>{
+      openAddReceiptModal(p.id,()=>openObligation(serviceId,key));
+    };
+  }
 
   if(!canEdit())return;
 
@@ -2688,6 +2702,86 @@ async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
 
   return filePath;
 }
+function openAddReceiptModal(paymentId,onDone){
+  if(!canEdit())return toast('No tenés permiso para cargar comprobantes');
+
+  const payment=payments.find(item=>item.id===paymentId);
+  const obligation=obligations.find(item=>item.id===payment?.obligation_id);
+  const service=services.find(item=>item.id===obligation?.service_id);
+
+  if(!payment||!obligation||!service){
+    return toast('No se encontró el pago correspondiente');
+  }
+
+  modal(`<h2>Cargar comprobante de pago</h2>
+    <div class="sub">
+      El pago ya está registrado. Solamente se agregará el archivo correcto.
+    </div>
+
+    <div class="field">
+      <label>Comprobante</label>
+      <input id="newReceiptFile" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">
+        PDF, JPG, PNG o WEBP. Máximo 10 MB.
+      </div>
+      <div id="newReceiptPreview" class="local-preview hidden"></div>
+    </div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cancelar</button>
+      <button class="btn primary" id="saveNewReceipt">Guardar comprobante</button>
+    </div>`);
+
+  const input=document.getElementById('newReceiptFile');
+  const preview=document.getElementById('newReceiptPreview');
+  const saveButton=document.getElementById('saveNewReceipt');
+
+  input.onchange=()=>{
+    renderLocalFilePreview(
+      input,
+      preview,
+      'Vista previa del comprobante'
+    );
+  };
+
+  saveButton.onclick=async()=>{
+    const file=input.files?.[0];
+    if(!file){
+      input.click();
+      return;
+    }
+
+    const original=saveButton.textContent;
+    saveButton.disabled=true;
+    saveButton.textContent='Subiendo…';
+
+    try{
+      await uploadDoc(
+        file,
+        service.id,
+        obligation.id,
+        payment.id,
+        'receipt'
+      );
+
+      closeModal();
+      await reloadGroup();
+      toast('Comprobante cargado');
+
+      if(typeof onDone==='function')onDone();
+      else renderApp();
+    }catch(err){
+      console.error('Error cargando comprobante:',err);
+      toast(err?.message||'No se pudo cargar el comprobante');
+    }finally{
+      if(document.getElementById('saveNewReceipt')){
+        saveButton.disabled=false;
+        saveButton.textContent=original;
+      }
+    }
+  };
+}
+
 function openPayModal(o){
   if(paymentFor(o.id)){
     toast('Esta factura ya está marcada como abonada');
@@ -3092,6 +3186,14 @@ function openPaymentDetail(id){
             documentCard(document,`Comprobante ${index+1}`,canEdit())
           ).join('')}
         </div>`:''}
+
+      ${canEdit()?`
+        <div class="workspace-actions">
+          <button class="btn primary small" id="addReceiptFromPaymentDetail">
+            ${receipts.length?'Agregar otro comprobante':'Cargar comprobante'}
+          </button>
+        </div>
+      `:''}
     </div>
 
     <div class="modalactions">
@@ -3103,6 +3205,12 @@ function openPaymentDetail(id){
   bindDocumentCards({
     onDelete:()=>openPaymentDetail(id)
   });
+
+  if(document.getElementById('addReceiptFromPaymentDetail')){
+    document.getElementById('addReceiptFromPaymentDetail').onclick=()=>{
+      openAddReceiptModal(id,()=>openPaymentDetail(id));
+    };
+  }
 
   document.getElementById('openFolderBtn').onclick=()=>openFolder(s.id);
 
