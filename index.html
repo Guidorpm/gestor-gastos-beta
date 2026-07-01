@@ -260,8 +260,9 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js',{scope:'./'})
+      .register('./service-worker.js?v=20260701-6',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
+        try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
         return registration;
       })
@@ -1486,7 +1487,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental.</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Actualización comprobantes v6 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
@@ -2340,7 +2341,7 @@ function openObligation(serviceId,key){
         ${existingReceipts.length?`
           <div class="document-gallery">
             ${existingReceipts.map((document,index)=>
-              documentCard(document,`Comprobante ${index+1}`,false)
+              documentCard(document,`Comprobante ${index+1}`,canEdit())
             ).join('')}
           </div>`:''}
       </div>`:''}
@@ -2956,7 +2957,7 @@ function openFolder(serviceId){
             <h3>Comprobantes</h3>
             <div class="document-gallery">
               ${receipts.map((document,index)=>
-                documentCard(document,`Comprobante ${index+1}`,false)
+                documentCard(document,`Comprobante ${index+1}`,canEdit())
               ).join('')}
             </div>
           </div>`:''}
