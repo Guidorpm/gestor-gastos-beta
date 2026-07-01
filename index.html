@@ -1436,7 +1436,9 @@ async function deleteStoredDocument(documentId,onDelete){
   const documentData=documents.find(item=>item.id===documentId);
   if(!documentData)return toast('No se encontró el documento');
 
-  if(!confirm(`¿Quitar "${documentData.original_name||'esta factura'}"? Esta acción no se puede deshacer.`)){
+  const documentLabel=documentData.kind==='receipt'?'comprobante de pago':'factura';
+
+  if(!confirm(`¿Quitar el ${documentLabel} "${documentData.original_name||'archivo'}"?\n\nEl pago registrado no se modificará. Esta acción no se puede deshacer.`)){
     return;
   }
 
@@ -1454,7 +1456,7 @@ async function deleteStoredDocument(documentId,onDelete){
   if(storageError)console.warn('No se pudo eliminar el archivo físico:',storageError.message);
 
   await reloadGroup();
-  toast('Factura quitada');
+  toast(documentData.kind==='receipt'?'Comprobante quitado':'Factura quitada');
 
   if(typeof onDelete==='function')onDelete();
   else renderApp();
@@ -3086,7 +3088,7 @@ function openPaymentDetail(id){
       ${receipts.length?`
         <div class="document-gallery">
           ${receipts.map((document,index)=>
-            documentCard(document,`Comprobante ${index+1}`,false)
+            documentCard(document,`Comprobante ${index+1}`,canEdit())
           ).join('')}
         </div>`:''}
     </div>
