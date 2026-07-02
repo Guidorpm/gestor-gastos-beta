@@ -54,7 +54,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .local-preview{margin-top:10px}.local-preview.hidden{display:none}.local-preview-title{font-size:12px;font-weight:850;margin-bottom:6px}
 
 .stat{padding:18px}.stat span{display:block;color:var(--muted);font-size:13px}.stat strong{display:block;font-size:24px;margin-top:6px}.stat .hint{display:block;color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.stat .mini{display:block;color:var(--ink);font-size:12px;line-height:1.35;margin-top:8px}
-.matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
+.matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.private-service-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#efe9ff;color:#6543a5;font-size:10px;font-weight:900;vertical-align:middle}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
 .missing{background:#fafcfa}.paid{background:#e7f5ff;border-color:#a8d4f5}
 .included{background:#f0ebff;border-color:#c8b7f2}.included .status{color:#6941a5}
@@ -260,7 +260,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260701-7',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260702-8',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1487,7 +1487,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Actualización comprobantes v7 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
@@ -1546,7 +1546,7 @@ function renderServices(ms){
         ${services.map(s=>`
           <tr>
             <td class="service-cell">
-              <div class="service-name">${esc(s.name)}</div>
+              <div class="service-name">${esc(s.name)}${isOwner()&&s.is_private?'<span class="private-service-badge">PRIVADO</span>':''}</div>
               <div class="service-meta">${esc(s.category)} · ${frequencyLabel(s)}</div>
               ${s.frequency==='plan'?`<div class="service-meta">${esc(servicePlanDescription(s))}</div>`:''}
             </td>
@@ -2021,6 +2021,19 @@ function openServiceModal(serviceId=null){
       <input id="sname" value="${esc(existing?.name||'')}" placeholder="Ej: Moratoria ARCA">
     </div>
 
+    ${isOwner()?`
+      <div class="field">
+        <label>Privacidad</label>
+        <label class="checkline">
+          <input id="servicePrivate" type="checkbox" ${existing?.is_private?'checked':''}>
+          <span>
+            <strong>Servicio privado</strong><br>
+            <small>Solo el titular podrá verlo. No aparecerá para administradores, cargadores ni usuarios de consulta.</small>
+          </span>
+        </label>
+      </div>
+    `:''}
+
     <div class="grid2">
       <div class="field">
         <label>Categoría</label>
@@ -2130,6 +2143,9 @@ function openServiceModal(serviceId=null){
       name,
       category:categoryValue,
       frequency:frequencyValue,
+      is_private:isOwner()
+        ? !!document.getElementById('servicePrivate')?.checked
+        : !!existing?.is_private,
       plan_start_month:null,
       plan_end_month:null,
       plan_months:null
