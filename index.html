@@ -32,7 +32,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;background:white;color:var(--ink)}.field textarea{min-height:80px}
 .authswitch{margin-top:16px;text-align:center;color:var(--muted)}.linkbtn{border:0;background:none;color:var(--brand);font-weight:800;cursor:pointer}
 .notice{padding:12px 14px;border-radius:12px;background:#fff8db;color:#725700;margin:14px 0;font-size:14px}
-.workspace-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}.workspace{padding:22px;cursor:pointer}.workspace:hover{border-color:var(--brand)}.workspace h3{margin:0 0 6px}.workspace p{color:var(--muted);margin:0}.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.space-status{display:inline-block;margin-top:10px;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800}.space-status.suspended{background:#fff1d8;color:#9a5a00}.space-status.archived{background:#eef0f2;color:#5d6670}.archived-section{margin-top:26px}.archived-section summary{cursor:pointer;font-weight:850;margin-bottom:12px}
+.workspace-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}.workspace{padding:22px;cursor:pointer}.workspace:hover{border-color:var(--brand)}.workspace h3{margin:0 0 6px}.workspace p{color:var(--muted);margin:0}.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.space-status{display:inline-block;margin-top:10px;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800}.space-status.suspended{background:#fff1d8;color:#9a5a00}.space-status.archived{background:#eef0f2;color:#5d6670}.space-status.deleted{background:#ffe8e8;color:#a32228}.archived-section{margin-top:26px}.archived-section summary{cursor:pointer;font-weight:850;margin-bottom:12px}.owner-panel{margin-bottom:22px}.owner-panel h2{margin:0 0 6px}.owner-metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}.owner-metric{border:1px solid var(--line);border-radius:16px;background:#fff;padding:14px}.owner-metric span{display:block;color:var(--muted);font-size:12px}.owner-metric strong{display:block;font-size:22px;margin-top:5px}.owner-table{width:100%;border-collapse:collapse;margin-top:14px}.owner-table th,.owner-table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}.owner-table th{color:var(--muted);text-transform:uppercase;font-size:11px}.danger{background:#fff1f1!important;color:#b72e35!important}
 .pagehead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:18px}.pagehead h1{margin:0 0 5px;font-size:28px}.pagehead p{margin:0;color:var(--muted)}
 .tabs{display:flex;gap:6px;margin:18px 0}.tab{border:0;background:transparent;padding:10px 14px;border-radius:12px;font-weight:800;color:var(--muted);cursor:pointer}.tab.active{background:white;color:var(--brand);box-shadow:0 3px 15px rgba(20,33,29,.06)}
 .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-bottom:18px}
@@ -110,8 +110,8 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 @media(max-width:760px){.notification-layout{grid-template-columns:1fr}}
 
 
-@media(max-width:900px){.annual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}.user-config{grid-template-columns:1fr 1fr}}
-@media(max-width:560px){.annual-grid{grid-template-columns:1fr}.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}.auth-tabs{grid-template-columns:1fr}.user-config{grid-template-columns:1fr}.user-access-top{flex-direction:column}}
+@media(max-width:900px){.owner-metrics-grid{grid-template-columns:1fr 1fr}.annual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}.user-config{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.owner-metrics-grid{grid-template-columns:1fr}.annual-grid{grid-template-columns:1fr}.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}.auth-tabs{grid-template-columns:1fr}.user-config{grid-template-columns:1fr}.user-access-top{flex-direction:column}}
 
 @media(max-width:900px){.forecast-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.forecast-grid{grid-template-columns:1fr}}
 .not-applicable{background:#f1f3f2;color:#8a958f;cursor:default;border-style:dashed}.not-applicable:hover{border-color:var(--line)}
@@ -166,6 +166,7 @@ const DEFAULT_CATEGORIES=[
   'Proveedores','Mantenimiento','Transporte','Otros'
 ];
 let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[], serviceCategories=[], internalAccounts=[], consolidations=[];
+let spacesDashboard={ownedGroupIds:[],services:[],obligations:[],payments:[],documents:[]};
 let platformPermissions={is_platform_admin:false,can_create_spaces:false,can_manage_access:false};
 let tab='services', baseMonth=monthKey(new Date()), authMode='login';
 let notificationState={
@@ -262,7 +263,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260705-14',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260705-15',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -913,12 +914,144 @@ async function loadGroups(){
   const {data,error}=await sb.from('memberships').select('*,groups(id,name,type,join_code,created_by,status)').eq('user_id',session.user.id).eq('active',true);
   if(error){toast(error.message);return}
   groups=(data||[]).map(x=>({...x.groups,membership:x}));
+  await loadSpacesDashboard();
   renderGroups();
 }
+
+async function loadSpacesDashboard(){
+  const owned=groups.filter(g=>g.created_by===session.user.id&&(g.status||'active')!=='deleted');
+  spacesDashboard={ownedGroupIds:owned.map(g=>g.id),services:[],obligations:[],payments:[],documents:[]};
+
+  if(!owned.length)return;
+
+  const groupIds=owned.map(g=>g.id);
+
+  const [servicesResult,obligationsResult,paymentsResult,documentsResult]=await Promise.all([
+    sb.from('services').select('id,group_id,name,active,is_private').in('group_id',groupIds).eq('active',true),
+    sb.from('obligations').select('id,service_id,period,amount,status,services!inner(group_id)').in('services.group_id',groupIds),
+    sb.from('payments').select('id,obligation_id,total_amount,paid_at,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
+    sb.from('documents').select('id,group_id,obligation_id,payment_id,kind').in('group_id',groupIds)
+  ]);
+
+  const error=[servicesResult,obligationsResult,paymentsResult,documentsResult].find(result=>result.error)?.error;
+  if(error){
+    console.warn('No se pudieron cargar métricas generales:',error.message);
+    return;
+  }
+
+  spacesDashboard.services=servicesResult.data||[];
+  spacesDashboard.obligations=(obligationsResult.data||[]).map(({services,...row})=>({
+    ...row,
+    group_id:Array.isArray(services)?services[0]?.group_id:services?.group_id
+  }));
+  spacesDashboard.payments=(paymentsResult.data||[]).map(({obligations,...row})=>({
+    ...row,
+    group_id:Array.isArray(obligations?.services)
+      ? obligations.services[0]?.group_id
+      : obligations?.services?.group_id
+  }));
+  spacesDashboard.documents=documentsResult.data||[];
+}
+function dashboardPaidFor(obligationId){
+  return spacesDashboard.payments
+    .filter(payment=>payment.obligation_id===obligationId)
+    .reduce((sum,payment)=>sum+Number(payment.total_amount||0),0);
+}
+function dashboardBalanceFor(obligation){
+  return Math.max(0,Number(obligation.amount||0)-dashboardPaidFor(obligation.id));
+}
+function dashboardMetricsForGroup(groupId){
+  const year=baseMonth.slice(0,4);
+  const obligationsForGroup=spacesDashboard.obligations.filter(item=>
+    item.group_id===groupId
+    && item.period?.startsWith(year)
+    && item.status!=='cancelled'
+  );
+  const paymentsForGroup=spacesDashboard.payments.filter(item=>item.group_id===groupId);
+  const paymentIds=new Set(paymentsForGroup.map(item=>item.id));
+
+  const total=obligationsForGroup.reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const paid=obligationsForGroup.reduce((sum,item)=>sum+dashboardPaidFor(item.id),0);
+  const pending=obligationsForGroup.reduce((sum,item)=>sum+dashboardBalanceFor(item),0);
+  const unpaid=obligationsForGroup.filter(item=>dashboardBalanceFor(item)>0.01).length;
+  const invoices=spacesDashboard.documents.filter(item=>
+    item.group_id===groupId
+    && item.kind==='invoice'
+    && obligationsForGroup.some(obligation=>obligation.id===item.obligation_id)
+  ).length;
+  const receipts=spacesDashboard.documents.filter(item=>
+    item.group_id===groupId
+    && item.kind==='receipt'
+    && paymentIds.has(item.payment_id)
+  ).length;
+  const activeServices=spacesDashboard.services.filter(item=>item.group_id===groupId).length;
+  const averageMonthly=total/12;
+
+  return{groupId,total,paid,pending,unpaid,invoices,receipts,activeServices,averageMonthly,obligations:obligationsForGroup.length};
+}
+function renderOwnerDashboard(){
+  const ownedGroups=groups.filter(g=>g.created_by===session.user.id&&(g.status||'active')!=='deleted');
+  if(!ownedGroups.length)return '';
+
+  const rows=ownedGroups.map(g=>({group:g,metrics:dashboardMetricsForGroup(g.id)}));
+  const total={
+    total:rows.reduce((sum,row)=>sum+row.metrics.total,0),
+    paid:rows.reduce((sum,row)=>sum+row.metrics.paid,0),
+    pending:rows.reduce((sum,row)=>sum+row.metrics.pending,0),
+    unpaid:rows.reduce((sum,row)=>sum+row.metrics.unpaid,0),
+    invoices:rows.reduce((sum,row)=>sum+row.metrics.invoices,0),
+    receipts:rows.reduce((sum,row)=>sum+row.metrics.receipts,0),
+    activeServices:rows.reduce((sum,row)=>sum+row.metrics.activeServices,0),
+    averageMonthly:rows.reduce((sum,row)=>sum+row.metrics.total,0)/12
+  };
+
+  return `<div class="owner-panel card">
+    <h2>Panel general del titular · ${baseMonth.slice(0,4)}</h2>
+    <p class="sub">Métricas de todos tus espacios, separadas y consolidadas. Solo vos ves este panel.</p>
+
+    <div class="owner-metrics-grid">
+      <div class="owner-metric"><span>Total anual cargado</span><strong>${fmtMoney(total.total)}</strong></div>
+      <div class="owner-metric"><span>Total pagado</span><strong>${fmtMoney(total.paid)}</strong></div>
+      <div class="owner-metric"><span>Pendiente total</span><strong>${fmtMoney(total.pending)}</strong></div>
+      <div class="owner-metric"><span>Promedio mensual</span><strong>${fmtMoney(total.averageMonthly)}</strong></div>
+    </div>
+
+    <table class="owner-table">
+      <thead>
+        <tr>
+          <th>Espacio</th>
+          <th>Total anual</th>
+          <th>Pagado</th>
+          <th>Pendiente</th>
+          <th>Promedio mensual</th>
+          <th>Servicios</th>
+          <th>Facturas</th>
+          <th>Comprob.</th>
+          <th>No abonados</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(row=>`<tr>
+          <td><strong>${esc(row.group.name)}</strong><br><small>${row.group.type==='company'?'Empresa':'Grupo familiar'}</small></td>
+          <td>${fmtMoney(row.metrics.total)}</td>
+          <td>${fmtMoney(row.metrics.paid)}</td>
+          <td>${fmtMoney(row.metrics.pending)}</td>
+          <td>${fmtMoney(row.metrics.averageMonthly)}</td>
+          <td>${row.metrics.activeServices}</td>
+          <td>${row.metrics.invoices}</td>
+          <td>${row.metrics.receipts}</td>
+          <td>${row.metrics.unpaid}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
 function renderGroups(){
   const activeGroups=groups.filter(g=>(g.status||'active')==='active');
   const suspendedGroups=groups.filter(g=>g.status==='suspended');
   const archivedGroups=groups.filter(g=>g.status==='archived');
+  const deletedGroups=groups.filter(g=>g.status==='deleted');
 
   const spaceCard=(g)=>{
     const owner=g.created_by===session.user.id;
@@ -934,12 +1067,17 @@ function renderGroups(){
       </p>
       ${status==='suspended'?'<span class="space-status suspended">Suspendido</span>':''}
       ${status==='archived'?'<span class="space-status archived">Archivado</span>':''}
+      ${status==='deleted'?'<span class="space-status deleted">Eliminado</span>':''}
       ${owner?`<div class="workspace-actions">
         ${status==='active'?`
           <button class="btn outline small" data-space-action="suspended" data-space-id="${g.id}">Suspender</button>
           <button class="btn soft small" data-space-action="archived" data-space-id="${g.id}">Archivar</button>
+          <button class="btn danger small" data-space-action="deleted" data-space-id="${g.id}">Eliminar</button>
+        `:status==='deleted'?`
+          <button class="btn primary small" data-space-action="active" data-space-id="${g.id}">Restaurar</button>
         `:`
           <button class="btn primary small" data-space-action="active" data-space-id="${g.id}">Reactivar</button>
+          <button class="btn danger small" data-space-action="deleted" data-space-id="${g.id}">Eliminar</button>
         `}
       </div>`:''}
     </div>`;
@@ -949,13 +1087,15 @@ function renderGroups(){
     <div class="pagehead">
       <div>
         <h1>Tus espacios</h1>
-        <p>Accedé únicamente a los espacios que tenés habilitados. Suspender o archivar nunca borra información.</p>
+        <p>Panel general del titular, accesos y espacios. Eliminar oculta el espacio sin borrar su información.</p>
       </div>
       <div class="actions">
         ${platformPermissions.can_create_spaces?'<button class="btn primary" id="newGroup">+ Crear espacio</button>':''}
         <button class="btn soft" id="logout">Salir</button>
       </div>
     </div>
+
+    ${renderOwnerDashboard()}
 
     <div class="workspace-grid">
       ${activeGroups.map(spaceCard).join('')||`<div class="card workspace" style="cursor:default">
@@ -979,6 +1119,14 @@ function renderGroups(){
         <div class="workspace-grid">${archivedGroups.map(spaceCard).join('')}</div>
       </details>
     `:''}
+
+    ${deletedGroups.length?`
+      <details class="archived-section">
+        <summary>Espacios eliminados (${deletedGroups.length})</summary>
+        <p class="sub">Están ocultos del uso normal. La información sigue conservada y podés restaurarlos.</p>
+        <div class="workspace-grid">${deletedGroups.map(spaceCard).join('')}</div>
+      </details>
+    `:''}
   </main>`;
 
   document.querySelectorAll('[data-group]').forEach(element=>{
@@ -993,11 +1141,14 @@ function renderGroups(){
       const labels={
         suspended:'suspender',
         archived:'archivar',
+        deleted:'eliminar',
         active:'reactivar'
       };
       const message=status==='active'
         ? '¿Reactivar este espacio? Volverá a estar disponible para sus integrantes.'
-        : `¿${labels[status][0].toUpperCase()+labels[status].slice(1)} este espacio? Toda la información se conservará.`;
+        : status==='deleted'
+          ? '¿Eliminar este espacio del uso normal? No se borrarán facturas, pagos, comprobantes ni usuarios. Podrás restaurarlo desde Espacios eliminados.'
+          : `¿${labels[status][0].toUpperCase()+labels[status].slice(1)} este espacio? Toda la información se conservará.`;
       if(!confirm(message))return;
 
       button.disabled=true;
@@ -1006,7 +1157,7 @@ function renderGroups(){
         button.disabled=false;
         return toast(error.message);
       }
-      toast(status==='active'?'Espacio reactivado':status==='suspended'?'Espacio suspendido':'Espacio archivado');
+      toast(status==='active'?'Espacio reactivado':status==='suspended'?'Espacio suspendido':status==='archived'?'Espacio archivado':'Espacio eliminado');
       await loadGroups();
     };
   });
@@ -1025,7 +1176,7 @@ function openCreateGroup(){
 async function openGroup(id){
   group=groups.find(g=>g.id===id)||{id};
   if((group.status||'active')!=='active'){
-    toast(group.status==='suspended'?'Este espacio está suspendido':'Este espacio está archivado');
+    toast(group.status==='suspended'?'Este espacio está suspendido':group.status==='deleted'?'Este espacio está eliminado':'Este espacio está archivado');
     return;
   }
   membership=group.membership||null;
@@ -1597,7 +1748,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Grilla anual completa v14 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Panel titular v15 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
@@ -1804,6 +1955,18 @@ function renderReports(){
   const pending=pendingObligations();
   const overdue=pending.filter(o=>daysUntil(o.due_date)<0);
   const next30=pending.filter(o=>{const d=daysUntil(o.due_date);return d!==null&&d>=0&&d<=30});
+  const basePeriod=periodDate(baseMonth);
+  const previousPendingAmount=pending
+    .filter(o=>o.period<basePeriod)
+    .reduce((sum,o)=>sum+balanceFor(o),0);
+  const currentPendingAmount=pending
+    .filter(o=>o.period===basePeriod)
+    .reduce((sum,o)=>sum+balanceFor(o),0);
+  const futurePendingAmount=pending
+    .filter(o=>o.period>basePeriod)
+    .reduce((sum,o)=>sum+balanceFor(o),0);
+  const pendingTotalAmount=pending.reduce((sum,o)=>sum+balanceFor(o),0);
+  const overdueAmount=overdue.reduce((sum,o)=>sum+balanceFor(o),0);
   const forecastMonths=Array.from({length:6},(_,i)=>forecastMonth(shiftMonth(baseMonth,i)));
   const forecastTotal=forecastMonths.reduce((sum,m)=>sum+m.total,0);
   const sixMonths=Array.from({length:6},(_,i)=>shiftMonth(baseMonth,i-5)).map(reportMonthData);
