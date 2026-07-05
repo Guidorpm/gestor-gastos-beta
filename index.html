@@ -33,6 +33,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .authswitch{margin-top:16px;text-align:center;color:var(--muted)}.linkbtn{border:0;background:none;color:var(--brand);font-weight:800;cursor:pointer}
 .notice{padding:12px 14px;border-radius:12px;background:#fff8db;color:#725700;margin:14px 0;font-size:14px}
 .workspace-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}.workspace{padding:22px;cursor:pointer}.workspace:hover{border-color:var(--brand)}.workspace h3{margin:0 0 6px}.workspace p{color:var(--muted);margin:0}.workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.space-status{display:inline-block;margin-top:10px;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800}.space-status.suspended{background:#fff1d8;color:#9a5a00}.space-status.archived{background:#eef0f2;color:#5d6670}.space-status.deleted{background:#ffe8e8;color:#a32228}.archived-section{margin-top:26px}.archived-section summary{cursor:pointer;font-weight:850;margin-bottom:12px}.owner-panel{margin-bottom:22px}.owner-panel h2{margin:0 0 6px}.owner-metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}.owner-metric{border:1px solid var(--line);border-radius:16px;background:#fff;padding:14px}.owner-metric span{display:block;color:var(--muted);font-size:12px}.owner-metric strong{display:block;font-size:22px;margin-top:5px}.owner-table{width:100%;border-collapse:collapse;margin-top:14px}.owner-table th,.owner-table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}.owner-table th{color:var(--muted);text-transform:uppercase;font-size:11px}.danger{background:#fff1f1!important;color:#b72e35!important}
+.cards-beta-grid{display:grid;grid-template-columns:320px 1fr;gap:14px;align-items:start}.credit-card-list{display:grid;gap:10px}.credit-card-item{border:1px solid var(--line);border-radius:16px;background:#fff;padding:13px;cursor:pointer}.credit-card-item.active{border-color:var(--brand);background:#f0faf6}.credit-card-item h3{margin:0;font-size:16px}.credit-card-item p{margin:5px 0 0;color:var(--muted);font-size:12px}.credit-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:12px 0}.credit-summary-card{border:1px solid var(--line);border-radius:15px;background:#fff;padding:12px}.credit-summary-card span{display:block;color:var(--muted);font-size:11px}.credit-summary-card strong{display:block;font-size:18px;margin-top:5px}.statement-list{display:grid;gap:10px;margin-top:12px}.statement-item{border:1px solid var(--line);border-radius:16px;background:#fff;padding:12px;cursor:pointer}.statement-item.active{border-color:var(--brand);background:#f0faf6}.statement-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.statement-top h3{margin:0;font-size:16px}.status-pill{display:inline-flex;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:900;background:#eef0f2;color:#5d6670}.status-pill.open{background:#e8f6ef;color:#19734f}.status-pill.closed{background:#e9f2ff;color:#225b9d}.status-pill.pending_payment{background:#fff1d8;color:#9a5a00}.status-pill.partial{background:#fff1d8;color:#9a5a00}.status-pill.paid{background:#e8f6ef;color:#19734f}.status-pill.reviewed{background:#efe8ff;color:#5f36ad}.movements-table{width:100%;border-collapse:collapse;margin-top:12px}.movements-table th,.movements-table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}.movements-table th{font-size:11px;text-transform:uppercase;color:var(--muted)}.class-pill{display:inline-flex;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900;background:#f1f4f2;color:#52605a}.class-pill.gr{background:#e8f6ef;color:#19734f}.class-pill.personal{background:#e9f2ff;color:#225b9d}.class-pill.impuesto{background:#fff1d8;color:#9a5a00}.class-pill.devolucion{background:#f0e8ff;color:#6b36ad}.class-pill.ajuste{background:#eef0f2;color:#5d6670}.credit-note{border:1px dashed var(--line);border-radius:16px;padding:12px;background:#fbfcfb;color:var(--muted);font-size:13px}
 .pagehead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:18px}.pagehead h1{margin:0 0 5px;font-size:28px}.pagehead p{margin:0;color:var(--muted)}
 .tabs{display:flex;gap:6px;margin:18px 0}.tab{border:0;background:transparent;padding:10px 14px;border-radius:12px;font-weight:800;color:var(--muted);cursor:pointer}.tab.active{background:white;color:var(--brand);box-shadow:0 3px 15px rgba(20,33,29,.06)}
 .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-bottom:18px}
@@ -110,8 +111,8 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 @media(max-width:760px){.notification-layout{grid-template-columns:1fr}}
 
 
-@media(max-width:900px){.owner-metrics-grid{grid-template-columns:1fr 1fr}.annual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}.user-config{grid-template-columns:1fr 1fr}}
-@media(max-width:560px){.owner-metrics-grid{grid-template-columns:1fr}.annual-grid{grid-template-columns:1fr}.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}.auth-tabs{grid-template-columns:1fr}.user-config{grid-template-columns:1fr}.user-access-top{flex-direction:column}}
+@media(max-width:900px){.cards-beta-grid{grid-template-columns:1fr}.credit-summary{grid-template-columns:1fr 1fr}.owner-metrics-grid{grid-template-columns:1fr 1fr}.annual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}.user-config{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.credit-summary{grid-template-columns:1fr}.owner-metrics-grid{grid-template-columns:1fr}.annual-grid{grid-template-columns:1fr}.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}.auth-tabs{grid-template-columns:1fr}.user-config{grid-template-columns:1fr}.user-access-top{flex-direction:column}}
 
 @media(max-width:900px){.forecast-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.forecast-grid{grid-template-columns:1fr}}
 .not-applicable{background:#f1f3f2;color:#8a958f;cursor:default;border-style:dashed}.not-applicable:hover{border-color:var(--line)}
@@ -167,6 +168,7 @@ const DEFAULT_CATEGORIES=[
 ];
 let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[], serviceCategories=[], internalAccounts=[], consolidations=[];
 let spacesDashboard={ownedGroupIds:[],services:[],obligations:[],payments:[],documents:[]};
+let creditCards=[], creditStatements=[], creditMovements=[], selectedCreditCardId=null, selectedCreditStatementId=null;
 let platformPermissions={is_platform_admin:false,can_create_spaces:false,can_manage_access:false};
 let tab='services', baseMonth=monthKey(new Date()), authMode='login';
 let notificationState={
@@ -263,7 +265,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260705-16',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260705-17',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1047,6 +1049,578 @@ function renderOwnerDashboard(){
   </div>`;
 }
 
+
+function hasOwnerSpaces(){
+  return groups.some(g=>g.created_by===session.user.id&&(g.status||'active')!=='deleted');
+}
+function cardBrandLabel(value){
+  return {visa:'Visa',mastercard:'Mastercard',amex:'Amex',mercado_pago:'Mercado Pago',other:'Otra'}[value]||'Tarjeta';
+}
+function cardHolderTypeLabel(value){
+  return {titular:'Titular',adicional:'Adicional'}[value]||'Titular';
+}
+function statementStatusLabel(value){
+  return {
+    open:'Abierto',
+    closed:'Cerrado',
+    pending_payment:'Pendiente de pago',
+    partial:'Pago parcial',
+    paid:'Pagado',
+    reviewed:'Revisado'
+  }[value]||'Abierto';
+}
+function movementClassLabel(value){
+  return {
+    gr:'GR',
+    personal:'Personal',
+    rizzo:'Rizzo',
+    casa:'Casa',
+    impuesto:'Impuesto',
+    devolucion:'Devolución',
+    ajuste:'Ajuste',
+    otro:'Otro'
+  }[value]||'Otro';
+}
+function fmtUsd(value){
+  return `USD ${Number(value||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+}
+function creditCardName(card){
+  if(!card)return 'Tarjeta';
+  const brand=cardBrandLabel(card.brand);
+  const last=card.last4?` ${card.last4}`:'';
+  return `${brand}${last} · ${card.issuer||'Sin banco'}`;
+}
+function creditStatementLabel(statement){
+  return statement?.statement_month?monthLabel(statement.statement_month.slice(0,7)):'Resumen';
+}
+function creditMovementsForStatement(statementId){
+  return creditMovements.filter(item=>item.statement_id===statementId);
+}
+function creditTotalsForMovements(items){
+  const totalArs=items
+    .filter(item=>item.currency==='ARS')
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const totalUsd=items
+    .filter(item=>item.currency==='USD')
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const grArs=items
+    .filter(item=>item.classification==='gr'&&item.currency==='ARS')
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const grUsd=items
+    .filter(item=>item.classification==='gr'&&item.currency==='USD')
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const personalArs=items
+    .filter(item=>item.classification==='personal'&&item.currency==='ARS')
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const personalUsd=items
+    .filter(item=>item.classification==='personal'&&item.currency==='USD')
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  return{totalArs,totalUsd,grArs,grUsd,personalArs,personalUsd};
+}
+async function loadCreditCardsData(){
+  if(!hasOwnerSpaces()){
+    creditCards=[];
+    creditStatements=[];
+    creditMovements=[];
+    selectedCreditCardId=null;
+    selectedCreditStatementId=null;
+    return;
+  }
+
+  const [cardsResult,statementsResult,movementsResult]=await Promise.all([
+    sb.from('credit_cards').select('*').eq('active',true).order('created_at',{ascending:false}),
+    sb.from('credit_card_statements').select('*').order('statement_month',{ascending:false}),
+    sb.from('credit_card_movements').select('*').order('movement_date',{ascending:false}).order('created_at',{ascending:false})
+  ]);
+
+  const error=[cardsResult,statementsResult,movementsResult].find(result=>result.error)?.error;
+  if(error){
+    toast(error.message);
+    return;
+  }
+
+  creditCards=cardsResult.data||[];
+  creditStatements=statementsResult.data||[];
+  creditMovements=movementsResult.data||[];
+
+  if(selectedCreditCardId&&!creditCards.some(card=>card.id===selectedCreditCardId))selectedCreditCardId=null;
+  if(!selectedCreditCardId&&creditCards.length)selectedCreditCardId=creditCards[0].id;
+
+  const selectedStatements=creditStatements.filter(statement=>statement.card_id===selectedCreditCardId);
+  if(selectedCreditStatementId&&!selectedStatements.some(statement=>statement.id===selectedCreditStatementId))selectedCreditStatementId=null;
+  if(!selectedCreditStatementId&&selectedStatements.length)selectedCreditStatementId=selectedStatements[0].id;
+}
+async function openCreditCardsModule(){
+  group=null;
+  app.innerHTML='<div class="spinner">Cargando Tarjetas BETA…</div>';
+  await loadCreditCardsData();
+  renderCreditCardsModule();
+}
+function renderCreditCardsModule(){
+  if(!hasOwnerSpaces()){
+    app.innerHTML=`<main><div class="notice">Tarjetas BETA está disponible solo para titulares de espacios.</div></main>`;
+    return;
+  }
+
+  const selectedCard=creditCards.find(card=>card.id===selectedCreditCardId)||null;
+  const statements=creditStatements.filter(statement=>statement.card_id===selectedCreditCardId);
+  const selectedStatement=creditStatements.find(statement=>statement.id===selectedCreditStatementId)||statements[0]||null;
+  if(selectedStatement&&!selectedCreditStatementId)selectedCreditStatementId=selectedStatement.id;
+  const movements=selectedStatement?creditMovementsForStatement(selectedStatement.id):[];
+  const totals=creditTotalsForMovements(movements);
+  const allTotals=creditTotalsForMovements(creditMovements);
+
+  app.innerHTML=`<main>
+    <div class="pagehead">
+      <div>
+        <h1>Tarjetas de crédito BETA</h1>
+        <p>Módulo privado del titular. No suma ni modifica Servicios e impuestos.</p>
+      </div>
+      <div class="actions">
+        <button class="btn outline" id="backToSpaces">← Tus espacios</button>
+        <button class="btn primary" id="newCreditCard">+ Nueva tarjeta</button>
+      </div>
+    </div>
+
+    <div class="credit-note">
+      Esta primera versión es manual y segura: cargás tarjetas, resúmenes y movimientos para separar GR / Personal / Impuestos / Devoluciones. Todavía no conecta con servicios ni lee PDFs automáticamente.
+    </div>
+
+    <div class="credit-summary">
+      <div class="credit-summary-card"><span>Total movimientos ARS</span><strong>${fmtMoney(allTotals.totalArs)}</strong></div>
+      <div class="credit-summary-card"><span>Total movimientos USD</span><strong>${fmtUsd(allTotals.totalUsd)}</strong></div>
+      <div class="credit-summary-card"><span>GR</span><strong>${fmtMoney(allTotals.grArs)}</strong><small>${fmtUsd(allTotals.grUsd)}</small></div>
+      <div class="credit-summary-card"><span>Personal</span><strong>${fmtMoney(allTotals.personalArs)}</strong><small>${fmtUsd(allTotals.personalUsd)}</small></div>
+    </div>
+
+    <div class="cards-beta-grid">
+      <div>
+        <div class="card">
+          <div class="statement-top">
+            <div>
+              <h2>Tarjetas</h2>
+              <p class="sub">Banco Provincia, Mercado Pago u otras.</p>
+            </div>
+          </div>
+          <div class="credit-card-list">
+            ${creditCards.map(card=>`<div class="credit-card-item ${card.id===selectedCreditCardId?'active':''}" data-credit-card="${card.id}">
+              <h3>${esc(creditCardName(card))}</h3>
+              <p>${esc(card.holder_name||'Sin titular')} · ${cardHolderTypeLabel(card.holder_type)}${card.closing_day?` · Cierra día ${card.closing_day}`:''}${card.due_day?` · Vence día ${card.due_day}`:''}</p>
+            </div>`).join('')||`<div class="credit-note">Todavía no cargaste tarjetas.</div>`}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        ${selectedCard?`<div class="card">
+          <div class="statement-top">
+            <div>
+              <h2>${esc(creditCardName(selectedCard))}</h2>
+              <p class="sub">${esc(selectedCard.holder_name||'Sin titular')} · ${cardHolderTypeLabel(selectedCard.holder_type)}</p>
+            </div>
+            <div class="actions">
+              <button class="btn outline small" id="editCreditCard">Editar</button>
+              <button class="btn danger small" id="archiveCreditCard">Archivar</button>
+              <button class="btn primary small" id="newStatement">+ Resumen</button>
+            </div>
+          </div>
+
+          <div class="statement-list">
+            ${statements.map(statement=>`<div class="statement-item ${statement.id===selectedCreditStatementId?'active':''}" data-credit-statement="${statement.id}">
+              <div class="statement-top">
+                <div>
+                  <h3>${creditStatementLabel(statement)}</h3>
+                  <p class="sub">Cierre ${statement.close_date?fmtDate(statement.close_date):'—'} · Vencimiento ${statement.due_date?fmtDate(statement.due_date):'—'}</p>
+                </div>
+                <span class="status-pill ${statement.status}">${statementStatusLabel(statement.status)}</span>
+              </div>
+              <p class="sub">Resumen: ${fmtMoney(statement.total_ars)} · ${fmtUsd(statement.total_usd)}</p>
+            </div>`).join('')||`<div class="credit-note">Cargá el primer resumen de esta tarjeta.</div>`}
+          </div>
+        </div>`:`<div class="card"><h2>Empezá cargando una tarjeta</h2><p class="sub">Después vas a poder crear resúmenes y movimientos.</p></div>`}
+
+        ${selectedStatement?`<div class="card" style="margin-top:14px">
+          <div class="statement-top">
+            <div>
+              <h2>Movimientos · ${creditStatementLabel(selectedStatement)}</h2>
+              <p class="sub">Los movimientos no impactan en Servicios e impuestos.</p>
+            </div>
+            <div class="actions">
+              <button class="btn outline small" id="editStatement">Editar resumen</button>
+              <button class="btn primary small" id="newMovement">+ Movimiento</button>
+            </div>
+          </div>
+
+          <div class="credit-summary">
+            <div class="credit-summary-card"><span>ARS movimientos</span><strong>${fmtMoney(totals.totalArs)}</strong></div>
+            <div class="credit-summary-card"><span>USD movimientos</span><strong>${fmtUsd(totals.totalUsd)}</strong></div>
+            <div class="credit-summary-card"><span>GR</span><strong>${fmtMoney(totals.grArs)}</strong><small>${fmtUsd(totals.grUsd)}</small></div>
+            <div class="credit-summary-card"><span>Personal</span><strong>${fmtMoney(totals.personalArs)}</strong><small>${fmtUsd(totals.personalUsd)}</small></div>
+          </div>
+
+          <table class="movements-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Detalle</th>
+                <th>Grupo</th>
+                <th>Categoría</th>
+                <th>Importe</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${movements.map(movement=>`<tr>
+                <td>${fmtDate(movement.movement_date)}</td>
+                <td><strong>${esc(movement.description)}</strong>${movement.notes?`<br><small>${esc(movement.notes)}</small>`:''}</td>
+                <td><span class="class-pill ${movement.classification}">${movementClassLabel(movement.classification)}</span></td>
+                <td>${esc(movement.category||'—')}</td>
+                <td>${movement.currency==='USD'?fmtUsd(movement.amount):fmtMoney(movement.amount)}</td>
+                <td><button class="btn soft small" data-edit-movement="${movement.id}">Editar</button></td>
+              </tr>`).join('')||`<tr><td colspan="6" class="sub">Todavía no cargaste movimientos.</td></tr>`}
+            </tbody>
+          </table>
+        </div>`:''}
+      </div>
+    </div>
+  </main>`;
+
+  bindCreditCardsModule();
+}
+function bindCreditCardsModule(){
+  document.getElementById('backToSpaces').onclick=()=>loadGroups();
+  document.getElementById('newCreditCard').onclick=()=>openCreditCardModal();
+
+  document.querySelectorAll('[data-credit-card]').forEach(element=>{
+    element.onclick=()=>{
+      selectedCreditCardId=element.dataset.creditCard;
+      selectedCreditStatementId=null;
+      const statements=creditStatements.filter(statement=>statement.card_id===selectedCreditCardId);
+      if(statements.length)selectedCreditStatementId=statements[0].id;
+      renderCreditCardsModule();
+    };
+  });
+
+  document.querySelectorAll('[data-credit-statement]').forEach(element=>{
+    element.onclick=()=>{
+      selectedCreditStatementId=element.dataset.creditStatement;
+      renderCreditCardsModule();
+    };
+  });
+
+  if(document.getElementById('editCreditCard')){
+    document.getElementById('editCreditCard').onclick=()=>openCreditCardModal(creditCards.find(card=>card.id===selectedCreditCardId));
+  }
+  if(document.getElementById('archiveCreditCard')){
+    document.getElementById('archiveCreditCard').onclick=archiveCreditCard;
+  }
+  if(document.getElementById('newStatement')){
+    document.getElementById('newStatement').onclick=()=>openCreditStatementModal();
+  }
+  if(document.getElementById('editStatement')){
+    document.getElementById('editStatement').onclick=()=>openCreditStatementModal(creditStatements.find(statement=>statement.id===selectedCreditStatementId));
+  }
+  if(document.getElementById('newMovement')){
+    document.getElementById('newMovement').onclick=()=>openCreditMovementModal();
+  }
+  document.querySelectorAll('[data-edit-movement]').forEach(button=>{
+    button.onclick=()=>openCreditMovementModal(creditMovements.find(movement=>movement.id===button.dataset.editMovement));
+  });
+}
+function openCreditCardModal(existing=null){
+  modal(`<h2>${existing?'Editar tarjeta':'Nueva tarjeta'}</h2>
+    <div class="grid2">
+      <div class="field">
+        <label>Banco / entidad</label>
+        <input id="ccIssuer" value="${esc(existing?.issuer||'')}" placeholder="Ej: Banco Provincia">
+      </div>
+      <div class="field">
+        <label>Marca</label>
+        <select id="ccBrand">
+          ${['visa','mastercard','amex','mercado_pago','other'].map(value=>`<option value="${value}" ${existing?.brand===value?'selected':''}>${cardBrandLabel(value)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Últimos 4 números</label>
+        <input id="ccLast4" maxlength="4" inputmode="numeric" value="${esc(existing?.last4||'')}" placeholder="8374">
+      </div>
+      <div class="field">
+        <label>Titular / usuario</label>
+        <input id="ccHolder" value="${esc(existing?.holder_name||'')}" placeholder="Guido / Juli / Empresa">
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Tipo</label>
+        <select id="ccHolderType">
+          <option value="titular" ${existing?.holder_type==='titular'?'selected':''}>Titular</option>
+          <option value="adicional" ${existing?.holder_type==='adicional'?'selected':''}>Adicional</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Nombre visible</label>
+        <input id="ccName" value="${esc(existing?.name||'')}" placeholder="Opcional: Visa GR / Visa Personal">
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Día de cierre estimado</label>
+        <input id="ccClosingDay" type="number" min="1" max="31" value="${existing?.closing_day||''}" placeholder="Ej: 26">
+      </div>
+      <div class="field">
+        <label>Día de vencimiento estimado</label>
+        <input id="ccDueDay" type="number" min="1" max="31" value="${existing?.due_day||''}" placeholder="Ej: 9">
+      </div>
+    </div>
+    <div class="field">
+      <label>Notas</label>
+      <textarea id="ccNotes" placeholder="Ej: Banco Provincia, tarjeta principal">${esc(existing?.notes||'')}</textarea>
+    </div>
+    <div class="actions end">
+      <button class="btn soft" data-close>Cancelar</button>
+      <button class="btn primary" id="saveCreditCard">Guardar</button>
+    </div>`);
+
+  document.getElementById('saveCreditCard').onclick=async()=>{
+    const payload={
+      issuer:document.getElementById('ccIssuer').value.trim(),
+      brand:document.getElementById('ccBrand').value,
+      last4:document.getElementById('ccLast4').value.replace(/\D/g,'').slice(-4),
+      holder_name:document.getElementById('ccHolder').value.trim(),
+      holder_type:document.getElementById('ccHolderType').value,
+      name:document.getElementById('ccName').value.trim()||null,
+      closing_day:document.getElementById('ccClosingDay').value?Number(document.getElementById('ccClosingDay').value):null,
+      due_day:document.getElementById('ccDueDay').value?Number(document.getElementById('ccDueDay').value):null,
+      notes:document.getElementById('ccNotes').value.trim()||null
+    };
+    if(!payload.issuer)return toast('Completá banco o entidad');
+    if(!payload.last4)return toast('Completá últimos 4 números');
+
+    const button=document.getElementById('saveCreditCard');
+    button.disabled=true;
+
+    const query=existing
+      ? sb.from('credit_cards').update(payload).eq('id',existing.id)
+      : sb.from('credit_cards').insert(payload).select('id').single();
+
+    const {data,error}=await query;
+    if(error){
+      button.disabled=false;
+      return toast(error.message);
+    }
+    if(data?.id)selectedCreditCardId=data.id;
+    closeModal();
+    await loadCreditCardsData();
+    renderCreditCardsModule();
+  };
+}
+function openCreditStatementModal(existing=null){
+  if(!selectedCreditCardId)return toast('Primero elegí una tarjeta');
+  const monthValue=existing?.statement_month?.slice(0,7)||baseMonth;
+  modal(`<h2>${existing?'Editar resumen':'Nuevo resumen'}</h2>
+    <div class="grid2">
+      <div class="field">
+        <label>Mes del resumen</label>
+        <input id="statementMonth" type="month" value="${monthValue}">
+      </div>
+      <div class="field">
+        <label>Estado</label>
+        <select id="statementStatus">
+          ${['open','closed','pending_payment','partial','paid','reviewed'].map(value=>`<option value="${value}" ${existing?.status===value?'selected':''}>${statementStatusLabel(value)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Fecha de cierre</label>
+        <input id="statementClose" type="date" value="${existing?.close_date||''}">
+      </div>
+      <div class="field">
+        <label>Fecha de vencimiento</label>
+        <input id="statementDue" type="date" value="${existing?.due_date||''}">
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Total resumen en pesos</label>
+        <input id="statementTotalArs" data-money value="${formatMoneyField(existing?.total_ars||0)}">
+      </div>
+      <div class="field">
+        <label>Total resumen en dólares</label>
+        <input id="statementTotalUsd" type="number" step="0.01" value="${Number(existing?.total_usd||0)}">
+      </div>
+    </div>
+    <div class="field">
+      <label>Notas</label>
+      <textarea id="statementNotes" placeholder="Ej: resumen abierto, falta revisar impuestos">${esc(existing?.notes||'')}</textarea>
+    </div>
+    <div class="actions end">
+      <button class="btn soft" data-close>Cancelar</button>
+      <button class="btn primary" id="saveStatement">Guardar</button>
+    </div>`);
+  bindMoneyInputs();
+
+  document.getElementById('saveStatement').onclick=async()=>{
+    const month=document.getElementById('statementMonth').value;
+    if(!month)return toast('Completá el mes del resumen');
+
+    const payload={
+      card_id:selectedCreditCardId,
+      statement_month:periodDate(month),
+      close_date:document.getElementById('statementClose').value||null,
+      due_date:document.getElementById('statementDue').value||null,
+      total_ars:parseMoneyField(document.getElementById('statementTotalArs').value),
+      total_usd:Number(document.getElementById('statementTotalUsd').value||0),
+      status:document.getElementById('statementStatus').value,
+      notes:document.getElementById('statementNotes').value.trim()||null
+    };
+
+    const button=document.getElementById('saveStatement');
+    button.disabled=true;
+
+    const query=existing
+      ? sb.from('credit_card_statements').update(payload).eq('id',existing.id)
+      : sb.from('credit_card_statements').insert(payload).select('id').single();
+
+    const {data,error}=await query;
+    if(error){
+      button.disabled=false;
+      return toast(error.message);
+    }
+    if(data?.id)selectedCreditStatementId=data.id;
+    closeModal();
+    await loadCreditCardsData();
+    renderCreditCardsModule();
+  };
+}
+function openCreditMovementModal(existing=null){
+  if(!selectedCreditStatementId)return toast('Primero elegí un resumen');
+  const selectedStatement=creditStatements.find(statement=>statement.id===selectedCreditStatementId);
+  modal(`<h2>${existing?'Editar movimiento':'Nuevo movimiento'}</h2>
+    <div class="grid2">
+      <div class="field">
+        <label>Fecha</label>
+        <input id="movementDate" type="date" value="${existing?.movement_date||selectedStatement?.statement_month||periodDate(baseMonth)}">
+      </div>
+      <div class="field">
+        <label>Grupo</label>
+        <select id="movementClass">
+          ${['gr','personal','rizzo','casa','impuesto','devolucion','ajuste','otro'].map(value=>`<option value="${value}" ${existing?.classification===value?'selected':''}>${movementClassLabel(value)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Detalle</label>
+      <input id="movementDescription" value="${esc(existing?.description||'')}" placeholder="Ej: Google Ads / Microsoft / ChatGPT GR">
+    </div>
+    <div class="grid2">
+      <div class="field">
+        <label>Categoría</label>
+        <select id="movementCategory">
+          ${['Google Ads','Microsoft','Claude','Apple','ChatGPT GR','CapCut GR','Facebook / Meta','Google One Juli','Google One Guido','CapCut Juli','YouTube Premium Guido','Impuestos tarjeta','Devolución impuestos','Otros'].map(value=>`<option value="${esc(value)}" ${existing?.category===value?'selected':''}>${esc(value)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Moneda</label>
+        <select id="movementCurrency">
+          <option value="ARS" ${existing?.currency==='ARS'?'selected':''}>Pesos</option>
+          <option value="USD" ${existing?.currency==='USD'?'selected':''}>Dólares</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Importe</label>
+      <input id="movementAmount" value="${existing?.currency==='USD'?Number(existing?.amount||0):formatMoneyField(existing?.amount||0)}">
+    </div>
+    <div class="field">
+      <label>Notas</label>
+      <textarea id="movementNotes" placeholder="Opcional">${esc(existing?.notes||'')}</textarea>
+    </div>
+    <div class="actions end">
+      ${existing?'<button class="btn danger" id="deleteMovement">Eliminar</button>':''}
+      <button class="btn soft" data-close>Cancelar</button>
+      <button class="btn primary" id="saveMovement">Guardar</button>
+    </div>`);
+
+  const amountInput=document.getElementById('movementAmount');
+  const currencyInput=document.getElementById('movementCurrency');
+  const refreshAmountMode=()=>{
+    if(currencyInput.value==='ARS'){
+      amountInput.setAttribute('data-money','');
+      amountInput.value=formatMoneyField(parseMoneyField(amountInput.value));
+      bindMoneyInputs();
+    }else{
+      amountInput.removeAttribute('data-money');
+      amountInput.value=String(parseMoneyField(amountInput.value)||Number(amountInput.value||0)||0).replace(',', '.');
+    }
+  };
+  currencyInput.onchange=refreshAmountMode;
+  if(currencyInput.value==='ARS')bindMoneyInputs();
+
+  document.getElementById('saveMovement').onclick=async()=>{
+    const description=document.getElementById('movementDescription').value.trim();
+    if(!description)return toast('Completá el detalle');
+
+    const currency=document.getElementById('movementCurrency').value;
+    const amount=currency==='USD'
+      ? Number(String(document.getElementById('movementAmount').value||'0').replace(',','.'))
+      : parseMoneyField(document.getElementById('movementAmount').value);
+
+    if(!amount)return toast('Completá el importe');
+
+    const payload={
+      card_id:selectedCreditCardId,
+      statement_id:selectedCreditStatementId,
+      movement_date:document.getElementById('movementDate').value||selectedStatement.statement_month,
+      description,
+      classification:document.getElementById('movementClass').value,
+      category:document.getElementById('movementCategory').value,
+      currency,
+      amount,
+      notes:document.getElementById('movementNotes').value.trim()||null
+    };
+
+    const button=document.getElementById('saveMovement');
+    button.disabled=true;
+
+    const query=existing
+      ? sb.from('credit_card_movements').update(payload).eq('id',existing.id)
+      : sb.from('credit_card_movements').insert(payload);
+
+    const {error}=await query;
+    if(error){
+      button.disabled=false;
+      return toast(error.message);
+    }
+    closeModal();
+    await loadCreditCardsData();
+    renderCreditCardsModule();
+  };
+
+  if(existing&&document.getElementById('deleteMovement')){
+    document.getElementById('deleteMovement').onclick=async()=>{
+      if(!confirm('¿Eliminar este movimiento?'))return;
+      const {error}=await sb.from('credit_card_movements').delete().eq('id',existing.id);
+      if(error)return toast(error.message);
+      closeModal();
+      await loadCreditCardsData();
+      renderCreditCardsModule();
+    };
+  }
+}
+async function archiveCreditCard(){
+  if(!selectedCreditCardId)return;
+  if(!confirm('¿Archivar esta tarjeta? No se borran sus resúmenes ni movimientos.'))return;
+  const {error}=await sb.from('credit_cards').update({active:false}).eq('id',selectedCreditCardId);
+  if(error)return toast(error.message);
+  selectedCreditCardId=null;
+  selectedCreditStatementId=null;
+  await loadCreditCardsData();
+  renderCreditCardsModule();
+}
+
 function renderGroups(){
   const activeGroups=groups.filter(g=>(g.status||'active')==='active');
   const suspendedGroups=groups.filter(g=>g.status==='suspended');
@@ -1096,6 +1670,16 @@ function renderGroups(){
     </div>
 
     ${renderOwnerDashboard()}
+
+    ${hasOwnerSpaces()?`<div class="card owner-panel" style="margin-bottom:18px">
+      <div class="statement-top">
+        <div>
+          <h2>Tarjetas de crédito BETA</h2>
+          <p class="sub">Módulo privado del titular. No se comparte con administradores ni consulta.</p>
+        </div>
+        <button class="btn primary" id="openCreditCards">Abrir Tarjetas BETA</button>
+      </div>
+    </div>`:''}
 
     <div class="workspace-grid">
       ${activeGroups.map(spaceCard).join('')||`<div class="card workspace" style="cursor:default">
@@ -1164,6 +1748,7 @@ function renderGroups(){
 
   document.getElementById('logout').onclick=()=>sb.auth.signOut();
   if(document.getElementById('newGroup'))document.getElementById('newGroup').onclick=openCreateGroup;
+  if(document.getElementById('openCreditCards'))document.getElementById('openCreditCards').onclick=openCreditCardsModule;
 }
 function openCreateGroup(){
   if(!platformPermissions.can_create_spaces)return toast('No tenés autorización para crear espacios');
@@ -1787,7 +2372,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Corrección carga factura v16 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Tarjetas BETA v17 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>

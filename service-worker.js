@@ -1,4 +1,4 @@
-const WORKER_VERSION = 'gestor-gastos-notificaciones-v16';
+const WORKER_VERSION = 'gestor-gastos-notificaciones-v17';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -97,5 +97,3 @@ self.addEventListener('notificationclick', event => {
     })
   );
 });
-// retry pages deploy v16
-// republish pages v16
