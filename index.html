@@ -54,7 +54,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .local-preview{margin-top:10px}.local-preview.hidden{display:none}.local-preview-title{font-size:12px;font-weight:850;margin-bottom:6px}
 
 .stat{padding:18px}.stat span{display:block;color:var(--muted);font-size:13px}.stat strong{display:block;font-size:24px;margin-top:6px}.stat .hint{display:block;color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.stat .mini{display:block;color:var(--ink);font-size:12px;line-height:1.35;margin-top:8px}
-.annual-overview{margin:0 0 18px}.annual-overview-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin:0 0 10px}.annual-overview-head h2{margin:0;font-size:18px}.annual-overview-head small{color:var(--muted)}.annual-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.annual-month{border:1px solid var(--line);border-radius:18px;background:#fff;padding:13px;cursor:pointer;box-shadow:0 6px 22px rgba(20,33,29,.04)}.annual-month:hover{border-color:var(--brand)}.annual-month.active{border-color:var(--brand);background:#f0faf6}.annual-month-title{display:flex;justify-content:space-between;gap:6px;align-items:center;font-weight:900}.annual-month-title small{color:var(--muted);font-weight:800}.annual-total{font-size:20px;font-weight:950;margin-top:8px}.annual-paid{font-size:12px;color:var(--muted);margin-top:2px}.annual-mini{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}.annual-mini span{display:block;border-radius:10px;background:#f6f9f7;border:1px solid #edf2ee;padding:6px;font-size:11px;color:var(--muted)}.annual-mini strong{display:block;color:var(--ink);font-size:14px;margin-top:2px}.annual-mini span.warn strong{color:var(--orange)}.annual-mini span.bad strong{color:var(--red)}
+.annual-overview{margin:0 0 18px}.annual-overview-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin:0 0 10px}.annual-overview-head h2{margin:0;font-size:18px}.annual-overview-head small{color:var(--muted)}.annual-scroll{overflow-x:auto;padding-bottom:6px}.annual-grid{display:flex;gap:10px;min-width:max-content}.annual-month{flex:0 0 320px;border:1px solid var(--line);border-radius:18px;background:#fff;padding:13px;cursor:pointer;box-shadow:0 6px 22px rgba(20,33,29,.04)}.annual-month:hover{border-color:var(--brand)}.annual-month.active{border-color:var(--brand);background:#f0faf6}.annual-month-title{display:flex;justify-content:space-between;gap:6px;align-items:center;font-weight:900}.annual-month-title small{color:var(--muted);font-weight:800}.annual-total{font-size:20px;font-weight:950;margin-top:8px}.annual-paid{font-size:12px;color:var(--muted);margin-top:2px}.annual-mini{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}.annual-mini span{display:block;border-radius:10px;background:#f6f9f7;border:1px solid #edf2ee;padding:6px;font-size:11px;color:var(--muted)}.annual-mini strong{display:block;color:var(--ink);font-size:14px;margin-top:2px}.annual-mini span.warn strong{color:var(--orange)}.annual-mini span.bad strong{color:var(--red)}
 .doc-indicators{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.doc-pill{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:900;border:1px solid var(--line);background:#fff;color:var(--muted)}.doc-pill.ok{background:#e8f6ef;color:#19734f;border-color:#b9dfce}.doc-pill.bad{background:#fff1f1;color:#b72e35;border-color:#efc3c5}
 .matrix{overflow:auto;max-height:70vh;position:relative}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:980px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb;position:sticky;top:0;z-index:5}.matrix th:first-child,.matrix td:first-child{position:sticky;left:0;z-index:4;background:#fff;box-shadow:8px 0 14px rgba(20,33,29,.04)}.matrix thead th:first-child{z-index:8;background:#fbfcfb}.matrix tfoot td{background:#f7faf8;position:sticky;bottom:0;z-index:3}.matrix tfoot td:first-child{z-index:6}.service-cell{min-width:235px}.service-name{font-weight:850}.private-service-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#efe9ff;color:#6543a5;font-size:10px;font-weight:900;vertical-align:middle}.payment-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}.payment-summary .item{border:1px solid var(--line);border-radius:12px;padding:11px;background:#fff}.payment-summary span{display:block;color:var(--muted);font-size:12px}.payment-summary strong{display:block;font-size:18px;margin-top:4px}.partial-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:#fff3cd;color:#8a5b00;font-size:11px;font-weight:900}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
@@ -110,8 +110,8 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 @media(max-width:760px){.notification-layout{grid-template-columns:1fr}}
 
 
-@media(max-width:900px){.annual-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}.user-config{grid-template-columns:1fr 1fr}}
-@media(max-width:560px){.annual-grid{grid-template-columns:1fr}.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}.auth-tabs{grid-template-columns:1fr}.user-config{grid-template-columns:1fr}.user-access-top{flex-direction:column}}
+@media(max-width:900px){.report-grid{grid-template-columns:1fr 1fr}.report-columns{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr 1fr}.user-config{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.report-grid{grid-template-columns:1fr}.access-grid{grid-template-columns:1fr}.access-check{justify-content:flex-start}.auth-tabs{grid-template-columns:1fr}.user-config{grid-template-columns:1fr}.user-access-top{flex-direction:column}}
 
 @media(max-width:900px){.forecast-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.forecast-grid{grid-template-columns:1fr}}
 .not-applicable{background:#f1f3f2;color:#8a958f;cursor:default;border-style:dashed}.not-applicable:hover{border-color:var(--line)}
@@ -159,7 +159,7 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
 
-const MONTHS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DEFAULT_CATEGORIES=[
   'Luz','Gas','Agua','Internet','Alquiler y expensas','Educación',
   'Salud','Seguros','Tarjetas','Impuestos','Moratorias','Sueldos',
@@ -262,7 +262,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260705-11',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260705-12',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1402,6 +1402,8 @@ function renderAnnualOverview(){
         <small>Resumen mensual de importes, facturas, comprobantes y pendientes.</small>
       </div>
     </div>
+    <small>Deslizá de izquierda a derecha para ver todo el año completo.</small>
+    <div class="annual-scroll">
     <div class="annual-grid">
       ${months.map(key=>{
         const data=monthQuickSummary(key);
@@ -1420,6 +1422,7 @@ function renderAnnualOverview(){
           </div>
         </div>`;
       }).join('')}
+    </div>
     </div>
   </div>`;
 }
@@ -1596,7 +1599,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Vista rápida anual v11 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Vista rápida anual v12 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
