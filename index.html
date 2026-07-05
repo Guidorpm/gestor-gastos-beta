@@ -54,7 +54,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .local-preview{margin-top:10px}.local-preview.hidden{display:none}.local-preview-title{font-size:12px;font-weight:850;margin-bottom:6px}
 
 .stat{padding:18px}.stat span{display:block;color:var(--muted);font-size:13px}.stat strong{display:block;font-size:24px;margin-top:6px}.stat .hint{display:block;color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.stat .mini{display:block;color:var(--ink);font-size:12px;line-height:1.35;margin-top:8px}
-.matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.private-service-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#efe9ff;color:#6543a5;font-size:10px;font-weight:900;vertical-align:middle}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
+.matrix{overflow:auto}.matrix table{width:100%;border-collapse:separate;border-spacing:0;min-width:880px}.matrix th,.matrix td{padding:14px;border-bottom:1px solid var(--line);vertical-align:top}.matrix th{font-size:12px;text-transform:uppercase;color:var(--muted);text-align:left;background:#fbfcfb}.service-cell{min-width:220px}.service-name{font-weight:850}.private-service-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#efe9ff;color:#6543a5;font-size:10px;font-weight:900;vertical-align:middle}.payment-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}.payment-summary .item{border:1px solid var(--line);border-radius:12px;padding:11px;background:#fff}.payment-summary span{display:block;color:var(--muted);font-size:12px}.payment-summary strong{display:block;font-size:18px;margin-top:4px}.partial-badge{display:inline-block;padding:4px 9px;border-radius:999px;background:#fff3cd;color:#8a5b00;font-size:11px;font-weight:900}.service-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
 .missing{background:#fafcfa}.paid{background:#e7f5ff;border-color:#a8d4f5}
 .included{background:#f0ebff;border-color:#c8b7f2}.included .status{color:#6941a5}
@@ -260,7 +260,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260702-8',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260705-9',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1203,7 +1203,38 @@ function emptyBoxText(service){
   if(service.frequency==='one_time')return ['Sin movimiento','Cargar si corresponde'];
   return ['Sin datos','Cargar importe y vencimiento'];
 }
-function paymentFor(obligationId){return payments.find(p=>p.obligation_id===obligationId)}
+function paymentsFor(obligationId){
+  return payments
+    .filter(p=>p.obligation_id===obligationId)
+    .sort((a,b)=>(b.paid_at||'').localeCompare(a.paid_at||'')||String(b.created_at||'').localeCompare(String(a.created_at||'')));
+}
+function paymentFor(obligationId){return paymentsFor(obligationId)[0]||null}
+function paidAmountFor(obligationId){
+  return paymentsFor(obligationId).reduce((sum,p)=>sum+Number(p.total_amount||0),0);
+}
+function balanceFor(obligation){
+  if(!obligation)return 0;
+  return Math.max(0,Number(obligation.amount||0)-paidAmountFor(obligation.id));
+}
+function paymentProgress(obligation){
+  const amount=Number(obligation?.amount||0);
+  const paid=paidAmountFor(obligation?.id);
+  const balance=Math.max(0,amount-paid);
+  return{amount,paid,balance,fullyPaid:amount>0&&balance<=0.01,partial:paid>0&&balance>0.01};
+}
+function receiptsForPayment(paymentId){
+  return documents.filter(d=>d.payment_id===paymentId&&d.kind==='receipt');
+}
+function receiptsForObligation(obligationId){
+  const ids=paymentsFor(obligationId).map(p=>p.id);
+  return documents.filter(d=>ids.includes(d.payment_id)&&d.kind==='receipt');
+}
+async function syncObligationStatus(obligationId){
+  if(!obligationId)return;
+  const {error}=await sb.rpc('sync_obligation_payment_status',{p_obligation_id:obligationId});
+  if(error)console.warn('No se pudo sincronizar el estado de la factura:',error.message);
+}
+
 function consolidationForSource(obligationId){
   return consolidations.find(item=>item.source_obligation_id===obligationId)||null;
 }
@@ -1228,7 +1259,7 @@ function netNewAmount(obligation){
 }
 function isEffectivePending(obligation){
   return !!obligation
-    && !paymentFor(obligation.id)
+    && balanceFor(obligation)>0.01
     && obligation.status!=='cancelled'
     && !consolidationForSource(obligation.id);
 }
@@ -1240,22 +1271,26 @@ function dueState(o){
   if(!o)return{cls:'missing',label:'Sin datos'};
   const target=consolidationTarget(o.id);
   if(target)return{cls:'included',label:`Incluida en ${monthLabel(target.period.slice(0,7))}`};
-  if(o.status==='paid'||paymentFor(o.id))return{cls:'paid',label:'Abonado'};
+  const progress=paymentProgress(o);
+  if(o.status==='paid'||progress.fullyPaid)return{cls:'paid',label:'Abonado'};
   const d=daysUntil(o.due_date);
   if(d===null)return{cls:'missing',label:'Falta vencimiento'};
-  if(d<0)return{cls:'overdue',label:`Vencido hace ${Math.abs(d)} día${Math.abs(d)===1?'':'s'}`};
-  if(d===0)return{cls:'urgent',label:'Vence hoy'};
-  if(d<=2)return{cls:'urgent',label:`Faltan ${d} días`};
-  if(d<=5)return{cls:'warning',label:`Faltan ${d} días`};
-  if(d<=10)return{cls:'due-green-soft',label:`Faltan ${d} días`};
-  return{cls:'due-green',label:`Faltan ${d} días`};
+  const prefix=progress.partial?'Saldo parcial · ':'';
+  if(d<0)return{cls:'overdue',label:`${prefix}Vencido hace ${Math.abs(d)} día${Math.abs(d)===1?'':'s'}`};
+  if(d===0)return{cls:'urgent',label:`${prefix}Vence hoy`};
+  if(d<=2)return{cls:'urgent',label:`${prefix}Faltan ${d} días`};
+  if(d<=5)return{cls:'warning',label:`${prefix}Faltan ${d} días`};
+  if(d<=10)return{cls:'due-green-soft',label:`${prefix}Faltan ${d} días`};
+  return{cls:'due-green',label:`${prefix}Faltan ${d} días`};
 }
 function boxClass(o){return dueState(o).cls}
 function boxText(o,service){
   if(!o)return emptyBoxText(service);
   const target=consolidationTarget(o.id);
   if(target)return[`Incluida en ${monthLabel(target.period.slice(0,7))}`,fmtMoney(o.amount)];
-  if(o.status==='paid'||paymentFor(o.id))return['Abonado',fmtMoney(paymentFor(o.id)?.total_amount||o.amount)];
+  const progress=paymentProgress(o);
+  if(o.status==='paid'||progress.fullyPaid)return['Abonado',fmtMoney(progress.paid||o.amount)];
+  if(progress.partial)return[`Parcial · saldo ${fmtMoney(progress.balance)}`,`Pagado ${fmtMoney(progress.paid)} de ${fmtMoney(progress.amount)}`];
   return[dueState(o).label,fmtMoney(o.amount)];
 }
 function lastKnownAmount(serviceId,beforeKey){
@@ -1296,16 +1331,13 @@ function monthTotals(key){
     && o.status!=='cancelled'
   );
   const total=monthRows.reduce((sum,o)=>sum+Number(o.amount||0),0);
-  const paid=monthRows.reduce((sum,o)=>{
-    const payment=paymentFor(o.id);
-    return sum+Number(payment?.total_amount||0);
-  },0);
+  const paid=monthRows.reduce((sum,o)=>sum+paidAmountFor(o.id),0);
   const included=monthRows
     .filter(o=>consolidationForSource(o.id))
     .reduce((sum,o)=>sum+Number(o.amount||0),0);
   const pending=monthRows
     .filter(isEffectivePending)
-    .reduce((sum,o)=>sum+Number(o.amount||0),0);
+    .reduce((sum,o)=>sum+balanceFor(o),0);
   return{
     key,
     count:monthRows.length,
@@ -1487,7 +1519,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Pagos parciales v9 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
@@ -1568,8 +1600,8 @@ function renderServices(ms){
               const invoiceCount=o
                 ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice').length
                 : 0;
-              const receiptCount=o&&paymentFor(o.id)
-                ? documents.filter(d=>d.payment_id===paymentFor(o.id).id&&d.kind==='receipt').length
+              const receiptCount=o
+                ? receiptsForObligation(o.id).length
                 : 0;
 
               return `<td>
@@ -1646,13 +1678,10 @@ function renderBalance(){const rows=balanceData();return `<div class="balance ca
 function reportMonthData(key){
   const monthObligations=obligations.filter(o=>o.period===periodDate(key)&&o.status!=='cancelled');
   const total=monthObligations.reduce((sum,o)=>sum+Number(o.amount||0),0);
-  const paid=monthObligations.reduce((sum,o)=>{
-    const payment=paymentFor(o.id);
-    return sum+Number(payment?.total_amount||0);
-  },0);
+  const paid=monthObligations.reduce((sum,o)=>sum+paidAmountFor(o.id),0);
   const pending=monthObligations
     .filter(isEffectivePending)
-    .reduce((sum,o)=>sum+Number(o.amount||0),0);
+    .reduce((sum,o)=>sum+balanceFor(o),0);
   return{key,total,paid,pending};
 }
 function reportCategoryData(){
@@ -2216,7 +2245,8 @@ function openServiceModal(serviceId=null){
 function openObligation(serviceId,key){
   const s=services.find(x=>x.id===serviceId);
   const o=obligationFor(serviceId,key);
-  const p=o&&paymentFor(o.id);
+  const paymentRows=o?paymentsFor(o.id):[];
+  const progress=o?paymentProgress(o):{amount:0,paid:0,balance:0,fullyPaid:false,partial:false};
   const sourceLink=o?consolidationForSource(o.id):null;
   const target=sourceLink?consolidationTarget(o.id):null;
   const currentLinks=o?consolidationsForTarget(o.id):[];
@@ -2227,7 +2257,7 @@ function openObligation(serviceId,key){
       item.service_id===serviceId
       && item.period<periodDate(key)
       && item.status!=='cancelled'
-      && !paymentFor(item.id)
+      && balanceFor(item)>0.01
       && (
         !consolidationForSource(item.id)
         || currentSourceIds.includes(item.id)
@@ -2238,9 +2268,6 @@ function openObligation(serviceId,key){
   const existingInvoices=o
     ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')
     : [];
-  const existingReceipts=p
-    ? documents.filter(d=>d.payment_id===p.id&&d.kind==='receipt')
-    : [];
   const currentMode=currentLinks.length?'consolidated':'additional';
 
   modal(`<h2>${esc(s.name)} · ${monthLabel(key)}</h2>
@@ -2248,7 +2275,7 @@ function openObligation(serviceId,key){
       ${sourceLink
         ? `Esta deuda quedó incluida en la factura de ${monthLabel(target.period.slice(0,7))}. Se conserva como historial y no se suma dos veces.`
         : o
-          ? 'Podés corregir los datos del mes, administrar sus facturas o borrar la carga mensual completa.'
+          ? 'Podés corregir los datos del mes, administrar facturas y registrar pagos parciales.'
           : 'Cargá los datos del mes. La factura se agrega con un botón independiente.'}
     </div>
 
@@ -2258,6 +2285,14 @@ function openObligation(serviceId,key){
         Este importe no se suma por separado porque está incluido en
         ${monthLabel(target.period.slice(0,7))}.
       </div>`:''}
+
+    ${o?`
+      <div class="payment-summary">
+        <div class="item"><span>Total factura</span><strong>${fmtMoney(progress.amount)}</strong></div>
+        <div class="item"><span>Pagado</span><strong>${fmtMoney(progress.paid)}</strong></div>
+        <div class="item"><span>Saldo pendiente</span><strong>${fmtMoney(progress.balance)}</strong></div>
+      </div>
+    `:''}
 
     <div class="grid2">
       <div class="field">
@@ -2309,7 +2344,7 @@ function openObligation(serviceId,key){
               >
               <span>
                 <strong>${monthLabel(item.period.slice(0,7))}</strong><br>
-                <small>Vencía ${fmtDate(item.due_date)}</small>
+                <small>Vencía ${fmtDate(item.due_date)} · saldo ${fmtMoney(balanceFor(item))}</small>
               </span>
               <strong>${fmtMoney(item.amount)}</strong>
             </label>
@@ -2343,31 +2378,28 @@ function openObligation(serviceId,key){
         </div>`:''}
     </div>
 
-    ${p?`
-      <div class="notice">
-        Abonado el ${fmtDate(p.paid_at)} por ${fmtMoney(p.total_amount)}
-      </div>
-
+    ${o&&paymentRows.length?`
       <div class="document-group">
-        <h3>Comprobante de pago</h3>
-        <p>${existingReceipts.length
-          ? 'Comprobante correspondiente al pago.'
-          : 'El pago está registrado, pero no tiene comprobante adjunto.'}</p>
-
-        ${existingReceipts.length?`
-          <div class="document-gallery">
-            ${existingReceipts.map((document,index)=>
-              documentCard(document,`Comprobante ${index+1}`,canEdit())
-            ).join('')}
-          </div>`:''}
-
-        ${canEdit()?`
-          <div class="workspace-actions">
-            <button class="btn primary small" id="addReceiptToPayment">
-              ${existingReceipts.length?'Agregar otro comprobante':'Cargar comprobante'}
-            </button>
-          </div>
-        `:''}
+        <h3>Pagos registrados</h3>
+        <p>Podés abrir cada pago, cargar comprobantes o anular un pago parcial específico.</p>
+        ${paymentRows.map((payment,index)=>{
+          const receipts=receiptsForPayment(payment.id);
+          return `<div class="folderitem">
+            <div class="folderhead">
+              <div>
+                <strong>Pago ${paymentRows.length-index}</strong>
+                <div>${fmtDate(payment.paid_at)} · ${fmtMoney(payment.total_amount)}</div>
+              </div>
+              <button class="btn soft small" data-payment-detail="${payment.id}">Abrir pago</button>
+            </div>
+            ${receipts.length?`
+              <div class="document-gallery" style="margin-top:10px">
+                ${receipts.map((document,receiptIndex)=>
+                  documentCard(document,`Comprobante ${receiptIndex+1}`,canEdit())
+                ).join('')}
+              </div>`:'<small>Sin comprobante adjunto.</small>'}
+          </div>`;
+        }).join('')}
       </div>`:''}
 
     <div class="field">
@@ -2389,11 +2421,15 @@ function openObligation(serviceId,key){
       ${canEdit()?`
         <button class="btn soft" id="saveObligation">Guardar cambios</button>
         <button class="btn primary" id="addInvoiceButton">Agregar factura</button>
-        ${o&&!p&&!sourceLink?'<button class="btn primary" id="markPaid">Marcar abonado</button>':''}
+        ${o&&!sourceLink&&progress.balance>0.01?'<button class="btn primary" id="markPaid">Registrar pago</button>':''}
       `:''}
     </div>`);
 
   bindMoneyInputs();
+
+  document.querySelectorAll('[data-payment-detail]').forEach(button=>{
+    button.onclick=()=>openPaymentDetail(button.dataset.paymentDetail);
+  });
 
   if(document.getElementById('openConsolidatedTarget')){
     document.getElementById('openConsolidatedTarget').onclick=()=>{
@@ -2428,14 +2464,14 @@ function openObligation(serviceId,key){
     const selected=[...document.querySelectorAll('[data-consolidation-source]:checked')]
       .map(input=>obligations.find(item=>item.id===input.dataset.consolidationSource))
       .filter(Boolean);
-    const includedTotal=selected.reduce((sum,item)=>sum+Number(item.amount||0),0);
+    const includedTotal=selected.reduce((sum,item)=>sum+balanceFor(item),0);
     const invoiceTotal=parseMoneyField(document.getElementById('oamount')?.value||0);
     const newPeriodAmount=Math.max(0,invoiceTotal-includedTotal);
     const summary=document.getElementById('consolidationSummary');
 
     if(summary){
       summary.innerHTML=mode==='consolidated'
-        ? `Deudas anteriores incluidas: <strong>${fmtMoney(includedTotal)}</strong><br>
+        ? `Saldos anteriores incluidos: <strong>${fmtMoney(includedTotal)}</strong><br>
            Total exigible de esta factura: <strong>${fmtMoney(invoiceTotal)}</strong><br>
            Importe nuevo estimado del período: <strong>${fmtMoney(newPeriodAmount)}</strong>`
         : `Esta factura se sumará completa a las deudas anteriores.`;
@@ -2451,12 +2487,6 @@ function openObligation(serviceId,key){
   bindDocumentCards({
     onDelete:()=>openObligation(serviceId,key)
   });
-
-  if(document.getElementById('addReceiptToPayment')){
-    document.getElementById('addReceiptToPayment').onclick=()=>{
-      openAddReceiptModal(p.id,()=>openObligation(serviceId,key));
-    };
-  }
 
   if(!canEdit())return;
 
@@ -2490,10 +2520,10 @@ function openObligation(serviceId,key){
     const selectedTotal=selectedSourceIds
       .map(id=>obligations.find(item=>item.id===id))
       .filter(Boolean)
-      .reduce((sum,item)=>sum+Number(item.amount||0),0);
+      .reduce((sum,item)=>sum+balanceFor(item),0);
 
     if(mode==='consolidated'&&amountValue<selectedTotal){
-      throw new Error('El total de la nueva factura no puede ser menor que las deudas incluidas');
+      throw new Error('El total de la nueva factura no puede ser menor que los saldos incluidos');
     }
 
     const period=periodDate(key);
@@ -2502,7 +2532,7 @@ function openObligation(serviceId,key){
       period,
       amount:amountValue,
       due_date:dueValue,
-      status:p?'paid':'pending',
+      status:o?.status||'pending',
       notes:document.getElementById('onotes').value,
       created_by:session.user.id
     };
@@ -2538,6 +2568,7 @@ function openObligation(serviceId,key){
       await uploadDoc(file,serviceId,saved.id,null,'invoice');
     }
 
+    await syncObligationStatus(saved.id);
     return saved;
   }
 
@@ -2607,7 +2638,7 @@ function openObligation(serviceId,key){
     };
   }
 
-  if(o&&!p&&!sourceLink){
+  if(o&&!sourceLink&&progress.balance>0.01){
     document.getElementById('markPaid').onclick=()=>openPayModal(o);
   }
 }
@@ -2618,11 +2649,10 @@ async function deleteObligationMonth(obligationId,serviceId,key){
   const obligation=obligations.find(item=>item.id===obligationId);
   if(!obligation)return toast('No se encontró la carga del mes');
 
-  const payment=paymentFor(obligationId);
+  const obligationPayments=paymentsFor(obligationId);
+  const paymentIds=obligationPayments.map(payment=>payment.id);
   const invoiceDocs=documents.filter(item=>item.obligation_id===obligationId);
-  const receiptDocs=payment
-    ? documents.filter(item=>item.payment_id===payment.id)
-    : [];
+  const receiptDocs=documents.filter(item=>paymentIds.includes(item.payment_id));
   const allDocs=[...invoiceDocs,...receiptDocs];
   const sourceLink=consolidationForSource(obligationId);
   const targetLinks=consolidationsForTarget(obligationId);
@@ -2632,8 +2662,8 @@ async function deleteObligationMonth(obligationId,serviceId,key){
     invoiceDocs.length
       ? `${invoiceDocs.length} factura${invoiceDocs.length===1?'':'s'}`
       : null,
-    payment
-      ? 'el pago registrado y sus aportes'
+    obligationPayments.length
+      ? `${obligationPayments.length} pago${obligationPayments.length===1?'':'s'} registrado${obligationPayments.length===1?'':'s'} y sus aportes`
       : null,
     receiptDocs.length
       ? `${receiptDocs.length} comprobante${receiptDocs.length===1?'':'s'} de pago`
@@ -2675,151 +2705,44 @@ async function deleteObligationMonth(obligationId,serviceId,key){
     closeModal();
     await reloadGroup();
     renderApp();
-    toast(`Datos de ${monthLabel(key)} eliminados`);
+    toast('Datos del mes borrados');
   }catch(err){
     console.error('Error borrando datos del mes:',err);
     toast(err?.message||'No se pudieron borrar los datos del mes');
   }
 }
-async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
-  const allowed=['image/jpeg','image/png','image/webp','application/pdf'];
-  if(!allowed.includes(file.type))throw new Error('Formato de archivo no admitido');
-  if(file.size>10*1024*1024)throw new Error('El archivo supera el límite de 10 MB');
-
-  const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-  const filePath=`${group.id}/${serviceId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
-
-  const {error:uploadError}=await sb.storage
-    .from('documents')
-    .upload(filePath,file,{
-      contentType:file.type,
-      upsert:false,
-      cacheControl:'3600'
-    });
-
-  if(uploadError)throw uploadError;
-
-  const {error:documentError}=await sb.from('documents').insert({
-    group_id:group.id,
-    obligation_id:obligationId,
-    payment_id:paymentId,
-    kind,
-    file_path:filePath,
-    original_name:file.name,
-    mime_type:file.type,
-    size_bytes:file.size,
-    uploaded_by:session.user.id
-  });
-
-  if(documentError){
-    await sb.storage.from('documents').remove([filePath]);
-    throw documentError;
-  }
-
-  return filePath;
-}
-function openAddReceiptModal(paymentId,onDone){
-  if(!canEdit())return toast('No tenés permiso para cargar comprobantes');
-
-  const payment=payments.find(item=>item.id===paymentId);
-  const obligation=obligations.find(item=>item.id===payment?.obligation_id);
-  const service=services.find(item=>item.id===obligation?.service_id);
-
-  if(!payment||!obligation||!service){
-    return toast('No se encontró el pago correspondiente');
-  }
-
-  modal(`<h2>Cargar comprobante de pago</h2>
-    <div class="sub">
-      El pago ya está registrado. Solamente se agregará el archivo correcto.
-    </div>
-
-    <div class="field">
-      <label>Comprobante</label>
-      <input id="newReceiptFile" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">
-        PDF, JPG, PNG o WEBP. Máximo 10 MB.
-      </div>
-      <div id="newReceiptPreview" class="local-preview hidden"></div>
-    </div>
-
-    <div class="modalactions">
-      <button class="btn outline" data-close>Cancelar</button>
-      <button class="btn primary" id="saveNewReceipt">Guardar comprobante</button>
-    </div>`);
-
-  const input=document.getElementById('newReceiptFile');
-  const preview=document.getElementById('newReceiptPreview');
-  const saveButton=document.getElementById('saveNewReceipt');
-
-  input.onchange=()=>{
-    renderLocalFilePreview(
-      input,
-      preview,
-      'Vista previa del comprobante'
-    );
-  };
-
-  saveButton.onclick=async()=>{
-    const file=input.files?.[0];
-    if(!file){
-      input.click();
-      return;
-    }
-
-    const original=saveButton.textContent;
-    saveButton.disabled=true;
-    saveButton.textContent='Subiendo…';
-
-    try{
-      await uploadDoc(
-        file,
-        service.id,
-        obligation.id,
-        payment.id,
-        'receipt'
-      );
-
-      closeModal();
-      await reloadGroup();
-      toast('Comprobante cargado');
-
-      if(typeof onDone==='function')onDone();
-      else renderApp();
-    }catch(err){
-      console.error('Error cargando comprobante:',err);
-      toast(err?.message||'No se pudo cargar el comprobante');
-    }finally{
-      if(document.getElementById('saveNewReceipt')){
-        saveButton.disabled=false;
-        saveButton.textContent=original;
-      }
-    }
-  };
-}
 
 function openPayModal(o){
-  if(paymentFor(o.id)){
-    toast('Esta factura ya está marcada como abonada');
-    return openPaymentDetail(paymentFor(o.id).id);
+  const progress=paymentProgress(o);
+
+  if(progress.balance<=0.01){
+    const last=paymentFor(o.id);
+    toast('Esta factura ya está abonada');
+    if(last)return openPaymentDetail(last.id);
+    return;
   }
 
   const active=members.filter(m=>Number(m.participation_percent)>0);
   const defaults={};
-  let left=Number(o.amount||0);
+  let left=progress.balance;
 
   active.forEach((m,i)=>{
     const value=i===active.length-1
       ? left
-      : Math.round(Number(o.amount||0)*Number(m.participation_percent||0)/100);
+      : Math.round(progress.balance*Number(m.participation_percent||0)/100);
     defaults[m.id]=value;
     left-=value;
   });
 
   modal(`<h2>Registrar pago</h2>
     <div class="sub">
-      Indicá cuánto aportó realmente cada integrante.
-      Una factura mensual solo puede tener un pago activo.
+      Podés registrar un pago parcial o cancelar el saldo completo de esta factura.
+    </div>
+
+    <div class="payment-summary">
+      <div class="item"><span>Total factura</span><strong>${fmtMoney(progress.amount)}</strong></div>
+      <div class="item"><span>Pagado</span><strong>${fmtMoney(progress.paid)}</strong></div>
+      <div class="item"><span>Saldo a pagar</span><strong>${fmtMoney(progress.balance)}</strong></div>
     </div>
 
     <div class="grid2">
@@ -2829,8 +2752,8 @@ function openPayModal(o){
       </div>
 
       <div class="field">
-        <label>Total pagado</label>
-        <input id="paidTotal" data-money-input class="money-input" value="${formatMoneyField(o.amount||0)}">
+        <label>Total de este pago</label>
+        <input id="paidTotal" data-money-input class="money-input" value="${formatMoneyField(progress.balance||0)}">
       </div>
     </div>
 
@@ -2876,6 +2799,7 @@ function openPayModal(o){
     const total=parseMoneyField(document.getElementById('paidTotal').value);
 
     if(total<=0)return toast('Ingresá el total pagado');
+    if(total>progress.balance+.01)return toast('El pago no puede superar el saldo pendiente');
     if(Math.abs(sum-total)>.01)return toast('Los aportes deben sumar el total pagado');
 
     const saveButton=document.getElementById('savePay');
@@ -2886,21 +2810,6 @@ function openPayModal(o){
     let createdPaymentId=null;
 
     try{
-      const {data:existing,error:existingError}=await sb
-        .from('payments')
-        .select('id')
-        .eq('obligation_id',o.id)
-        .limit(1);
-
-      if(existingError)throw existingError;
-
-      if(existing?.length){
-        closeModal();
-        await reloadGroup();
-        renderApp();
-        return toast('Esta factura ya tenía un pago registrado');
-      }
-
       const {data:payment,error}=await sb
         .from('payments')
         .insert({
@@ -2921,13 +2830,6 @@ function openPayModal(o){
 
       if(contributionResult.error)throw contributionResult.error;
 
-      const obligationResult=await sb
-        .from('obligations')
-        .update({status:'paid'})
-        .eq('id',o.id);
-
-      if(obligationResult.error)throw obligationResult.error;
-
       if(receiptInput.files[0]){
         await uploadDoc(
           receiptInput.files[0],
@@ -2938,27 +2840,23 @@ function openPayModal(o){
         );
       }
 
+      await syncObligationStatus(o.id);
+
       createdPaymentId=null;
       closeModal();
       await reloadGroup();
       renderApp();
-      toast('Pago registrado');
+      toast(total>=progress.balance-.01?'Factura abonada':'Pago parcial registrado');
     }catch(err){
       console.error('Error registrando pago:',err);
 
       if(createdPaymentId){
         await sb.from('payments').delete().eq('id',createdPaymentId);
-        await sb.from('obligations').update({status:'pending'}).eq('id',o.id);
+        await syncObligationStatus(o.id);
       }
 
       const message=String(err?.message||'');
-      toast(
-        message.includes('duplicate key')
-        || message.includes('23505')
-        || message.includes('payments_one_per_obligation')
-          ? 'Esta factura ya tiene un pago registrado'
-          : message||'No se pudo registrar el pago'
-      );
+      toast(message||'No se pudo registrar el pago');
     }finally{
       if(document.getElementById('savePay')){
         saveButton.disabled=false;
@@ -2967,6 +2865,7 @@ function openPayModal(o){
     }
   };
 }
+
 function openInvoiceMonthPicker(serviceId){
   if(!canEdit())return toast('No tenés permiso para cargar facturas');
 
@@ -3008,19 +2907,18 @@ function openFolder(serviceId){
   modal(`<h2>Carpeta · ${esc(s.name)}</h2>
     <div class="sub">
       ${frequencyLabel(s)}${s.frequency==='plan'?' · '+esc(servicePlanDescription(s)):''}
-      · Facturas, deudas, pagos y comprobantes.
+      · Facturas, deudas, pagos parciales y comprobantes.
     </div>
 
     ${os.map(o=>{
-      const p=paymentFor(o.id);
+      const paymentRows=paymentsFor(o.id);
+      const progress=paymentProgress(o);
       const sourceLink=consolidationForSource(o.id);
       const target=sourceLink?consolidationTarget(o.id):null;
       const includedSources=consolidatedSourceObligations(o.id);
       const includedTotal=includedSources.reduce((sum,item)=>sum+Number(item.amount||0),0);
       const invoices=documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice');
-      const receipts=p
-        ? documents.filter(d=>d.payment_id===p.id&&d.kind==='receipt')
-        : [];
+      const receipts=receiptsForObligation(o.id);
 
       return `<div class="folderitem">
         <div class="folderhead">
@@ -3031,12 +2929,20 @@ function openFolder(serviceId){
           <span>
             ${sourceLink&&target
               ? `<span class="included-badge">Incluida en ${monthLabel(target.period.slice(0,7))}</span>`
-              : p
+              : progress.fullyPaid
                 ? 'Abonado'
-                : includedSources.length
-                  ? '<span class="consolidated-badge">Factura consolidada</span>'
-                  : 'Pendiente'}
+                : progress.partial
+                  ? '<span class="partial-badge">Parcial</span>'
+                  : includedSources.length
+                    ? '<span class="consolidated-badge">Factura consolidada</span>'
+                    : 'Pendiente'}
           </span>
+        </div>
+
+        <div class="payment-summary">
+          <div class="item"><span>Total</span><strong>${fmtMoney(progress.amount)}</strong></div>
+          <div class="item"><span>Pagado</span><strong>${fmtMoney(progress.paid)}</strong></div>
+          <div class="item"><span>Saldo</span><strong>${fmtMoney(progress.balance)}</strong></div>
         </div>
 
         ${includedSources.length?`
@@ -3050,7 +2956,7 @@ function openFolder(serviceId){
           <p>Se conserva como historial, pero no se suma por separado a la deuda exigible.</p>
         `:''}
 
-        ${p?`<p>Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}</p>`:''}
+        ${paymentRows.length?`<p>${paymentRows.length} pago${paymentRows.length===1?'':'s'} registrado${paymentRows.length===1?'':'s'} · ${fmtMoney(progress.paid)}</p>`:''}
 
         ${invoices.length?`
           <div class="document-group">
@@ -3112,6 +3018,7 @@ function openFolder(serviceId){
     document.getElementById('deleteServiceBtn').onclick=()=>deleteService(serviceId);
   }
 }
+
 async function deleteService(serviceId){
   const service=services.find(s=>s.id===serviceId);
   if(!service)return;
@@ -3166,7 +3073,8 @@ function openPaymentDetail(id){
     <div class="sub">${o?monthLabel(o.period.slice(0,7)):'Pago'}</div>
 
     <div class="notice">
-      Pagado ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}
+      Este pago: ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}
+      ${o?`<br>Total factura: ${fmtMoney(o.amount)} · Pagado acumulado: ${fmtMoney(paidAmountFor(o.id))} · Saldo: ${fmtMoney(balanceFor(o))}`:''}
     </div>
 
     ${cs.map(c=>`
@@ -3249,9 +3157,9 @@ async function annulPayment(paymentId){
   );
 
   const confirmed=confirm(
-    `¿Anular el pago de ${service?.name||'este servicio'} correspondiente a ${monthLabel(obligation.period.slice(0,7))}?\n\n`+
-    `Se eliminarán el pago, los aportes registrados y ${receipts.length} comprobante${receipts.length===1?'':'s'}.\n`+
-    `La factura volverá a quedar pendiente y las notificaciones podrán reanudarse.\n\n`+
+    `¿Anular este pago de ${service?.name||'este servicio'} correspondiente a ${monthLabel(obligation.period.slice(0,7))}?\n\n`+
+    `Se eliminará este pago por ${fmtMoney(payment.total_amount)}, sus aportes registrados y ${receipts.length} comprobante${receipts.length===1?'':'s'}.\n`+
+    `La factura conservará los demás pagos parciales, si los hubiera.\n\n`+
     `Esta acción no se puede deshacer.`
   );
 
@@ -3273,22 +3181,7 @@ async function annulPayment(paymentId){
 
     if(deleteError)throw deleteError;
 
-    const {data:remaining,error:remainingError}=await sb
-      .from('payments')
-      .select('id')
-      .eq('obligation_id',obligation.id)
-      .limit(1);
-
-    if(remainingError)throw remainingError;
-
-    if(!remaining?.length){
-      const {error:statusError}=await sb
-        .from('obligations')
-        .update({status:'pending'})
-        .eq('id',obligation.id);
-
-      if(statusError)throw statusError;
-    }
+    await syncObligationStatus(obligation.id);
 
     if(receiptPaths.length){
       const {error:storageError}=await sb.storage
@@ -3303,7 +3196,7 @@ async function annulPayment(paymentId){
     closeModal();
     await reloadGroup();
     renderApp();
-    toast('Pago anulado; la factura volvió a pendiente');
+    toast('Pago anulado; la factura se actualizó');
   }catch(err){
     console.error('Error anulando pago:',err);
     toast(err?.message||'No se pudo anular el pago');
@@ -3314,6 +3207,7 @@ async function annulPayment(paymentId){
     }
   }
 }
+
 function permissionSummary(member){
   const ownerMember=member.user_id===group.created_by;
   const items=[];
