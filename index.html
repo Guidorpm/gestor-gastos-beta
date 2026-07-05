@@ -260,7 +260,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260705-9',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260705-10',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1519,7 +1519,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Pagos parciales v9 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Pagos parciales v10 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
@@ -2781,6 +2781,30 @@ function openPayModal(o){
     </div>`);
 
   bindMoneyInputs();
+
+  function distributePaymentContributions(totalValue){
+    let remaining=Number(totalValue||0);
+
+    active.forEach((member,index)=>{
+      const input=document.querySelector(`[data-contrib="${member.id}"]`);
+      if(!input)return;
+
+      const value=index===active.length-1
+        ? remaining
+        : Math.round(Number(totalValue||0)*Number(member.participation_percent||0)/100);
+
+      input.value=formatMoneyField(Math.max(0,value));
+      remaining-=value;
+    });
+  }
+
+  const paidTotalInput=document.getElementById('paidTotal');
+  paidTotalInput.addEventListener('input',()=>{
+    distributePaymentContributions(parseMoneyField(paidTotalInput.value));
+  });
+  paidTotalInput.addEventListener('blur',()=>{
+    distributePaymentContributions(parseMoneyField(paidTotalInput.value));
+  });
 
   const receiptInput=document.getElementById('receiptFile');
   receiptInput.onchange=()=>renderLocalFilePreview(
