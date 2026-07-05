@@ -263,7 +263,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260705-15',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260705-16',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -1723,6 +1723,45 @@ async function deleteStoredDocument(documentId,onDelete){
   if(typeof onDelete==='function')onDelete();
   else renderApp();
 }
+
+async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
+  const allowed=['image/jpeg','image/png','image/webp','application/pdf'];
+  if(!allowed.includes(file.type))throw new Error('Formato de archivo no admitido');
+  if(file.size>10*1024*1024)throw new Error('El archivo supera el límite de 10 MB');
+
+  const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  const filePath=`${group.id}/${serviceId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
+
+  const {error:uploadError}=await sb.storage
+    .from('documents')
+    .upload(filePath,file,{
+      contentType:file.type,
+      upsert:false,
+      cacheControl:'3600'
+    });
+
+  if(uploadError)throw uploadError;
+
+  const {error:documentError}=await sb.from('documents').insert({
+    group_id:group.id,
+    obligation_id:obligationId,
+    payment_id:paymentId,
+    kind,
+    file_path:filePath,
+    original_name:file.name,
+    mime_type:file.type,
+    size_bytes:file.size,
+    uploaded_by:session.user.id
+  });
+
+  if(documentError){
+    await sb.storage.from('documents').remove([filePath]);
+    throw documentError;
+  }
+
+  return filePath;
+}
+
 function renderServices(ms){
   const pending=pendingObligations();
   const over=pending.filter(o=>daysUntil(o.due_date)<0);
@@ -1748,7 +1787,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Panel titular v15 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Corrección carga factura v16 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>

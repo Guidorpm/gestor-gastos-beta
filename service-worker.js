@@ -1,4 +1,4 @@
-const WORKER_VERSION = 'gestor-gastos-notificaciones-v15';
+const WORKER_VERSION = 'gestor-gastos-notificaciones-v16';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -97,4 +97,3 @@ self.addEventListener('notificationclick', event => {
     })
   );
 });
-// retry deploy
