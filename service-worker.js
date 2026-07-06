@@ -1,4 +1,4 @@
-const WORKER_VERSION = 'gestor-gastos-notificaciones-v18';
+const WORKER_VERSION = 'gestor-gastos-notificaciones-v19';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
