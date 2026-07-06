@@ -1,4 +1,4 @@
-const WORKER_VERSION = 'gestor-gastos-notificaciones-v17';
+const WORKER_VERSION = 'gestor-gastos-notificaciones-v18';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
@@ -97,4 +97,3 @@ self.addEventListener('notificationclick', event => {
     })
   );
 });
-// publicar tarjetas beta v17
