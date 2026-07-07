@@ -1,0 +1,137 @@
+# Plan de blindaje — Gestor de Gastos / SOLO TITULAR
+
+## Objetivo
+
+Evitar cualquier fuga de datos marcados como SOLO TITULAR.
+
+Regla central:
+
+LOS DATOS SOLO TITULAR NO PUEDEN SER VISTOS, CALCULADOS, SUMADOS, EXPORTADOS NI INFERIDOS POR USUARIOS NO TITULARES.
+
+---
+
+## Decisión operativa
+
+No reemplazar producción directamente.
+
+Primero probar en una página paralela de test.
+
+---
+
+## Paso 1 — No tocar index.html todavía
+
+El archivo actual de producción sigue siendo:
+
+index.html
+
+No reemplazarlo hasta terminar la prueba.
+
+---
+
+## Paso 2 — Crear página de prueba
+
+En el repo gestor-gastos-beta crear un archivo nuevo:
+
+test-solo-titular.html
+
+Pegar ahí el contenido de:
+
+index_gestor_gastos_solo_titular_v074.txt
+
+Commit sugerido:
+
+Probar regla solo titular en pagina paralela
+
+---
+
+## Paso 3 — Abrir URL de prueba
+
+Después de publicar GitHub Pages, abrir:
+
+https://guidorpm.github.io/gestor-gastos-beta/test-solo-titular.html
+
+---
+
+## Paso 4 — Prueba con Guido
+
+Entrar como Guido.
+
+Verificar:
+
+- Ve servicios privados.
+- Ve Sueldos si está marcado como privado.
+- Ve obligaciones de Sueldos.
+- Ve pagos de Sueldos.
+- Ve documentos de Sueldos.
+- Ve total mensual completo.
+- Ve panel titular.
+
+---
+
+## Paso 5 — Prueba con Fabiana / Paula
+
+Entrar con usuario operador.
+
+Verificar:
+
+- No ve servicios privados.
+- No ve Sueldos.
+- No ve obligaciones de Sueldos.
+- No ve pagos de Sueldos.
+- No ve documentos de Sueldos.
+- No ve suma de Sueldos.
+- No ve total mensual que incluya Sueldos.
+- No ve panel titular.
+- No ve reportes sensibles.
+- No puede exportar datos sensibles.
+
+---
+
+## Paso 6 — Prueba de inferencia
+
+Comparar con cuidado:
+
+- El total mensual del operador no debe coincidir con el total completo si hay datos privados.
+- El operador no debe poder deducir el monto oculto por diferencia.
+- No debe aparecer ningún número global que incluya datos privados.
+
+---
+
+## Paso 7 — Si todo está bien
+
+Recién ahí reemplazar:
+
+index.html
+
+con el contenido probado de:
+
+index_gestor_gastos_solo_titular_v074.txt
+
+Commit sugerido:
+
+Aplicar regla solo titular en produccion
+
+---
+
+## Paso 8 — Blindaje final obligatorio
+
+La versión v074 protege la vista y los cálculos del frontend.
+
+Para blindaje total hay que reforzar también en Supabase:
+
+- RLS.
+- Funciones RPC seguras.
+- Vistas filtradas.
+- Storage documents protegido.
+- Exportaciones controladas.
+
+El objetivo final es que un operador no pueda recibir desde la base datos SOLO TITULAR ni aunque inspeccione el navegador.
+
+---
+
+## Regla final
+
+Primero se filtran datos permitidos.
+Después se calculan totales.
+
+Nunca se calcula con datos privados para después ocultar el detalle.
