@@ -425,6 +425,42 @@ function canEdit(){return membership?.role==='admin'}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
 function canManageAccess(){return isOwner()}
 function canViewReports(){return isOwner()||membership?.can_view_reports===true}
+function canSeeOwnerOnlyData(){return isOwner()}
+function aplicarFiltroSoloTitular(){
+  // REGLA GRABADA A FUEGO:
+  // Los servicios privados / SOLO TITULAR no se muestran, no se suman,
+  // no se exportan y no se usan para calcular totales de usuarios no titulares.
+  if(canSeeOwnerOnlyData())return;
+
+  const serviciosPermitidos=services.filter(service=>service.is_private!==true);
+  const serviciosPermitidosIds=new Set(serviciosPermitidos.map(service=>service.id));
+
+  const obligacionesPermitidas=obligations.filter(obligation=>
+    serviciosPermitidosIds.has(obligation.service_id)
+  );
+  const obligacionesPermitidasIds=new Set(obligacionesPermitidas.map(obligation=>obligation.id));
+
+  const pagosPermitidos=payments.filter(payment=>
+    obligacionesPermitidasIds.has(payment.obligation_id)
+  );
+  const pagosPermitidosIds=new Set(pagosPermitidos.map(payment=>payment.id));
+
+  services=serviciosPermitidos;
+  obligations=obligacionesPermitidas;
+  payments=pagosPermitidos;
+  contributions=contributions.filter(contribution=>
+    pagosPermitidosIds.has(contribution.payment_id)
+  );
+  documents=documents.filter(document=>{
+    if(document.service_id&&serviciosPermitidosIds.has(document.service_id))return true;
+    if(document.obligation_id&&obligacionesPermitidasIds.has(document.obligation_id))return true;
+    if(document.payment_id&&pagosPermitidosIds.has(document.payment_id))return true;
+
+    // Si un documento no está vinculado a servicio, obligación ni pago,
+    // por seguridad no se muestra a usuarios no titulares.
+    return false;
+  });
+}
 function currentRoleLabel(){if(isOwner())return 'Administrador principal';return canEdit()?'Administrador':'Solo consulta'}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
@@ -1809,6 +1845,8 @@ async function reloadGroup(){
   }
   membership=members.find(x=>x.user_id===session.user.id)||membership;
 
+  aplicarFiltroSoloTitular();
+
   const memberUserIds=members.map(member=>member.user_id);
   if(memberUserIds.length){
     const internalResult=await sb
@@ -2372,7 +2410,7 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Tarjetas BETA v17 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Tarjetas BETA v17 · SOLO TITULAR v1 · Totales filtrados antes de calcular</p>
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
