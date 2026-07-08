@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'gestor-gastos-no-cache-operator-final';
+const CACHE_VERSION = 'gestor-gastos-no-cache-operator-v8-final';
 
 self.addEventListener('install', event => {
   self.skipWaiting();
