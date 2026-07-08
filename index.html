@@ -159,7 +159,7 @@ const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
-const APP_OPERATOR_FIX_VERSION='operator-20260708-v4';
+const APP_OPERATOR_FIX_VERSION='operator-20260708-v6-completo';
 
 const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DEFAULT_CATEGORIES=[
@@ -266,7 +266,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260708-operator-v4',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260708-operator-v6',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -422,11 +422,30 @@ function fmtDate(v){if(!v)return'—';return new Date(v+'T00:00:00').toLocaleDat
 function esc(v){return String(v??'').replace(/[&<>'"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[x]))}
 function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
-function canEdit(){return membership?.role==='admin'||membership?.role==='operator'}
+function currentMembership(){
+  if(group){
+    const fromGroups=groups.find(g=>g.id===group.id)?.membership;
+    if(fromGroups)return fromGroups;
+  }
+  return membership||null;
+}
+function currentMembershipRole(){
+  return currentMembership()?.role||'';
+}
+function canEdit(){
+  const role=currentMembershipRole();
+  return role==='admin'||role==='operator';
+}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
 function canManageAccess(){return isOwner()}
-function canViewReports(){return isOwner()||membership?.can_view_reports===true}
-function currentRoleLabel(){if(isOwner())return 'Administrador principal';if(membership?.role==='operator')return 'Operador';return membership?.role==='admin'?'Administrador':'Solo consulta'}
+function canViewReports(){return isOwner()||currentMembership()?.can_view_reports===true}
+function currentRoleLabel(){
+  if(isOwner())return 'Administrador principal';
+  const role=currentMembershipRole();
+  if(role==='operator')return 'Operador';
+  if(role==='admin')return 'Administrador';
+  return 'Solo consulta';
+}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
@@ -1658,27 +1677,6 @@ function renderGroups(){
         `}
       </div>`:''}
     </div>`;
-        ${g.type==='company'?'Empresa':'Grupo familiar'} ·
-        ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':g.membership.role==='operator'?'Operador':'Solo consulta'}
-        <span class="alias-chip">${esc(g.membership.display_name)}</span>
-        ${owner?'<span class="owner-chip">Titular</span>':''}
-      </p>
-      ${status==='suspended'?'<span class="space-status suspended">Suspendido</span>':''}
-      ${status==='archived'?'<span class="space-status archived">Archivado</span>':''}
-      ${status==='deleted'?'<span class="space-status deleted">Eliminado</span>':''}
-      ${owner?`<div class="workspace-actions">
-        ${status==='active'?`
-          <button class="btn outline small" data-space-action="suspended" data-space-id="${g.id}">Suspender</button>
-          <button class="btn soft small" data-space-action="archived" data-space-id="${g.id}">Archivar</button>
-          <button class="btn danger small" data-space-action="deleted" data-space-id="${g.id}">Eliminar</button>
-        `:status==='deleted'?`
-          <button class="btn primary small" data-space-action="active" data-space-id="${g.id}">Restaurar</button>
-        `:`
-          <button class="btn primary small" data-space-action="active" data-space-id="${g.id}">Reactivar</button>
-          <button class="btn danger small" data-space-action="deleted" data-space-id="${g.id}">Eliminar</button>
-        `}
-      </div>`:''}
-    </div>`;
   };
 
   app.innerHTML=`<main>
@@ -1814,6 +1812,7 @@ async function reloadGroup(){
   contributions=(c.data||[]).map(({payments,...x})=>x);
   documents=d.data||[];
   group={...(g.data||group),membership:groups.find(x=>x.id===group.id)?.membership};
+  membership=group.membership||membership;
 
   const obligationIds=obligations.map(item=>item.id);
   if(obligationIds.length){
@@ -4165,6 +4164,11 @@ function permissionSummary(member){
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
     if(member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
     else items.push('<span class="permission-pill">Sin reportes</span>');
+  }else if(member.role==='operator'){
+    items.push('<span class="permission-pill good">Operador</span>');
+    items.push('<span class="permission-pill">Carga y edición operativa</span>');
+    items.push('<span class="permission-pill warn">Sin reportes</span>');
+    items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
   }else{
     items.push('<span class="permission-pill">Solo consulta</span>');
     items.push('<span class="permission-pill warn">Sin edición</span>');
@@ -4184,6 +4188,7 @@ function renderUsersAccess(){
   if(!isOwner())return '<div class="notice">Solo el titular puede ver y modificar los usuarios del espacio.</div>';
 
   const admins=members.filter(member=>member.role==='admin').length;
+  const operators=members.filter(member=>member.role==='operator').length;
   const viewers=members.filter(member=>member.role==='viewer').length;
 
   return `<div class="pagehead">
@@ -4200,6 +4205,7 @@ function renderUsersAccess(){
   <div class="users-summary card">
     <div><span class="access-note">Usuarios activos</span><strong>${members.length}</strong></div>
     <div><span class="access-note">Administradores</span><strong>${admins}</strong></div>
+    <div><span class="access-note">Operadores</span><strong>${operators}</strong></div>
     <div><span class="access-note">Solo consulta</span><strong>${viewers}</strong></div>
   </div>
 
@@ -4238,7 +4244,7 @@ function renderUsersAccess(){
             <label>Participación %</label>
             <input data-share="${member.id}" type="number" min="0" max="100" step="0.01"
               value="${member.role==='admin'?member.participation_percent:0}"
-              ${member.role==='viewer'?'disabled':''}>
+              ${member.role!=='admin'?'disabled':''}>
           </div>
 
           <div class="field">
@@ -4274,7 +4280,7 @@ function bindUsersAccess(){
   document.querySelectorAll('[data-role]').forEach(select=>{
     select.onchange=()=>{
       const share=document.querySelector(`[data-share="${select.dataset.role}"]`);
-      if(select.value==='viewer'||select.value==='operator'){
+      if(select.value!=='admin'){
         share.value=0;
         share.disabled=true;
       }else{
