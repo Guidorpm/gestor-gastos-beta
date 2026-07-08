@@ -159,7 +159,7 @@ const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
-const APP_OPERATOR_FIX_VERSION='operator-20260708-v3';
+const APP_OPERATOR_FIX_VERSION='operator-20260708-v4';
 
 const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DEFAULT_CATEGORIES=[
@@ -266,7 +266,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260708-operator-v3',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260708-operator-v4',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -426,7 +426,7 @@ function canEdit(){return membership?.role==='admin'||membership?.role==='operat
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
 function canManageAccess(){return isOwner()}
 function canViewReports(){return isOwner()||membership?.can_view_reports===true}
-function currentRoleLabel(){if(isOwner())return 'Administrador principal';if(membership?.role==='admin')return 'Administrador';if(membership?.role==='operator')return 'Operador';return 'Solo consulta'}
+function currentRoleLabel(){if(isOwner())return 'Administrador principal';if(membership?.role==='operator')return 'Operador';return membership?.role==='admin'?'Administrador':'Solo consulta'}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
@@ -4144,11 +4144,6 @@ function permissionSummary(member){
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
     if(member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
     else items.push('<span class="permission-pill">Sin reportes</span>');
-  }else if(member.role==='operator'){
-    items.push('<span class="permission-pill good">Operador</span>');
-    items.push('<span class="permission-pill">Carga y edición operativa</span>');
-    items.push('<span class="permission-pill warn">Sin reportes</span>');
-    items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
   }else{
     items.push('<span class="permission-pill">Solo consulta</span>');
     items.push('<span class="permission-pill warn">Sin edición</span>');
@@ -4168,7 +4163,6 @@ function renderUsersAccess(){
   if(!isOwner())return '<div class="notice">Solo el titular puede ver y modificar los usuarios del espacio.</div>';
 
   const admins=members.filter(member=>member.role==='admin').length;
-  const operators=members.filter(member=>member.role==='operator').length;
   const viewers=members.filter(member=>member.role==='viewer').length;
 
   return `<div class="pagehead">
@@ -4185,7 +4179,6 @@ function renderUsersAccess(){
   <div class="users-summary card">
     <div><span class="access-note">Usuarios activos</span><strong>${members.length}</strong></div>
     <div><span class="access-note">Administradores</span><strong>${admins}</strong></div>
-    <div><span class="access-note">Operadores</span><strong>${operators}</strong></div>
     <div><span class="access-note">Solo consulta</span><strong>${viewers}</strong></div>
   </div>
 
@@ -4224,7 +4217,7 @@ function renderUsersAccess(){
             <label>Participación %</label>
             <input data-share="${member.id}" type="number" min="0" max="100" step="0.01"
               value="${member.role==='admin'?member.participation_percent:0}"
-              ${member.role!=='admin'?'disabled':''}>
+              ${member.role==='viewer'?'disabled':''}>
           </div>
 
           <div class="field">
