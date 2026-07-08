@@ -159,7 +159,7 @@ const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
-const APP_OPERATOR_FIX_VERSION='operator-20260708-v7-final';
+const APP_OPERATOR_FIX_VERSION='operator-20260708-v8-final-completo';
 
 const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DEFAULT_CATEGORIES=[
@@ -266,7 +266,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260708-operator-v7-final',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260708-operator-v8-final-completo',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -422,11 +422,42 @@ function fmtDate(v){if(!v)return'—';return new Date(v+'T00:00:00').toLocaleDat
 function esc(v){return String(v??'').replace(/[&<>'"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[x]))}
 function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
-function canEdit(){return membership?.role==='admin'||membership?.role==='operator'}
+function rolePriority(role){
+  return role==='admin'?3:role==='operator'?2:role==='viewer'?1:0;
+}
+function roleLabel(role){
+  if(role==='admin')return 'Administrador';
+  if(role==='operator')return 'Operador';
+  return 'Solo consulta';
+}
+function pickMembership(...items){
+  return items
+    .filter(Boolean)
+    .sort((a,b)=>rolePriority(b.role)-rolePriority(a.role))[0]||null;
+}
+function currentMembership(){
+  const fromGroups=group?groups.find(g=>g.id===group.id)?.membership:null;
+  const fromGroupObject=group?.membership||null;
+  const fromMembers=session?members.find(m=>m.user_id===session.user.id):null;
+  return pickMembership(fromGroups,fromGroupObject,fromMembers,membership);
+}
+function currentMembershipRole(){
+  return currentMembership()?.role||'';
+}
+function currentDisplayName(){
+  return currentMembership()?.display_name||membership?.display_name||userName();
+}
+function canEdit(){
+  const role=currentMembershipRole();
+  return role==='admin'||role==='operator';
+}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
 function canManageAccess(){return isOwner()}
-function canViewReports(){return isOwner()||membership?.can_view_reports===true}
-function currentRoleLabel(){if(isOwner())return 'Administrador principal';if(membership?.role==='operator')return 'Operador';return membership?.role==='admin'?'Administrador':'Solo consulta'}
+function canViewReports(){return isOwner()||currentMembership()?.can_view_reports===true}
+function currentRoleLabel(){
+  if(isOwner())return 'Administrador principal';
+  return roleLabel(currentMembershipRole());
+}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
@@ -1638,7 +1669,7 @@ function renderGroups(){
       <h3>${esc(g.name)}</h3>
       <p>
         ${g.type==='company'?'Empresa':'Grupo familiar'} ·
-        ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':g.membership.role==='operator'?'Operador':'Solo consulta'}
+        ${owner?'Administrador principal':roleLabel(g.membership?.role)}
         <span class="alias-chip">${esc(g.membership.display_name)}</span>
         ${owner?'<span class="owner-chip">Titular</span>':''}
       </p>
@@ -1792,7 +1823,7 @@ async function reloadGroup(){
   payments=(p.data||[]).map(({obligations,...x})=>x);
   contributions=(c.data||[]).map(({payments,...x})=>x);
   documents=d.data||[];
-  group={...(g.data||group),membership:groups.find(x=>x.id===group.id)?.membership};
+  const reloadedGroupData=g.data||group;
 
   const obligationIds=obligations.map(item=>item.id);
   if(obligationIds.length){
@@ -1810,10 +1841,10 @@ async function reloadGroup(){
   }else{
     consolidations=[];
   }
-  membership=members.find(x=>x.user_id===session.user.id)||membership;
   const listedMembership=groups.find(x=>x.id===group.id)?.membership;
-  if(listedMembership)membership=listedMembership;
-  group.membership=membership;
+  const selfMembership=members.find(x=>x.user_id===session.user.id);
+  membership=pickMembership(listedMembership,selfMembership,group.membership,membership);
+  group={...reloadedGroupData,membership};
 
   const memberUserIds=members.map(member=>member.user_id);
   if(memberUserIds.length){
@@ -1857,7 +1888,7 @@ function renderApp(){
       <div class="mark">${group.type==='company'?'E':'F'}</div>
       <div>
         <strong>${esc(group.name)}</strong>
-        <small>${group.type==='company'?'Empresa':'Grupo familiar'} · ${currentRoleLabel()} · ${esc(membership?.display_name||userName())}</small>
+        <small>${group.type==='company'?'Empresa':'Grupo familiar'} · ${currentRoleLabel()} · ${esc(currentDisplayName())}</small>
       </div>
     </div>
     <div class="actions">
@@ -4147,6 +4178,11 @@ function permissionSummary(member){
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
     if(member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
     else items.push('<span class="permission-pill">Sin reportes</span>');
+  }else if(member.role==='operator'){
+    items.push('<span class="permission-pill good">Operador</span>');
+    items.push('<span class="permission-pill">Carga, edición y corrección operativa</span>');
+    items.push('<span class="permission-pill warn">Sin reportes</span>');
+    items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
   }else{
     items.push('<span class="permission-pill">Solo consulta</span>');
     items.push('<span class="permission-pill warn">Sin edición</span>');
@@ -4166,6 +4202,7 @@ function renderUsersAccess(){
   if(!isOwner())return '<div class="notice">Solo el titular puede ver y modificar los usuarios del espacio.</div>';
 
   const admins=members.filter(member=>member.role==='admin').length;
+  const operators=members.filter(member=>member.role==='operator').length;
   const viewers=members.filter(member=>member.role==='viewer').length;
 
   return `<div class="pagehead">
@@ -4182,6 +4219,7 @@ function renderUsersAccess(){
   <div class="users-summary card">
     <div><span class="access-note">Usuarios activos</span><strong>${members.length}</strong></div>
     <div><span class="access-note">Administradores</span><strong>${admins}</strong></div>
+    <div><span class="access-note">Operadores</span><strong>${operators}</strong></div>
     <div><span class="access-note">Solo consulta</span><strong>${viewers}</strong></div>
   </div>
 
@@ -4256,7 +4294,7 @@ function bindUsersAccess(){
   document.querySelectorAll('[data-role]').forEach(select=>{
     select.onchange=()=>{
       const share=document.querySelector(`[data-share="${select.dataset.role}"]`);
-      if(select.value==='viewer'||select.value==='operator'){
+      if(select.value!=='admin'){
         share.value=0;
         share.disabled=true;
       }else{
