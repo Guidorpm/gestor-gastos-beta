@@ -421,47 +421,14 @@ function fmtDate(v){if(!v)return'—';return new Date(v+'T00:00:00').toLocaleDat
 function esc(v){return String(v??'').replace(/[&<>'"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[x]))}
 function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
-function canEdit(){return membership?.role==='admin'}
+function canEdit(){return membership?.role==='admin'||membership?.role==='operator'}
+function canDelete(){return isOwner()||membership?.role==='admin'}
+function canManageServices(){return isOwner()||membership?.role==='admin'}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
 function canManageAccess(){return isOwner()}
-function canViewReports(){return isOwner()||membership?.can_view_reports===true}
-function canSeeOwnerOnlyData(){return isOwner()}
-function aplicarFiltroSoloTitular(){
-  // REGLA GRABADA A FUEGO:
-  // Los servicios privados / SOLO TITULAR no se muestran, no se suman,
-  // no se exportan y no se usan para calcular totales de usuarios no titulares.
-  if(canSeeOwnerOnlyData())return;
-
-  const serviciosPermitidos=services.filter(service=>service.is_private!==true);
-  const serviciosPermitidosIds=new Set(serviciosPermitidos.map(service=>service.id));
-
-  const obligacionesPermitidas=obligations.filter(obligation=>
-    serviciosPermitidosIds.has(obligation.service_id)
-  );
-  const obligacionesPermitidasIds=new Set(obligacionesPermitidas.map(obligation=>obligation.id));
-
-  const pagosPermitidos=payments.filter(payment=>
-    obligacionesPermitidasIds.has(payment.obligation_id)
-  );
-  const pagosPermitidosIds=new Set(pagosPermitidos.map(payment=>payment.id));
-
-  services=serviciosPermitidos;
-  obligations=obligacionesPermitidas;
-  payments=pagosPermitidos;
-  contributions=contributions.filter(contribution=>
-    pagosPermitidosIds.has(contribution.payment_id)
-  );
-  documents=documents.filter(document=>{
-    if(document.service_id&&serviciosPermitidosIds.has(document.service_id))return true;
-    if(document.obligation_id&&obligacionesPermitidasIds.has(document.obligation_id))return true;
-    if(document.payment_id&&pagosPermitidosIds.has(document.payment_id))return true;
-
-    // Si un documento no está vinculado a servicio, obligación ni pago,
-    // por seguridad no se muestra a usuarios no titulares.
-    return false;
-  });
-}
-function currentRoleLabel(){if(isOwner())return 'Administrador principal';return canEdit()?'Administrador':'Solo consulta'}
+function canViewReports(){return isOwner()||(membership?.role==='admin'&&membership?.can_view_reports===true)}
+function roleLabel(role){return role==='admin'?'Administrador':role==='operator'?'Operador':'Solo consulta'}
+function currentRoleLabel(){if(isOwner())return 'Administrador principal';return roleLabel(membership?.role)}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
@@ -1671,7 +1638,7 @@ function renderGroups(){
       <h3>${esc(g.name)}</h3>
       <p>
         ${g.type==='company'?'Empresa':'Grupo familiar'} ·
-        ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':'Solo consulta'}
+        ${owner?'Administrador principal':roleLabel(g.membership?.role)}
         <span class="alias-chip">${esc(g.membership.display_name)}</span>
         ${owner?'<span class="owner-chip">Titular</span>':''}
       </p>
@@ -1844,8 +1811,6 @@ async function reloadGroup(){
     consolidations=[];
   }
   membership=members.find(x=>x.user_id===session.user.id)||membership;
-
-  aplicarFiltroSoloTitular();
 
   const memberUserIds=members.map(member=>member.user_id);
   if(memberUserIds.length){
@@ -2316,7 +2281,7 @@ function renderLocalFilePreview(input,container,label='Archivo seleccionado'){
   };
 }
 async function deleteStoredDocument(documentId,onDelete){
-  if(!canEdit())return toast('No tenés permiso para quitar documentos');
+  if(!canDelete())return toast('No tenés permiso para quitar documentos');
 
   const documentData=documents.find(item=>item.id===documentId);
   if(!documentData)return toast('No se encontró el documento');
@@ -2410,9 +2375,9 @@ function renderServices(ms){
   return `<div class="pagehead">
     <div>
       <h1>Servicios e impuestos</h1>
-      <p>Cuadro mensual, planes, deudas e historial documental. · Tarjetas BETA v17 · SOLO TITULAR v1 · Totales filtrados antes de calcular</p>
+      <p>Cuadro mensual, planes, deudas e historial documental. · Tarjetas BETA v17 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
-    ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
+    ${canEdit()?`<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button>${canManageServices()?'<button class="btn primary" id="addService">+ Agregar</button>':''}</div>`:''}
   </div>
 
   ${renderBalance()}
@@ -2934,7 +2899,7 @@ function bindDashboard(ms){
   if(document.getElementById('downloadReportBtn'))document.getElementById('downloadReportBtn').onclick=downloadReportPdf;
 }
 function openServiceModal(serviceId=null){
-  if(!canEdit())return toast('No tenés permiso para editar servicios');
+  if(!canManageServices())return toast('No tenés permiso para editar servicios');
 
   const existing=serviceId
     ? services.find(service=>service.id===serviceId)
@@ -3305,7 +3270,7 @@ function openObligation(serviceId,key){
       ${existingInvoices.length?`
         <div class="document-gallery">
           ${existingInvoices.map((document,index)=>
-            documentCard(document,`Factura ${index+1}`,canEdit())
+            documentCard(document,`Factura ${index+1}`,canDelete())
           ).join('')}
         </div>`:''}
     </div>
@@ -3327,7 +3292,7 @@ function openObligation(serviceId,key){
             ${receipts.length?`
               <div class="document-gallery" style="margin-top:10px">
                 ${receipts.map((document,receiptIndex)=>
-                  documentCard(document,`Comprobante ${receiptIndex+1}`,canEdit())
+                  documentCard(document,`Comprobante ${receiptIndex+1}`,canDelete())
                 ).join('')}
               </div>`:'<small>Sin comprobante adjunto.</small>'}
           </div>`;
@@ -3346,7 +3311,7 @@ function openObligation(serviceId,key){
         ? `<button class="btn soft" id="openConsolidatedTarget">Abrir ${monthLabel(target.period.slice(0,7))}</button>`
         : ''}
 
-      ${canEdit()&&o
+      ${canDelete()&&o
         ? `<button class="btn danger" id="deleteMonthData">Borrar datos del mes</button>`
         : ''}
 
@@ -3576,7 +3541,7 @@ function openObligation(serviceId,key){
 }
 
 async function deleteObligationMonth(obligationId,serviceId,key){
-  if(!canEdit())return toast('No tenés permiso para borrar esta carga');
+  if(!canDelete())return toast('No tenés permiso para borrar esta carga');
 
   const obligation=obligations.find(item=>item.id===obligationId);
   if(!obligation)return toast('No se encontró la carga del mes');
@@ -3919,7 +3884,7 @@ function openFolder(serviceId){
             <h3>Facturas</h3>
             <div class="document-gallery">
               ${invoices.map((document,index)=>
-                documentCard(document,`Factura ${index+1}`,canEdit())
+                documentCard(document,`Factura ${index+1}`,canDelete())
               ).join('')}
             </div>
           </div>`:''}
@@ -3929,7 +3894,7 @@ function openFolder(serviceId){
             <h3>Comprobantes</h3>
             <div class="document-gallery">
               ${receipts.map((document,index)=>
-                documentCard(document,`Comprobante ${index+1}`,canEdit())
+                documentCard(document,`Comprobante ${index+1}`,canDelete())
               ).join('')}
             </div>
           </div>`:''}
@@ -3951,6 +3916,8 @@ function openFolder(serviceId){
     <div class="modalactions">
       ${canEdit()?`
         <button class="btn primary" id="addInvoiceMonthBtn">+ Agregar factura de otro mes</button>
+      `:''}
+      ${canManageServices()?`
         <button class="btn soft" id="editServiceBtn">Editar servicio</button>
         <button class="btn danger" id="deleteServiceBtn">Eliminar servicio</button>
       `:''}
@@ -3968,14 +3935,20 @@ function openFolder(serviceId){
     };
   });
 
-  if(canEdit()){
+  if(document.getElementById('addInvoiceMonthBtn')){
     document.getElementById('addInvoiceMonthBtn').onclick=()=>openInvoiceMonthPicker(serviceId);
+  }
+  if(document.getElementById('editServiceBtn')){
     document.getElementById('editServiceBtn').onclick=()=>openServiceModal(serviceId);
+  }
+  if(document.getElementById('deleteServiceBtn')){
     document.getElementById('deleteServiceBtn').onclick=()=>deleteService(serviceId);
   }
 }
 
 async function deleteService(serviceId){
+  if(!canManageServices())return toast('No tenés permiso para eliminar servicios');
+
   const service=services.find(s=>s.id===serviceId);
   if(!service)return;
 
@@ -4049,7 +4022,7 @@ function openPaymentDetail(id){
       ${invoices.length?`
         <div class="document-gallery">
           ${invoices.map((document,index)=>
-            documentCard(document,`Factura ${index+1}`,canEdit())
+            documentCard(document,`Factura ${index+1}`,canDelete())
           ).join('')}
         </div>`:''}
     </div>
@@ -4063,7 +4036,7 @@ function openPaymentDetail(id){
       ${receipts.length?`
         <div class="document-gallery">
           ${receipts.map((document,index)=>
-            documentCard(document,`Comprobante ${index+1}`,canEdit())
+            documentCard(document,`Comprobante ${index+1}`,canDelete())
           ).join('')}
         </div>`:''}
 
@@ -4079,7 +4052,7 @@ function openPaymentDetail(id){
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
       <button class="btn soft" id="openFolderBtn">Abrir carpeta</button>
-      ${canEdit()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
+      ${canDelete()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
     </div>`);
 
   bindDocumentCards({
@@ -4100,7 +4073,7 @@ function openPaymentDetail(id){
 }
 
 async function annulPayment(paymentId){
-  if(!canEdit())return toast('No tenés permiso para anular pagos');
+  if(!canDelete())return toast('No tenés permiso para anular pagos');
 
   const payment=payments.find(item=>item.id===paymentId);
   const obligation=obligations.find(item=>item.id===payment?.obligation_id);
@@ -4179,11 +4152,17 @@ function permissionSummary(member){
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
     if(member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
     else items.push('<span class="permission-pill">Sin reportes</span>');
+  }else if(member.role==='operator'){
+    items.push('<span class="permission-pill good">Operador</span>');
+    items.push('<span class="permission-pill">Carga y edición operativa</span>');
+    items.push('<span class="permission-pill warn">Sin reportes</span>');
+    items.push('<span class="permission-pill warn">Sin datos de titular</span>');
+    items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
   }else{
     items.push('<span class="permission-pill">Solo consulta</span>');
     items.push('<span class="permission-pill warn">Sin edición</span>');
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
-    if(member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
+    if(member.role==='admin'&&member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
     else items.push('<span class="permission-pill">Sin reportes</span>');
   }
 
@@ -4198,6 +4177,7 @@ function renderUsersAccess(){
   if(!isOwner())return '<div class="notice">Solo el titular puede ver y modificar los usuarios del espacio.</div>';
 
   const admins=members.filter(member=>member.role==='admin').length;
+  const operators=members.filter(member=>member.role==='operator').length;
   const viewers=members.filter(member=>member.role==='viewer').length;
 
   return `<div class="pagehead">
@@ -4214,6 +4194,7 @@ function renderUsersAccess(){
   <div class="users-summary card">
     <div><span class="access-note">Usuarios activos</span><strong>${members.length}</strong></div>
     <div><span class="access-note">Administradores</span><strong>${admins}</strong></div>
+    <div><span class="access-note">Operadores</span><strong>${operators}</strong></div>
     <div><span class="access-note">Solo consulta</span><strong>${viewers}</strong></div>
   </div>
 
@@ -4243,6 +4224,7 @@ function renderUsersAccess(){
             <label>Permiso</label>
             <select data-role="${member.id}" ${ownerMember?'disabled':''}>
               <option value="admin" ${member.role==='admin'?'selected':''}>Administrador</option>
+              <option value="operator" ${member.role==='operator'?'selected':''}>Operador</option>
               <option value="viewer" ${member.role==='viewer'?'selected':''}>Solo consulta</option>
             </select>
           </div>
@@ -4251,7 +4233,7 @@ function renderUsersAccess(){
             <label>Participación %</label>
             <input data-share="${member.id}" type="number" min="0" max="100" step="0.01"
               value="${member.role==='admin'?member.participation_percent:0}"
-              ${member.role==='viewer'?'disabled':''}>
+              ${member.role!=='admin'?'disabled':''}>
           </div>
 
           <div class="field">
@@ -4274,7 +4256,7 @@ function renderUsersAccess(){
   </div>
 
   <div class="notice">
-    Solo el titular puede entrar a esta sección. Un administrador operativo puede cargar, editar y pagar, pero no crear ni quitar usuarios.
+    Solo el titular puede entrar a esta sección. Un operador puede cargar, editar y pagar información operativa, pero no crear/quitar usuarios ni ver datos de titular.
   </div>`;
 }
 
@@ -4287,7 +4269,7 @@ function bindUsersAccess(){
   document.querySelectorAll('[data-role]').forEach(select=>{
     select.onchange=()=>{
       const share=document.querySelector(`[data-share="${select.dataset.role}"]`);
-      if(select.value==='viewer'){
+      if(select.value!=='admin'){
         share.value=0;
         share.disabled=true;
       }else{
@@ -4320,7 +4302,7 @@ async function saveUsersAccess(){
         ? Number(document.querySelector(`[data-share="${member.id}"]`).value||0)
         : 0,
       can_view_reports:ownerMember
-        || document.querySelector(`[data-report-access="${member.id}"]`).value==='true'
+        || (role==='admin'&&document.querySelector(`[data-report-access="${member.id}"]`).value==='true')
     };
   });
 
@@ -4386,6 +4368,7 @@ function openCreateInternalAccess(){
         <label>Permiso</label>
         <select id="internalRole">
           <option value="viewer">Solo consulta</option>
+          <option value="operator">Operador</option>
           <option value="admin">Administrador operativo</option>
         </select>
       </div>
@@ -4418,7 +4401,7 @@ function openCreateInternalAccess(){
     const displayName=displayInput.value.trim();
     const tempPassword=document.getElementById('internalTempPassword').value;
     const role=document.getElementById('internalRole').value;
-    const canViewReports=document.getElementById('internalReports').value==='true';
+    const canViewReports=role==='admin'&&document.getElementById('internalReports').value==='true';
     const button=document.getElementById('createInternalUserBtn');
 
     if(alias.length<3)return toast('El alias debe tener al menos 3 caracteres');
@@ -4456,7 +4439,7 @@ function openCreateInternalAccess(){
           <div><strong>Espacio:</strong> ${esc(group.name)}</div>
           <div><strong>Usuario:</strong> ${esc(data.alias)}</div>
           ${data.created_new?`<div><strong>Contraseña temporal:</strong> ${esc(tempPassword)}</div>`:''}
-          <div><strong>Permiso:</strong> ${role==='admin'?'Administrador operativo':'Solo consulta'}</div>
+          <div><strong>Permiso:</strong> ${role==='admin'?'Administrador operativo':role==='operator'?'Operador':'Solo consulta'}</div>
         </div>
 
         <div class="notice">
