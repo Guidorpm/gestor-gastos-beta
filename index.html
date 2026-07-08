@@ -159,6 +159,7 @@ const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
+const APP_OPERATOR_FIX_VERSION='operator-20260708-v2';
 
 const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DEFAULT_CATEGORIES=[
@@ -265,7 +266,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260705-17',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260708-operator-v2',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -505,6 +506,8 @@ async function createCustomCategory(name){
   serviceCategories.push(data);
   return cleaned;
 }
+
+console.log('Gestor de Gastos operator fix cargado:', APP_OPERATOR_FIX_VERSION);
 
 async function init(){
   try{
