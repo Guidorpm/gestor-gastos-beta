@@ -4640,6 +4640,77 @@ function openMyAlias(){
 }
 async function copyText(text,message){try{await navigator.clipboard.writeText(text);toast(message)}catch{const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();toast(message)}}
 window.addEventListener('unhandledrejection',event=>{console.error(event.reason);toast(event.reason?.message||'Ocurrió un error')});
+// ============================================================
+// FIX FINAL OPERATOR - GRUPO GR
+// Permite operador operativo sin convertirlo en admin/titular
+// ============================================================
+
+function __operatorFixMembership(){
+  const byGroup = group ? groups.find(g => g.id === group.id)?.membership : null;
+  const byGroupObject = group?.membership || null;
+  const byMembers = session ? members.find(m => m.user_id === session.user.id) : null;
+
+  const found =
+    [byGroup, byGroupObject, byMembers, membership]
+      .filter(Boolean)
+      .find(m => m.role === 'operator')
+    || byGroup
+    || byGroupObject
+    || byMembers
+    || membership
+    || null;
+
+  if(found){
+    membership = found;
+    if(group) group.membership = found;
+  }
+
+  return found;
+}
+
+function __operatorFixRole(){
+  return __operatorFixMembership()?.role || '';
+}
+
+canEdit = function(){
+  const role = __operatorFixRole();
+  return role === 'admin' || role === 'operator';
+};
+
+currentRoleLabel = function(){
+  if(isOwner()) return 'Administrador principal';
+
+  const role = __operatorFixRole();
+
+  if(role === 'operator') return 'Operador';
+  if(role === 'admin') return 'Administrador';
+
+  return 'Solo consulta';
+};
+
+canViewReports = function(){
+  const m = __operatorFixMembership();
+  return isOwner() || m?.can_view_reports === true;
+};
+
+const __renderAppOriginal = renderApp;
+
+renderApp = function(){
+  __operatorFixMembership();
+  __renderAppOriginal();
+
+  setTimeout(() => {
+    const m = __operatorFixMembership();
+    if(m?.role !== 'operator') return;
+
+    document.querySelectorAll('small,p').forEach(el => {
+      if(el.textContent.includes('Solo consulta')){
+        el.innerHTML = el.innerHTML.replace('Solo consulta', 'Operador');
+      }
+    });
+  }, 0);
+};
+
 init();
 </script>
 </body>
