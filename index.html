@@ -159,7 +159,7 @@ const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
-const APP_OPERATOR_FIX_VERSION='operator-20260708-v2';
+const APP_OPERATOR_FIX_VERSION='operator-20260708-v3';
 
 const MONTHS=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DEFAULT_CATEGORIES=[
@@ -266,7 +266,7 @@ async function registerServiceWorker(){
   if(!notificationSupported())return null;
   if(!serviceWorkerRegistrationPromise){
     serviceWorkerRegistrationPromise=navigator.serviceWorker
-      .register('./service-worker.js?v=20260708-operator-v2',{scope:'./',updateViaCache:'none'})
+      .register('./service-worker.js?v=20260708-operator-v3',{scope:'./',updateViaCache:'none'})
       .then(async registration=>{
         try{await registration.update();}catch(error){console.warn('No se pudo forzar la actualización del service worker:',error);}
         await navigator.serviceWorker.ready;
@@ -423,13 +423,10 @@ function esc(v){return String(v??'').replace(/[&<>'"]/g,x=>({'&':'&amp;','<':'&l
 function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
 function canEdit(){return membership?.role==='admin'||membership?.role==='operator'}
-function canDelete(){return isOwner()||membership?.role==='admin'}
-function canManageServices(){return isOwner()||membership?.role==='admin'}
 function isOwner(){return !!group&&!!session&&group.created_by===session.user.id}
 function canManageAccess(){return isOwner()}
-function canViewReports(){return isOwner()||(membership?.role==='admin'&&membership?.can_view_reports===true)}
-function roleLabel(role){return role==='admin'?'Administrador':role==='operator'?'Operador':'Solo consulta'}
-function currentRoleLabel(){if(isOwner())return 'Administrador principal';return roleLabel(membership?.role)}
+function canViewReports(){return isOwner()||membership?.can_view_reports===true}
+function currentRoleLabel(){if(isOwner())return 'Administrador principal';if(membership?.role==='admin')return 'Administrador';if(membership?.role==='operator')return 'Operador';return 'Solo consulta'}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('show'),2200)}
 function closeModal(){document.getElementById('modalRoot').innerHTML=''}
 function modal(html,wide=false){document.getElementById('modalRoot').innerHTML=`<div class="modalbg" id="mbg"><div class="modal ${wide?'wide':''}">${html}</div></div>`;mbg.onclick=e=>{if(e.target===mbg)closeModal()};document.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal)}
@@ -1641,7 +1638,7 @@ function renderGroups(){
       <h3>${esc(g.name)}</h3>
       <p>
         ${g.type==='company'?'Empresa':'Grupo familiar'} ·
-        ${owner?'Administrador principal':roleLabel(g.membership?.role)}
+        ${owner?'Administrador principal':g.membership.role==='admin'?'Administrador':g.membership.role==='operator'?'Operador':'Solo consulta'}
         <span class="alias-chip">${esc(g.membership.display_name)}</span>
         ${owner?'<span class="owner-chip">Titular</span>':''}
       </p>
@@ -2284,7 +2281,7 @@ function renderLocalFilePreview(input,container,label='Archivo seleccionado'){
   };
 }
 async function deleteStoredDocument(documentId,onDelete){
-  if(!canDelete())return toast('No tenés permiso para quitar documentos');
+  if(!canEdit())return toast('No tenés permiso para quitar documentos');
 
   const documentData=documents.find(item=>item.id===documentId);
   if(!documentData)return toast('No se encontró el documento');
@@ -2380,7 +2377,7 @@ function renderServices(ms){
       <h1>Servicios e impuestos</h1>
       <p>Cuadro mensual, planes, deudas e historial documental. · Tarjetas BETA v17 · Servicios privados v8 · Versión comprobantes 01-07-2026</p>
     </div>
-    ${canEdit()?`<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button>${canManageServices()?'<button class="btn primary" id="addService">+ Agregar</button>':''}</div>`:''}
+    ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
 
   ${renderBalance()}
@@ -2902,7 +2899,7 @@ function bindDashboard(ms){
   if(document.getElementById('downloadReportBtn'))document.getElementById('downloadReportBtn').onclick=downloadReportPdf;
 }
 function openServiceModal(serviceId=null){
-  if(!canManageServices())return toast('No tenés permiso para editar servicios');
+  if(!canEdit())return toast('No tenés permiso para editar servicios');
 
   const existing=serviceId
     ? services.find(service=>service.id===serviceId)
@@ -3273,7 +3270,7 @@ function openObligation(serviceId,key){
       ${existingInvoices.length?`
         <div class="document-gallery">
           ${existingInvoices.map((document,index)=>
-            documentCard(document,`Factura ${index+1}`,canDelete())
+            documentCard(document,`Factura ${index+1}`,canEdit())
           ).join('')}
         </div>`:''}
     </div>
@@ -3295,7 +3292,7 @@ function openObligation(serviceId,key){
             ${receipts.length?`
               <div class="document-gallery" style="margin-top:10px">
                 ${receipts.map((document,receiptIndex)=>
-                  documentCard(document,`Comprobante ${receiptIndex+1}`,canDelete())
+                  documentCard(document,`Comprobante ${receiptIndex+1}`,canEdit())
                 ).join('')}
               </div>`:'<small>Sin comprobante adjunto.</small>'}
           </div>`;
@@ -3314,7 +3311,7 @@ function openObligation(serviceId,key){
         ? `<button class="btn soft" id="openConsolidatedTarget">Abrir ${monthLabel(target.period.slice(0,7))}</button>`
         : ''}
 
-      ${canDelete()&&o
+      ${canEdit()&&o
         ? `<button class="btn danger" id="deleteMonthData">Borrar datos del mes</button>`
         : ''}
 
@@ -3544,7 +3541,7 @@ function openObligation(serviceId,key){
 }
 
 async function deleteObligationMonth(obligationId,serviceId,key){
-  if(!canDelete())return toast('No tenés permiso para borrar esta carga');
+  if(!canEdit())return toast('No tenés permiso para borrar esta carga');
 
   const obligation=obligations.find(item=>item.id===obligationId);
   if(!obligation)return toast('No se encontró la carga del mes');
@@ -3887,7 +3884,7 @@ function openFolder(serviceId){
             <h3>Facturas</h3>
             <div class="document-gallery">
               ${invoices.map((document,index)=>
-                documentCard(document,`Factura ${index+1}`,canDelete())
+                documentCard(document,`Factura ${index+1}`,canEdit())
               ).join('')}
             </div>
           </div>`:''}
@@ -3897,7 +3894,7 @@ function openFolder(serviceId){
             <h3>Comprobantes</h3>
             <div class="document-gallery">
               ${receipts.map((document,index)=>
-                documentCard(document,`Comprobante ${index+1}`,canDelete())
+                documentCard(document,`Comprobante ${index+1}`,canEdit())
               ).join('')}
             </div>
           </div>`:''}
@@ -3919,8 +3916,6 @@ function openFolder(serviceId){
     <div class="modalactions">
       ${canEdit()?`
         <button class="btn primary" id="addInvoiceMonthBtn">+ Agregar factura de otro mes</button>
-      `:''}
-      ${canManageServices()?`
         <button class="btn soft" id="editServiceBtn">Editar servicio</button>
         <button class="btn danger" id="deleteServiceBtn">Eliminar servicio</button>
       `:''}
@@ -3938,20 +3933,14 @@ function openFolder(serviceId){
     };
   });
 
-  if(document.getElementById('addInvoiceMonthBtn')){
+  if(canEdit()){
     document.getElementById('addInvoiceMonthBtn').onclick=()=>openInvoiceMonthPicker(serviceId);
-  }
-  if(document.getElementById('editServiceBtn')){
     document.getElementById('editServiceBtn').onclick=()=>openServiceModal(serviceId);
-  }
-  if(document.getElementById('deleteServiceBtn')){
     document.getElementById('deleteServiceBtn').onclick=()=>deleteService(serviceId);
   }
 }
 
 async function deleteService(serviceId){
-  if(!canManageServices())return toast('No tenés permiso para eliminar servicios');
-
   const service=services.find(s=>s.id===serviceId);
   if(!service)return;
 
@@ -4025,7 +4014,7 @@ function openPaymentDetail(id){
       ${invoices.length?`
         <div class="document-gallery">
           ${invoices.map((document,index)=>
-            documentCard(document,`Factura ${index+1}`,canDelete())
+            documentCard(document,`Factura ${index+1}`,canEdit())
           ).join('')}
         </div>`:''}
     </div>
@@ -4039,7 +4028,7 @@ function openPaymentDetail(id){
       ${receipts.length?`
         <div class="document-gallery">
           ${receipts.map((document,index)=>
-            documentCard(document,`Comprobante ${index+1}`,canDelete())
+            documentCard(document,`Comprobante ${index+1}`,canEdit())
           ).join('')}
         </div>`:''}
 
@@ -4055,7 +4044,7 @@ function openPaymentDetail(id){
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
       <button class="btn soft" id="openFolderBtn">Abrir carpeta</button>
-      ${canDelete()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
+      ${canEdit()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
     </div>`);
 
   bindDocumentCards({
@@ -4076,7 +4065,7 @@ function openPaymentDetail(id){
 }
 
 async function annulPayment(paymentId){
-  if(!canDelete())return toast('No tenés permiso para anular pagos');
+  if(!canEdit())return toast('No tenés permiso para anular pagos');
 
   const payment=payments.find(item=>item.id===paymentId);
   const obligation=obligations.find(item=>item.id===payment?.obligation_id);
@@ -4159,13 +4148,12 @@ function permissionSummary(member){
     items.push('<span class="permission-pill good">Operador</span>');
     items.push('<span class="permission-pill">Carga y edición operativa</span>');
     items.push('<span class="permission-pill warn">Sin reportes</span>');
-    items.push('<span class="permission-pill warn">Sin datos de titular</span>');
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
   }else{
     items.push('<span class="permission-pill">Solo consulta</span>');
     items.push('<span class="permission-pill warn">Sin edición</span>');
     items.push('<span class="permission-pill warn">No gestiona usuarios</span>');
-    if(member.role==='admin'&&member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
+    if(member.can_view_reports)items.push('<span class="permission-pill good">Reportes</span>');
     else items.push('<span class="permission-pill">Sin reportes</span>');
   }
 
@@ -4259,7 +4247,7 @@ function renderUsersAccess(){
   </div>
 
   <div class="notice">
-    Solo el titular puede entrar a esta sección. Un operador puede cargar, editar y pagar información operativa, pero no crear/quitar usuarios ni ver datos de titular.
+    Solo el titular puede entrar a esta sección. Un administrador operativo puede cargar, editar y pagar, pero no crear ni quitar usuarios.
   </div>`;
 }
 
@@ -4272,7 +4260,7 @@ function bindUsersAccess(){
   document.querySelectorAll('[data-role]').forEach(select=>{
     select.onchange=()=>{
       const share=document.querySelector(`[data-share="${select.dataset.role}"]`);
-      if(select.value!=='admin'){
+      if(select.value==='viewer'||select.value==='operator'){
         share.value=0;
         share.disabled=true;
       }else{
@@ -4305,7 +4293,7 @@ async function saveUsersAccess(){
         ? Number(document.querySelector(`[data-share="${member.id}"]`).value||0)
         : 0,
       can_view_reports:ownerMember
-        || (role==='admin'&&document.querySelector(`[data-report-access="${member.id}"]`).value==='true')
+        || document.querySelector(`[data-report-access="${member.id}"]`).value==='true'
     };
   });
 
@@ -4404,7 +4392,7 @@ function openCreateInternalAccess(){
     const displayName=displayInput.value.trim();
     const tempPassword=document.getElementById('internalTempPassword').value;
     const role=document.getElementById('internalRole').value;
-    const canViewReports=role==='admin'&&document.getElementById('internalReports').value==='true';
+    const canViewReports=document.getElementById('internalReports').value==='true';
     const button=document.getElementById('createInternalUserBtn');
 
     if(alias.length<3)return toast('El alias debe tener al menos 3 caracteres');
