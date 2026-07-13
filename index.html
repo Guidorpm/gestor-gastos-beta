@@ -167,11 +167,60 @@ const DEFAULT_CATEGORIES=[
   'Salud','Seguros','Tarjetas','Impuestos','Moratorias','Sueldos',
   'Proveedores','Mantenimiento','Transporte','Otros'
 ];
+// Persistencia de navegación (mes, pestaña, espacio abierto) para no perder
+// el contexto al recargar la página, tras un error, o después de guardar.
+// Solo guarda claves de navegación — nunca datos sensibles.
+// Va antes de los "let" de estado porque tab/baseMonth se inicializan
+// llamando a getSavedTab()/getSavedBaseMonth() más abajo.
+const NAV_STORAGE_PREFIX='gestorGastos.';
+const VALID_TABS=['services','paid','reports','alerts','users'];
+function safeLocalGet(key,fallback){
+  try{
+    const raw=localStorage.getItem(NAV_STORAGE_PREFIX+key);
+    return raw===null?fallback:raw;
+  }catch(error){
+    return fallback;
+  }
+}
+function safeLocalSet(key,value){
+  try{
+    localStorage.setItem(NAV_STORAGE_PREFIX+key,value);
+  }catch(error){
+    // localStorage no disponible (modo privado, cuota llena, etc.):
+    // la app sigue funcionando igual, solo sin recordar el contexto.
+  }
+}
+function isValidBaseMonth(value){
+  return typeof value==='string'&&/^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+function isValidTab(value){
+  return VALID_TABS.includes(value);
+}
+function getSavedBaseMonth(){
+  const saved=safeLocalGet('baseMonth',null);
+  return isValidBaseMonth(saved)?saved:monthKey(new Date());
+}
+function getSavedTab(){
+  const saved=safeLocalGet('tab',null);
+  return isValidTab(saved)?saved:'services';
+}
+function getSavedGroupId(){
+  return safeLocalGet('groupId',null);
+}
+// Guarda el estado actual de navegación. Se llama desde renderApp(), que ya
+// se ejecuta después de cualquier cambio de mes/pestaña/espacio en toda la
+// app — así no hace falta repetir el guardado en cada botón por separado.
+function saveNavigationState(){
+  safeLocalSet('baseMonth',baseMonth);
+  safeLocalSet('tab',tab);
+  if(group?.id)safeLocalSet('groupId',group.id);
+}
+
 let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[], serviceCategories=[], internalAccounts=[], consolidations=[];
 let spacesDashboard={ownedGroupIds:[],services:[],obligations:[],payments:[],documents:[]};
 let creditCards=[], creditStatements=[], creditMovements=[], selectedCreditCardId=null, selectedCreditStatementId=null;
 let platformPermissions={is_platform_admin:false,can_create_spaces:false,can_manage_access:false};
-let tab='services', baseMonth=monthKey(new Date()), authMode='login';
+let tab=getSavedTab(), baseMonth=getSavedBaseMonth(), authMode='login';
 let notificationState={
   supported:false,
   permission:typeof Notification!=='undefined'?Notification.permission:'default',
@@ -182,7 +231,6 @@ let notificationState={
   error:''
 };
 let serviceWorkerRegistrationPromise=null;
-
 
 function monthKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`}
 function shiftMonth(key,n){const [y,m]=key.split('-').map(Number);return monthKey(new Date(y,m-1+n,1))}
@@ -573,7 +621,7 @@ async function continueAfterAuthentication(){
 
   if(error){
     console.warn('No se pudo consultar el acceso interno:',error.message);
-    return loadGroups();
+    return loadGroups(true);
   }
 
   if(data&&data.active===false){
@@ -586,7 +634,7 @@ async function continueAfterAuthentication(){
     return;
   }
 
-  await loadGroups();
+  await loadGroups(true);
 }
 
 function renderAuth(mode='login'){
@@ -919,7 +967,7 @@ function renderForcedPasswordChange(alias){
       if(rpcError)throw rpcError;
 
       toast('Contraseña actualizada');
-      await loadGroups();
+      await loadGroups(true);
     }catch(err){
       console.error(err);
       toast(err?.message||'No se pudo cambiar la contraseña');
@@ -931,7 +979,7 @@ function renderForcedPasswordChange(alias){
     }
   };
 }
-async function loadGroups(){
+async function loadGroups(autoRestore=false){
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
 
   const {data:permissionData,error:permissionError}=await sb.rpc('current_platform_permissions');
@@ -951,6 +999,15 @@ async function loadGroups(){
   if(error){toast(error.message);return}
   groups=(data||[]).map(x=>({...x.groups,membership:x}));
   await loadSpacesDashboard();
+
+  if(autoRestore){
+    const savedGroupId=getSavedGroupId();
+    if(savedGroupId&&groups.some(g=>g.id===savedGroupId)){
+      await openGroup(savedGroupId);
+      return;
+    }
+  }
+
   renderGroups();
 }
 
@@ -1904,6 +1961,7 @@ function renderApp(){
   const ms=Array.from({length:12},(_,index)=>`${year}-${String(index+1).padStart(2,'0')}`);
   if(tab==='reports'&&!canViewReports())tab='services';
   if(tab==='users'&&!isOwner())tab='services';
+  saveNavigationState();
 
   app.innerHTML=`<div class="top"><div class="topin">
     <div class="brand">
