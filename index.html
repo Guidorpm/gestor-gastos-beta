@@ -996,6 +996,20 @@ function dashboardPaidFor(obligationId){
 function dashboardBalanceFor(obligation){
   return Math.max(0,Number(obligation.amount||0)-dashboardPaidFor(obligation.id));
 }
+// Promedio mensual: año actual usa enero->mes actual / meses transcurridos;
+// año cerrado usa el año completo / 12; año futuro no calcula promedio (0).
+function getAveragePeriodForYear(year){
+  const now=new Date();
+  const currentYear=String(now.getFullYear());
+  if(year>currentYear){
+    return{monthsToUse:0,maxPeriod:null,isFutureYear:true};
+  }
+  if(year===currentYear){
+    const currentMonth=now.getMonth()+1;
+    return{monthsToUse:currentMonth,maxPeriod:`${year}-${String(currentMonth).padStart(2,'0')}`,isFutureYear:false};
+  }
+  return{monthsToUse:12,maxPeriod:`${year}-12`,isFutureYear:false};
+}
 function dashboardMetricsForGroup(groupId){
   const year=baseMonth.slice(0,4);
   const obligationsForGroup=spacesDashboard.obligations.filter(item=>
@@ -1021,7 +1035,12 @@ function dashboardMetricsForGroup(groupId){
     && paymentIds.has(item.payment_id)
   ).length;
   const activeServices=spacesDashboard.services.filter(item=>item.group_id===groupId).length;
-  const averageMonthly=total/12;
+  // Promedio mensual real: solo acumulado hasta el mes vigente si es el año en curso.
+  const {monthsToUse,maxPeriod,isFutureYear}=getAveragePeriodForYear(year);
+  const totalForAverage=isFutureYear?0:obligationsForGroup
+    .filter(item=>item.period<=maxPeriod)
+    .reduce((sum,item)=>sum+Number(item.amount||0),0);
+  const averageMonthly=(isFutureYear||monthsToUse===0)?0:totalForAverage/monthsToUse;
 
   return{groupId,total,paid,pending,unpaid,invoices,receipts,activeServices,averageMonthly,obligations:obligationsForGroup.length};
 }
@@ -1038,7 +1057,10 @@ function renderOwnerDashboard(){
     invoices:rows.reduce((sum,row)=>sum+row.metrics.invoices,0),
     receipts:rows.reduce((sum,row)=>sum+row.metrics.receipts,0),
     activeServices:rows.reduce((sum,row)=>sum+row.metrics.activeServices,0),
-    averageMonthly:rows.reduce((sum,row)=>sum+row.metrics.total,0)/12
+    // Suma los promedios ya calculados por grupo (cada uno respeta la regla
+    // de año actual/cerrado/futuro en dashboardMetricsForGroup) en vez de
+    // recalcular con /12 fijo.
+    averageMonthly:rows.reduce((sum,row)=>sum+row.metrics.averageMonthly,0)
   };
 
   return `<div class="owner-panel card">
