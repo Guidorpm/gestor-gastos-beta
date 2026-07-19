@@ -1,0 +1,138 @@
+-- ============================================================
+-- MEJORA 6B4.16 — PENDIENTE. NO APLICADO. NO EJECUTAR SIN AUTORIZACIÓN.
+-- ------------------------------------------------------------
+-- Objetivo 4 del pedido: match inteligente tarjeta-servicio como tabla
+-- real, en vez de metadata dentro de credit_card_movements.notes.
+--
+-- ESTADO REAL HOY (6B4.16): el vínculo (propuesto/confirmado/rechazado/
+-- vinculado automáticamente/dividido/reintegro/requiere revisión/
+-- desvinculado) vive ÚNICAMENTE en credit_card_movements.notes
+-- (serviceLink, ver creditMovementLink/linkCreditMovementToService en
+-- index.html) -- funciona, pero tiene límites reales:
+--   - No se puede filtrar/reportar por SQL directo (ej. "todos los
+--     vínculos REQUIERE_REVISION de este mes" exige traer todos los
+--     movimientos y parsear JSON en el cliente).
+--   - Un movimiento solo puede tener UN vínculo activo a la vez (no hay
+--     forma limpia de dividir un consumo entre 2+ servicios sin un
+--     array anidado dentro del mismo JSON).
+--   - Ninguna restricción de integridad real (ej. impedir doble vínculo).
+--
+-- Este archivo diseña la tabla real para cuando se autorice. NADA se
+-- ejecutó.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- 1) Tabla principal de vínculos/matches.
+-- ------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS public.credit_card_service_matches (
+--   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+--   movement_id uuid NOT NULL REFERENCES public.credit_card_movements(id) ON DELETE CASCADE,
+--   service_id uuid NOT NULL REFERENCES public.services(id) ON DELETE CASCADE,
+--   obligation_id uuid REFERENCES public.obligations(id) ON DELETE SET NULL,
+--   period text, -- 'YYYY-MM', puede no coincidir 1 a 1 con obligation_id
+--   applied_amount numeric(14,2) NOT NULL, -- para DIVIDIDO: la porción de
+--                                            -- este movimiento aplicada a
+--                                            -- este servicio (nunca el
+--                                            -- importe total si hay split)
+--   currency text NOT NULL DEFAULT 'ARS' CHECK (currency IN ('ARS','USD')),
+--   exchange_rate numeric(12,4),
+--   exchange_rate_date date,
+--   match_status text NOT NULL DEFAULT 'PROPUESTO' CHECK (match_status IN (
+--     'PROPUESTO','CONFIRMADO','RECHAZADO','VINCULADO_AUTOMATICAMENTE',
+--     'DIVIDIDO','REINTEGRO','REQUIERE_REVISION','DESVINCULADO')),
+--   confidence integer CHECK (confidence BETWEEN 0 AND 100),
+--   match_reasons text[], -- ej. {alias,confirmaciones_previas,moneda,importe,periodicidad}
+--   match_type text, -- 'manual' | 'automatico_por_regla'
+--   rule_id uuid, -- referencia lógica a credit_card_service_match_rules.id
+--   proposed_by uuid REFERENCES auth.users(id),
+--   confirmed_by uuid REFERENCES auth.users(id),
+--   confirmed_at timestamptz,
+--   rejected_by uuid REFERENCES auth.users(id),
+--   rejected_at timestamptz,
+--   created_at timestamptz NOT NULL DEFAULT now(),
+--   updated_at timestamptz NOT NULL DEFAULT now()
+-- );
+--
+-- -- Impide vincular el MISMO movimiento dos veces al MISMO servicio de
+-- -- forma activa (permite historial de rechazados/desvinculados, que se
+-- -- distinguen por match_status, no por un índice único simple -- se
+-- -- resolvería con un índice único PARCIAL):
+-- -- CREATE UNIQUE INDEX IF NOT EXISTS uq_ccsm_active_link
+-- --   ON public.credit_card_service_matches(movement_id, service_id)
+-- --   WHERE match_status NOT IN ('RECHAZADO','DESVINCULADO');
+--
+-- ALTER TABLE public.credit_card_service_matches ENABLE ROW LEVEL SECURITY;
+-- -- Policy conceptual: el acceso sigue el mismo criterio que
+-- -- credit_card_movements (por card_id -> dueño) Y que services (por
+-- -- group_id) -- un match SOLO es visible/editable si el usuario tiene
+-- -- acceso a AMBOS lados (nunca cruza empresas/espacios).
+-- -- CREATE POLICY ccsm_select ON public.credit_card_service_matches
+-- --   FOR SELECT USING (
+-- --     movement_id IN (SELECT id FROM credit_card_movements WHERE ...dueño...)
+-- --     AND service_id IN (SELECT id FROM services WHERE group_id IN (...espacios del usuario...))
+-- --   );
+
+-- ------------------------------------------------------------
+-- 2) Reglas configurables (alias -> servicio, con condiciones).
+-- ------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS public.credit_card_service_match_rules (
+--   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+--   merchant_key text NOT NULL, -- mismo criterio que creditMerchantKey() en el cliente
+--   service_id uuid NOT NULL REFERENCES public.services(id) ON DELETE CASCADE,
+--   card_id uuid REFERENCES public.credit_cards(id) ON DELETE CASCADE,
+--   currency text CHECK (currency IN ('ARS','USD')), -- NULL = cualquiera
+--   amount_min numeric(14,2),
+--   amount_max numeric(14,2),
+--   amount_tolerance_pct numeric(5,2) DEFAULT 15,
+--   day_window_days integer DEFAULT 5,
+--   frequency text, -- 'mensual' | 'anual'
+--   min_confirmations integer NOT NULL DEFAULT 3,
+--   active boolean NOT NULL DEFAULT true,
+--   created_by uuid NOT NULL REFERENCES auth.users(id), -- SIEMPRE el
+--     -- titular (nunca una regla creada por un proceso automático sin
+--     -- una acción explícita, tal como pide el pedido)
+--   created_at timestamptz NOT NULL DEFAULT now(),
+--   updated_at timestamptz NOT NULL DEFAULT now()
+-- );
+-- ALTER TABLE public.credit_card_service_match_rules ENABLE ROW LEVEL SECURITY;
+-- -- Policy conceptual: solo el titular del espacio puede crear/editar
+-- -- reglas (mismo criterio que isOwner() en el cliente).
+
+-- ------------------------------------------------------------
+-- 3) Restricciones adicionales para impedir sobreaplicación.
+-- ------------------------------------------------------------
+-- -- La suma de applied_amount de todos los matches ACTIVOS de un mismo
+-- -- movement_id nunca debería superar Math.abs(credit_card_movements.amount)
+-- -- (relevante para DIVIDIDO). Esto requiere un TRIGGER (no un CHECK
+-- -- simple, porque es una agregación entre filas) -- se deja diseñado,
+-- -- no implementado.
+
+-- ------------------------------------------------------------
+-- 4) MIGRACIÓN de los vínculos actuales (credit_card_movements.notes ->
+--    esta tabla), diseño del procedimiento (nunca automático a ciegas):
+-- ------------------------------------------------------------
+-- Para cada credit_card_movements con un serviceLink en su notes:
+--   1. Parsear el JSON de notes (mismo formato que creditMovementMeta).
+--   2. INSERT en credit_card_service_matches con los campos ya presentes
+--      en serviceLink (linkedServiceId->service_id, linkedPeriod->period,
+--      linkedBy->confirmed_by/proposed_by según matchStatus, linkedAt,
+--      matchStatus->match_status, matchConfidence->confidence,
+--      matchReasons->match_reasons).
+--   3. NUNCA borrar ni modificar el serviceLink dentro de notes durante
+--      la migración -- se conserva como respaldo/trazabilidad hasta
+--      confirmar que la tabla nueva es la fuente de verdad real.
+--   4. El texto libre del usuario en notes (fuera del marcador de meta)
+--      NUNCA se toca.
+--   5. Después de confirmar la migración, el cliente pasaría a leer/
+--      escribir desde la tabla nueva -- ese cambio de código es aparte
+--      de esta migración SQL y requeriría su propia etapa.
+
+-- ------------------------------------------------------------
+-- 5) Rollback:
+-- ------------------------------------------------------------
+-- DROP TABLE IF EXISTS public.credit_card_service_match_rules;
+-- DROP TABLE IF EXISTS public.credit_card_service_matches;
+-- -- No afecta credit_card_movements.notes (el vínculo original queda
+-- -- intacto ahí, nunca se depende solo de la tabla nueva hasta que se
+-- -- confirme la migración).
+-- ============================================================

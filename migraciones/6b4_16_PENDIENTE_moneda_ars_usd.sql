@@ -1,0 +1,109 @@
+-- ============================================================
+-- MEJORA 6B4.16 — PENDIENTE. NO APLICADO. NO EJECUTAR SIN AUTORIZACIÓN.
+-- ------------------------------------------------------------
+-- Objetivo 3 del pedido: soporte real de gastos y pagos en ARS y USD.
+--
+-- ESTADO REAL CONFIRMADO HOY (sin ejecutar nada, solo lectura de código):
+--   - obligations.amount es un solo número, sin columna de moneda.
+--     Hoy (6B4.15/6B4.16) la moneda de una obligación se guarda como
+--     metadata dentro de obligations.notes (extraFields.currency, ver
+--     obligationCurrency()/formatObligationAmount() en index.html) --
+--     funciona para MOSTRAR el importe con el símbolo correcto, pero
+--     amount sigue siendo un solo número sin unidad real a nivel de base.
+--   - payments NO TIENE ninguna columna de moneda ni de metadata (a
+--     diferencia de obligations/credit_card_movements, payments no tiene
+--     "notes"). Confirmado por los INSERT reales en index.html:
+--     {obligation_id, paid_at, total_amount, created_by} -- nada más.
+--     Por eso, HOY, un pago se asume siempre en la misma moneda que la
+--     obligación -- el caso "USD pagado en ARS con cotización" (ejemplo
+--     del pedido) NO se puede registrar correctamente sin estas columnas.
+--   - documents tampoco tiene notes/metadata.
+--
+-- Este archivo diseña las columnas reales necesarias. NADA se ejecutó.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- 1) obligations -- moneda y comparables como columnas reales (ADITIVO,
+--    compatibles con filas existentes: default ARS, nunca reinterpreta un
+--    importe ya cargado como otra moneda).
+-- ------------------------------------------------------------
+-- ALTER TABLE public.obligations
+--   ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'ARS'
+--     CHECK (currency IN ('ARS','USD'));
+-- -- amount sigue siendo el importe EN esa moneda (nunca se reemplaza por
+-- -- un equivalente convertido). Un "total estimado en ARS" para reportes
+-- -- consolidados se calcula al vuelo con la cotización más reciente
+-- -- disponible, nunca se persiste como si fuera el importe real.
+--
+-- -- Migración de metadata actual -> columna real (script aparte, nunca
+-- -- automático a ciegas): para cada obligación con extraFields.currency
+-- -- en su notes, UPDATE currency a ese valor; el resto queda en 'ARS'
+-- -- (ya es lo que representan hoy, dado que nunca hubo otra moneda
+-- -- posible antes de 6B4.15/16). Las notas de texto libre NUNCA se tocan.
+
+-- ------------------------------------------------------------
+-- 2) payments -- moneda real del pago + trazabilidad de cotización
+--    (ADITIVO). Esto es lo que HOY no se puede hacer sin esquema:
+--    "pagar una obligación USD con pesos, dejando registrada la
+--    cotización usada".
+-- ------------------------------------------------------------
+-- ALTER TABLE public.payments
+--   ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'ARS'
+--     CHECK (currency IN ('ARS','USD')),
+--   ADD COLUMN IF NOT EXISTS exchange_rate numeric(12,4),
+--   ADD COLUMN IF NOT EXISTS exchange_rate_date date,
+--   ADD COLUMN IF NOT EXISTS obligation_amount_applied numeric(14,2);
+-- -- currency = moneda REAL en la que se pagó (puede diferir de
+-- --   obligations.currency).
+-- -- exchange_rate/exchange_rate_date = SOLO se completan cuando
+-- --   currency del pago != currency de la obligación -- cotización
+-- --   manual, siempre explícita, nunca autocompletada con una fuente
+-- --   externa sin autorización (regla explícita del pedido).
+-- -- obligation_amount_applied = cuánto de la obligación (en SU propia
+-- --   moneda) quedó cancelado con este pago -- así el ejemplo del
+-- --   pedido (USD 100 pagados con ARS 150.000 a 1.500) queda
+-- --   representable exactamente: total_amount=150000, currency='ARS',
+-- --   exchange_rate=1500, obligation_amount_applied=100 (en USD).
+--
+-- ALTER TABLE public.payments
+--   ADD CONSTRAINT payments_exchange_rate_required_if_cross_currency
+--   CHECK (
+--     exchange_rate IS NOT NULL
+--     OR NOT EXISTS ( -- pseudocódigo conceptual, la comparación real
+--                      -- necesita un trigger o vista, no un CHECK simple,
+--                      -- porque requiere leer obligations.currency
+--     )
+--   ); -- Diseño conceptual: la validación real "si currency del pago
+--      -- difiere de la obligación, exchange_rate es obligatorio" se
+--      -- implementaría mejor con un TRIGGER BEFORE INSERT/UPDATE, no un
+--      -- CHECK -- se deja anotado, no se define el trigger todavía.
+
+-- ------------------------------------------------------------
+-- 3) Índices (ADITIVO, no bloqueantes).
+-- ------------------------------------------------------------
+-- CREATE INDEX IF NOT EXISTS idx_obligations_currency ON public.obligations(currency);
+-- CREATE INDEX IF NOT EXISTS idx_payments_currency ON public.payments(currency);
+
+-- ------------------------------------------------------------
+-- 4) RLS -- ninguna política nueva necesaria (las columnas son aditivas
+--    sobre tablas que YA tienen RLS por group_id/servicio; una columna
+--    nueva no cambia el criterio de acceso de la fila).
+-- ------------------------------------------------------------
+
+-- ------------------------------------------------------------
+-- 5) Rollback (si algo de esto se aplica y hay que revertir):
+-- ------------------------------------------------------------
+-- ALTER TABLE public.payments DROP COLUMN IF EXISTS obligation_amount_applied;
+-- ALTER TABLE public.payments DROP COLUMN IF EXISTS exchange_rate_date;
+-- ALTER TABLE public.payments DROP COLUMN IF EXISTS exchange_rate;
+-- ALTER TABLE public.payments DROP COLUMN IF EXISTS currency;
+-- ALTER TABLE public.obligations DROP COLUMN IF EXISTS currency;
+-- -- Ninguno de estos DROP borra amount/total_amount/notes -- el importe
+-- -- y el texto libre del usuario nunca se pierden con este rollback.
+
+-- ------------------------------------------------------------
+-- Verificación previa recomendada antes de aplicar (solo lectura):
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema='public' AND table_name IN ('obligations','payments')
+--   ORDER BY table_name, ordinal_position;
+-- ============================================================
