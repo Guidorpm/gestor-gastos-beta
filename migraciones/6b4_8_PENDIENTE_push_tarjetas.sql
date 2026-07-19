@@ -1,0 +1,85 @@
+-- ============================================================
+-- MEJORA 6B4.8 — PENDIENTE. NO APLICADO. NO EJECUTAR SIN AUTORIZACIÓN.
+-- ------------------------------------------------------------
+-- Este archivo es un DISEÑO conceptual, preparado por si en el futuro se
+-- decide enviar avisos push reales de obligaciones de tarjetas (resumen
+-- esperado, falta PDF, vencimiento) con el navegador CERRADO.
+--
+-- Estado real confirmado en esta etapa (Fase 13 del pedido):
+--   - YA EXISTE infraestructura Push en este proyecto, pero está diseñada
+--     para las alertas de VENCIMIENTOS DE SERVICIOS, siempre por espacio
+--     (group_id): RPCs save_push_subscription/get_push_notification_status/
+--     disable_push_for_group (p_group_id + p_endpoint), Edge Function
+--     "send-due-notifications", y una VAPID_PUBLIC_KEY real ya en uso.
+--   - No se pudo inspeccionar el código fuente de esa Edge Function ni la
+--     tabla de suscripciones desde este repo (no están versionados acá) —
+--     no se ejecutó ningún SQL para no violar la restricción "no ejecutar
+--     SQL" de esta etapa. Por eso este documento NO afirma que esa
+--     infraestructura funcione o no para tarjetas: solo confirma que,
+--     estructuralmente, está pensada por espacio (group_id), y las
+--     tarjetas de crédito en este esquema NO pertenecen a ningún espacio
+--     (credit_cards no tiene columna group_id en el código revisado).
+--   - Por eso, para que un aviso de tarjeta llegue por push con la app
+--     cerrada, hace falta (a) extender el modelo de suscripciones
+--     existente para permitir una suscripción "de cuenta" no atada a un
+--     group_id, o (b) reutilizar cualquier suscripción activa del usuario
+--     (de cualquiera de sus espacios) como destino de los avisos de
+--     tarjeta. Se deja diseñada la opción (a), más limpia y explícita.
+--
+-- NADA de este archivo se ejecutó. Se requiere lectura y aprobación
+-- explícita antes de aplicar cualquier parte.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- 1) Historial de entregas (deduplicación) — ADITIVO.
+--    Evita reenviar el mismo aviso (card_id+period+tipo) más de una vez
+--    por día, y permite ver errores de entrega sin exponerlos al usuario.
+-- ------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS public.card_notification_deliveries (
+--   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+--   card_id uuid NOT NULL REFERENCES public.credit_cards(id) ON DELETE CASCADE,
+--   period text NOT NULL,                    -- 'YYYY-MM'
+--   notification_type text NOT NULL,         -- 'statement_expected' | 'missing_document' | 'payment_due' | 'payment_overdue' | 'financial_review'
+--   sent_at timestamptz NOT NULL DEFAULT now(),
+--   delivery_status text NOT NULL DEFAULT 'sent',  -- 'sent' | 'error' | 'skipped_preference_disabled'
+--   error_message text,
+--   UNIQUE (card_id, period, notification_type, (sent_at::date))
+-- );
+-- ALTER TABLE public.card_notification_deliveries ENABLE ROW LEVEL SECURITY;
+-- -- Policy conceptual: solo el dueño de la tarjeta (mismo criterio de
+-- -- credit_cards) puede leer su propio historial. Nunca INSERT/UPDATE/
+-- -- DELETE desde el cliente — solo la Edge Function (service role) escribe.
+-- -- CREATE POLICY card_notification_deliveries_select ON public.card_notification_deliveries
+-- --   FOR SELECT USING (card_id IN (SELECT id FROM public.credit_cards WHERE ...dueño...));
+
+-- ------------------------------------------------------------
+-- 2) Suscripción Push "de cuenta" (no atada a un espacio) — ADITIVO.
+--    Se reutiliza el mismo bucket/tabla existente si su estructura ya
+--    acepta group_id NULL; si no, se crea esta tabla paralela mínima.
+--    (Diseño conceptual: la tabla real de suscripciones actuales no está
+--    disponible en este repo para confirmar su estructura exacta — antes
+--    de aplicar esto habría que leerla primero, con SELECT, nunca a ciegas.)
+-- ------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS public.account_push_subscriptions (
+--   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+--   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+--   endpoint text NOT NULL,
+--   p256dh text NOT NULL,
+--   auth text NOT NULL,
+--   user_agent text,
+--   created_at timestamptz NOT NULL DEFAULT now(),
+--   UNIQUE (user_id, endpoint)
+-- );
+-- ALTER TABLE public.account_push_subscriptions ENABLE ROW LEVEL SECURITY;
+-- -- CREATE POLICY account_push_subscriptions_own ON public.account_push_subscriptions
+-- --   FOR ALL USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+
+-- ------------------------------------------------------------
+-- Nada de lo anterior se creó. Verificación previa recomendada antes de
+-- aplicar (solo lectura, nunca a ciegas):
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema='public' AND table_name IN
+--     ('credit_cards','credit_card_statements') ORDER BY table_name, ordinal_position;
+--   -- (confirmar que credit_cards no tenga ya una columna group_id antes
+--   -- de asumir que las tarjetas son globales)
+-- ============================================================

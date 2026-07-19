@@ -1,0 +1,78 @@
+-- ============================================================
+-- MEJORA 6B4.15 — PENDIENTE. NO APLICADO. NO EJECUTAR SIN AUTORIZACIÓN.
+-- ------------------------------------------------------------
+-- Este archivo es un DISEÑO conceptual. Hoy (6B4.15), la anulación de un
+-- registro mensual, su motivo, quién lo anuló y el historial de ediciones
+-- se guardan como metadata JSON dentro de obligations.notes (ver
+-- OBLIGATION_META_PREFIX / obligationNoteMeta / updateObligationNotes en
+-- index.html) para no ejecutar ninguna migración hoy. Esto funciona, pero
+-- tiene límites reales:
+--   - No se puede filtrar/ordenar por SQL directamente (ej. "todos los
+--     registros anulados este mes" requiere traer notes y parsear JSON en
+--     el cliente, nunca un WHERE real).
+--   - No hay ninguna restricción de integridad sobre la forma del JSON.
+--   - Moneda/proveedor/número de factura tampoco tienen columna real.
+--
+-- Este documento diseña las columnas reales para cuando se autorice
+-- aplicarlas. NADA de esto se ejecutó.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- 1) Anulación real -- ADITIVO, todas NULLABLE (compatible con filas
+--    existentes sin tocarlas).
+-- ------------------------------------------------------------
+-- ALTER TABLE public.obligations
+--   ADD COLUMN IF NOT EXISTS voided_at timestamptz,
+--   ADD COLUMN IF NOT EXISTS voided_by uuid REFERENCES auth.users(id),
+--   ADD COLUMN IF NOT EXISTS void_reason text;
+-- -- El campo status ya soporta 'cancelled' (usado hoy, sin migración,
+-- -- porque monthTotals/monthQuickSummary/isEffectivePending/el dashboard
+-- -- de espacios ya lo filtran desde antes de esta etapa). Estas 3
+-- -- columnas solo agregan la evidencia estructurada que hoy vive en notes.
+
+-- ------------------------------------------------------------
+-- 2) Auditoría de ediciones -- tabla aparte (ADITIVA), en vez de un array
+--    creciendo indefinidamente dentro de notes.
+-- ------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS public.obligation_edit_history (
+--   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+--   obligation_id uuid NOT NULL REFERENCES public.obligations(id) ON DELETE CASCADE,
+--   edited_by uuid NOT NULL REFERENCES auth.users(id),
+--   edited_at timestamptz NOT NULL DEFAULT now(),
+--   changed_fields jsonb NOT NULL,          -- {"campo":{"before":...,"after":...}}
+--   reason text
+-- );
+-- ALTER TABLE public.obligation_edit_history ENABLE ROW LEVEL SECURITY;
+-- -- Policy conceptual: mismo criterio de acceso que obligations (por
+-- -- group_id, vía join). Nunca escribible por operadores directamente
+-- -- desde el cliente sin pasar por la app.
+-- -- CREATE POLICY obligation_edit_history_select ON public.obligation_edit_history
+-- --   FOR SELECT USING (obligation_id IN (SELECT id FROM public.obligations WHERE ...mismo criterio de servicios...));
+
+-- ------------------------------------------------------------
+-- 3) Campos sin columna real hoy (moneda/proveedor/n° de factura) -- ADITIVO.
+-- ------------------------------------------------------------
+-- ALTER TABLE public.obligations
+--   ADD COLUMN IF NOT EXISTS currency text DEFAULT 'ARS',
+--   ADD COLUMN IF NOT EXISTS provider text,
+--   ADD COLUMN IF NOT EXISTS invoice_number text;
+
+-- ------------------------------------------------------------
+-- 4) Vínculo tarjeta↔servicio real -- ADITIVO, NULLABLE. Hoy (6B4.15) es
+--    metadata dentro de credit_card_movements.notes (linkCreditMovementToService
+--    en index.html) -- nunca una fila de payments, nunca cambia el saldo
+--    del servicio. Si en el futuro se quiere una columna real:
+-- ------------------------------------------------------------
+-- ALTER TABLE public.credit_card_movements
+--   ADD COLUMN IF NOT EXISTS linked_service_id uuid REFERENCES public.services(id),
+--   ADD COLUMN IF NOT EXISTS linked_period text;
+-- -- Seguiría siendo SOLO informativo -- ninguna migración de este archivo
+-- -- propone que un consumo de tarjeta genere un pago real en Servicios.
+
+-- ------------------------------------------------------------
+-- Nada de lo anterior se creó ni se ejecutó. Verificación previa
+-- recomendada antes de aplicar (solo lectura, nunca a ciegas):
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema='public' AND table_name IN
+--     ('obligations','credit_card_movements') ORDER BY table_name, ordinal_position;
+-- ============================================================

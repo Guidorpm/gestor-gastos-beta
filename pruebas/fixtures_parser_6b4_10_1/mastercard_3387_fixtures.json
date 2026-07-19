@@ -1,0 +1,39 @@
+{
+  "_nota": "Fixtures sintéticos anonimizados para 6B4.10.1 (parser Mastercard Banco Provincia). Ningún nombre, CUIT, domicilio o número completo de tarjeta real. Los importes y patrones de texto reproducen casos reales encontrados durante el diagnóstico posicional (pdf.js), con datos ficticios.",
+  "encabezado": [
+    "Estado del cuenta al: 12-Jun-25 Saldo actual: $ 729544,93 U$S 5,81"
+  ],
+  "saldo_actual": [
+    "SALDO ACTUAL 729544,93 5,81"
+  ],
+  "saldo_pendiente": [
+    "SALDO PENDIENTE 0,00 0,00"
+  ],
+  "saldo_pendiente_negativo": [
+    "SALDO PENDIENTE 0,00 -85,40"
+  ],
+  "total_consumos": [
+    "TOTAL CONSUMOS DEL MES 717340,97 5,74"
+  ],
+  "consumos_ars": [
+    "25 Mayo 05 000001 K COMERCIO DE PRUEBA 3.479,22"
+  ],
+  "consumos_usd": [
+    "11 278509 K SERVICIO DIGITAL PRUEBA A00000000USD 1,99"
+  ],
+  "intereses_usd": [
+    "INTERESES COMPENSATORIOS 25558,04"
+  ],
+  "impuestos_usd": [
+    "IMPUESTO DE SELLOS 8608,09 0,07"
+  ],
+  "pago": [
+    "25 Mayo 12 SU PAGO EN PESOS 835.086,58-"
+  ],
+  "devolucion": [
+    "DEV IMPUESTO PAIS AR -2.500,00"
+  ],
+  "cuota": [
+    "25 Mayo 26 001063 * COMERCIO CUOTAS PRUEBA C.03/06 11.666,50"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "_nota": "Líneas derivadas de PDF reales de Visa Business 5044 y Visa 8374 (Banco Provincia), con montos y fechas alterados para no exponer datos reales. Se conserva EXACTAMENTE el formato estructural (espaciado, indicador TC, signos) que produce el bug documentado en 6B4.8.3 y corregido en 6B4.9. Usadas por run_6b4_9_visa_payment_tests.js.",
+  "casos": [
+    {
+      "id": "pago_ars_limpio",
+      "linea": "25 Marzo 10   SU PAGO EN PESOS                                             12.345,67-",
+      "esperado": { "ambiguous": false, "amountArs": -12345.67, "amountUsd": null }
+    },
+    {
+      "id": "pago_usd_limpio",
+      "linea": "26 Junio 08   SU PAGO EN USD                                                            50,25-",
+      "esperado": { "ambiguous": false, "amountArs": null, "amountUsd": -50.25 }
+    },
+    {
+      "id": "pago_ars_y_usd_en_lineas_separadas",
+      "linea_ars": "09  SU PAGO EN PESOS                                      100.000,00-",
+      "linea_usd": "09  SU PAGO EN USD                                                            25,00-",
+      "esperado_ars": { "ambiguous": false, "amountArs": -100000, "amountUsd": null },
+      "esperado_usd": { "ambiguous": false, "amountArs": null, "amountUsd": -25 }
+    },
+    {
+      "id": "pago_mixto_con_tipo_de_cambio_ambiguo",
+      "linea": "10   SU PAGO EN PESOS                     50.000,00 TC1000,000  40.000,00-      10,00-",
+      "esperado": { "ambiguous": true }
+    },
+    {
+      "id": "boilerplate_no_es_linea_de_pago",
+      "linea": "La acreditación de su pago puede demorar hasta 72 hs hábiles. Recuerde tener",
+      "esperado": { "noDebeDetectarseComoLineaDePago": true }
+    }
+  ]
+}

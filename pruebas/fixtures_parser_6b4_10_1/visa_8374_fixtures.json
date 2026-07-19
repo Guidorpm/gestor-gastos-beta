@@ -1,0 +1,62 @@
+{
+  "_nota": "Fixtures sintéticos anonimizados para 6B4.10.1 (parser Visa Banco Provincia, formatos 8374/Business). Ningún nombre, CUIT, domicilio o número completo de tarjeta real. Los importes y patrones de texto reproducen casos reales encontrados durante el diagnóstico posicional (pdf.js), con datos ficticios.",
+  "encabezado_y_totales": [
+    "(9999) LOCALIDAD                           CUIT 30-00000000-0",
+    "CLIENTE PARTICULAR                                          01                000000000 N100  000000 01/03",
+    "TITULAR,DE PRUEBA                IVA: EXENTO                 CIERRE 29 May 25        VENCIMIENTO 09 Jun 25",
+    "LIMITES:      COMPRA $ 9.500.000,00                                            FINANCIACION $ 7.600.000,00"
+  ],
+  "titular_principal": [
+    "              SALDO ANTERIOR                                                   100.000,00      50,00",
+    "25 Mayo 05 000001 K COMERCIO DE PRUEBA           960003496345101                         3.479,22",
+    "Tarjeta 8374 Total Consumos de TITULAR PRINCIPAL                             108.320,77 *    0,00 *"
+  ],
+  "titular_adicional": [
+    "25 Mayo 10 000002 * COMERCIO ADICIONAL PRUEBA     C.01/06                    12.000,00",
+    "Tarjeta 4597 Total Consumos de TITULAR ADICIONAL                             532.253,01 *    1,99 *"
+  ],
+  "fila_importe_separado_del_comercio": [
+    "25 Marzo 26 001063 * COMERCIO CUOTAS PRUEBA               C.03/06              11.666,50",
+    "                                                                              26.670,00"
+  ],
+  "fila_ars": [
+    "25 Mayo 18 000000 K AUTOPISTAS URBANAS PRUEBA     000000001375111                         3.728,43"
+  ],
+  "fila_usd": [
+    "11 278509 K SERVICIO DIGITAL PRUEBA       A00000000USD        1,99                           1,99"
+  ],
+  "subtotal_por_tarjeta": [
+    "Tarjeta 8374 Total Consumos de TITULAR PRINCIPAL                             108.320,77 *    0,00 *"
+  ],
+  "saldo_anterior": [
+    "              SALDO ANTERIOR                                                   1843.243,20     1.904,74"
+  ],
+  "pago_ars": [
+    "24 Diciem. 09 SU PAGO EN PESOS                                                 1843.243,20-"
+  ],
+  "pago_usd": [
+    "10   SU PAGO EN USD                                                               1.904,74-"
+  ],
+  "pago_con_tipo_de_cambio": [
+    "09 SU PAGO EN USD 1972.358,27 TC1035,500 1.904,74-"
+  ],
+  "impuestos": [
+    "24 Diciem. 26   IMPUESTO DE SELLOS $                                            46564.02",
+    "26 IMPUESTO DE SELLOS USD                                                        0,02"
+  ],
+  "devolucion": [
+    "09 DEV.IMP. RG 5617 30%( 108405,33)                                             32521.59-"
+  ],
+  "total_final": [
+    "                    DEBITAREMOS DE SU CTA 00000000514817 LA SUMA DE $ 732350,30 + U$S     2,01     SUC.126"
+  ],
+  "total_final_sin_segmento_usd": [
+    "                DEBITAREMOS DE SU CTA 00000000514817 LA SUMA DE $ 309672,00                    SUC.126"
+  ],
+  "boilerplate_cuotas_a_vencer_no_es_consumo": [
+    "Cuotas a vencer:",
+    "Octubre/25 Noviembre/25 Diciembre/25 Enero/26 Febrero/26 Marzo/26",
+    "$148.504,05 $120.130,72 $71.415,32 $71.415,32 $54.248,66 $33.174,00",
+    "A partir de Abril/26 $165.870,00"
+  ]
+}

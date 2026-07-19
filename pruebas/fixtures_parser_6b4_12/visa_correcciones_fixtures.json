@@ -1,0 +1,71 @@
+{
+  "_nota": "Fixtures sintéticos anonimizados para 6B4.12 (cierre de conciliación Visa 8374/Business). Ningún nombre, CUIT, domicilio ni número completo de tarjeta real. Los importes y patrones de texto reproducen casos reales encontrados durante el diagnóstico posicional (pdf.js) contra los PDF binarios de resumenes_historicos/, con datos ficticios. Conservan la posición relativa X/Y y estructura de filas/columnas de las líneas reales que motivaron cada corrección.",
+
+  "bonificacion_consumo": {
+    "texto": [
+      "22 448523 BONIF. CONSUMO OV COMERCIO DE PRUEBA          -7.274,50"
+    ],
+    "posicion_relativa": "misma fila que el consumo original (x=71.9 día, x=136.9 descripción, x=421.6 importe con signo negativo)",
+    "causa_que_corregia": "Antes se clasificaba como 'purchase' (consumo), y sumVisaStatementMovements le aplicaba Math.abs() antes de sumar, invirtiendo su efecto real (sumaba +7.274,50 en vez de restar -7.274,50, una diferencia de $14.549 = 2x el importe).",
+    "resultado_esperado": { "categoria": "refund", "moneda": "ARS", "signo": "negativo (resta del total)", "monto_absoluto": 7274.5 }
+  },
+
+  "impuesto_rg_generico": {
+    "texto": [
+      "28 DB.RG 5463 30% ( 1898148,27 )                                                569.444,48"
+    ],
+    "posicion_relativa": "línea de una sola fila, importe en la columna derecha",
+    "causa_que_corregia": "El patrón de impuestos solo reconocía \"RG 4815\" y \"RG 5617\" hardcodeados; un tercer número de Resolución General real (RG 5463) caía al 'purchase' por defecto en vez de 'tax'. Se generalizó a cualquier \"RG\" seguido de 3 a 5 dígitos.",
+    "resultado_esperado": { "categoria": "tax", "moneda": "ARS", "signo": "positivo (suma al total)", "monto_absoluto": 569444.48 }
+  },
+
+  "primer_grupo_de_miles_irregular": {
+    "texto": [
+      "              SALDO ANTERIOR                                                  1942.261,44        88,21",
+      "25 Octubre 13 SU PAGO EN PESOS                                                1942.261,44-"
+    ],
+    "posicion_relativa": "el importe de SU PAGO llega como un único fragmento de texto (\"1942.261,44-\"), sin separador de miles después del primer dígito",
+    "causa_que_corregia": "La regex de importes exigía 1 a 3 dígitos en el primer grupo (\\d{1,3}); con \"1942.261,44\" el motor de regex descartaba el \"1\" inicial y solo capturaba \"942.261,44\", perdiendo exactamente $1.000.000 del pago real (verificado en VISA_BUSINESS_5044_2025-11.pdf).",
+    "resultado_esperado": { "categoria": "payment", "moneda": "ARS", "signo": "negativo", "monto_absoluto": 1942261.44 }
+  },
+
+  "saldo_anterior_pago_parcial": {
+    "texto": [
+      "              SALDO ANTERIOR                                                  2243.112,42      2.933,26",
+      "24 Noviem. 04 SU PAGO EN PESOS                                                 494.797,44-",
+      "04 SU PAGO EN USD                                                                2.898,48-",
+      "07 SU PAGO EN PESOS                                                             26.600,00-",
+      "07 SU PAGO EN USD                                                                  34,78-"
+    ],
+    "posicion_relativa": "SALDO ANTERIOR en su propia fila; 4 líneas de pago limpias (una por moneda y por fecha), ninguna con \"TC\" ni línea ambigua",
+    "causa_que_corregia": "sumVisaStatementMovements excluía SIEMPRE saldo anterior y pago de la suma de validación, asumiendo que un pago cancela el saldo anterior por completo. Cuando el pago es PARCIAL (acá: pago real ARS 521.397,44 contra un saldo anterior de 2.243.112,42), el remanente impago ($1.721.714,98) se descartaba en vez de arrastrarse al total del período. Ahora se incluyen ambos en la ecuación SOLO cuando no queda ninguna línea de pago ambigua sin resolver.",
+    "resultado_esperado": {
+      "saldoAnterior": { "ars": 2243112.42, "usd": 2933.26, "categoria": "carried_balance" },
+      "pagos": { "arsTotal": -521397.44, "usdTotal": -2933.26, "categoria": "payment" },
+      "incluidos_en_ecuacion": "sí, porque no hay ninguna línea de pago ambigua (paymentReviewLines vacío)"
+    }
+  },
+
+  "transferencia_deuda_usd_a_pesos": {
+    "texto": [
+      "09 TRANSFERENCIA DEUDA 9,09 TC1450,000 13.180,50 9,09-"
+    ],
+    "posicion_relativa": "fila única con 4 números: USD inicial, tasa TC, ARS equivalente, USD final (con signo de cancelación)",
+    "causa_que_corregia": "No existía parser dedicado para \"TRANSFERENCIA DEUDA\": el importe ARS real (13.180,50) se descartaba y solo se tomaba el último número de la línea (9,09 USD), asignado incorrectamente como ARS y con signo invertido por la categoría 'purchase' por defecto. Se agregó parseVisaDebtTransferLine, que verifica aritméticamente que el primer y el último importe (USD) coincidan entre sí y que el importe del medio (ARS) sea ese USD multiplicado por la tasa indicada (dentro de tolerancia) antes de aceptar la línea — si no cierra, se deja para revisión humana.",
+    "resultado_esperado": {
+      "categoria": "currency_conversion_carried_forward",
+      "importe_ars": 13180.5,
+      "importe_usd": -9.09,
+      "verificacion_aritmetica": "9,09 (primer importe) == 9,09 (último importe, con signo) Y 9,09 x 1450,000 = 13.180,50 (dentro de tolerancia ARS $1)"
+    }
+  },
+
+  "transferencia_deuda_no_verificada_debe_quedar_ambigua": {
+    "texto": [
+      "09 TRANSFERENCIA DEUDA 5,00 TC1450,000 99.999,99 5,00-"
+    ],
+    "posicion_relativa": "misma forma que el caso real, pero con un importe ARS que NO resulta de USD x TC (caso sintético, nunca visto en un PDF real)",
+    "causa_que_corregia": "Verifica que la corrección NUNCA fuerce una conversión cuando la aritmética no cierra: 5,00 x 1450,000 = 7.250,00, que no coincide con 99.999,99 dentro de tolerancia — debe quedar en paymentReviewLines, nunca convertirse en un movimiento inventado.",
+    "resultado_esperado": { "ambiguous": true, "no_se_crea_movimiento": true }
+  }
+}

@@ -1,0 +1,84 @@
+-- ============================================================
+-- MEJORA 6B4.9 — PENDIENTE. NO APLICADO. NO EJECUTAR SIN AUTORIZACIÓN.
+-- ------------------------------------------------------------
+-- Diseño ADITIVO (nunca modifica ni borra tablas existentes) para cuando,
+-- en una etapa futura y con autorización explícita, se decida ejecutar de
+-- verdad el reprocesamiento histórico ("Reconstruir detalle desde
+-- resúmenes originales", hoy solo vista previa en el cliente).
+--
+-- Motivo real (confirmado en 6B4.9, sección 12 del pedido): muchos PDF
+-- históricos quedaron vinculados a su credit_card_statement, pero nunca se
+-- insertaron sus movimientos individuales en credit_card_movements (la
+-- carga histórica solo guardó el total agregado del resumen). Sin esos
+-- movimientos no se puede reconstruir saldo anterior/pagos/intereses/
+-- comisiones/impuestos/reversos con el detalle que sí permite este
+-- estado del módulo (6B4.8.3/6B4.9).
+--
+-- NADA de este archivo se ejecutó. Antes de aplicar cualquier parte, releer
+-- el estado real de las tablas (SELECT, nunca a ciegas) y confirmar con el
+-- titular.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- 1) Huella estable por movimiento (antiduplicados, sección 13) — ADITIVO.
+--    Mismo criterio ya implementado en el cliente
+--    (creditMovementFingerprint): statement_id + fecha + descripción
+--    normalizada + moneda + importe + tipo + referencia de cupón/operación.
+--    Se persiste para que una futura ejecución (o un reintento) nunca
+--    duplique un movimiento ya importado, incluso si se corre en otra
+--    sesión o día distinto.
+-- ------------------------------------------------------------
+-- ALTER TABLE public.credit_card_movements
+--   ADD COLUMN IF NOT EXISTS import_fingerprint text;
+-- CREATE UNIQUE INDEX IF NOT EXISTS credit_card_movements_fingerprint_uq
+--   ON public.credit_card_movements(import_fingerprint)
+--   WHERE import_fingerprint IS NOT NULL;
+-- -- (el índice único es lo que realmente impide la duplicación a nivel de
+-- -- base de datos, no solo a nivel de lógica de cliente)
+
+-- ------------------------------------------------------------
+-- 2) Historial de reprocesamiento (auditoría, sección 12/14) — ADITIVO.
+--    Registra CADA corrida de importación real (nunca las vistas previas,
+--    que no escriben nada): qué documento, qué resumen, cuántos
+--    movimientos se insertaron / reutilizaron / quedaron en diferencia, y
+--    quién la ejecutó — para trazabilidad completa.
+-- ------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS public.credit_card_reprocessing_runs (
+--   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+--   card_id uuid NOT NULL REFERENCES public.credit_cards(id) ON DELETE CASCADE,
+--   statement_id uuid REFERENCES public.credit_card_statements(id) ON DELETE SET NULL,
+--   document_id uuid REFERENCES public.documents(id) ON DELETE SET NULL,
+--   executed_by uuid REFERENCES auth.users(id),
+--   executed_at timestamptz NOT NULL DEFAULT now(),
+--   movements_inserted integer NOT NULL DEFAULT 0,
+--   movements_reused integer NOT NULL DEFAULT 0,
+--   movements_with_difference integer NOT NULL DEFAULT 0,
+--   result_state text NOT NULL, -- 'completed' | 'stopped_on_conflict' | 'error'
+--   notes text
+-- );
+-- ALTER TABLE public.credit_card_reprocessing_runs ENABLE ROW LEVEL SECURITY;
+-- -- Política conceptual: solo el dueño de la tarjeta (mismo criterio ya
+-- -- usado en credit_cards) puede leer su propio historial de
+-- -- reprocesamiento; solo titular/admin (canRepairCreditDocuments() en el
+-- -- cliente) puede ejecutar una corrida real, nunca un observador.
+
+-- ------------------------------------------------------------
+-- Plan de despliegue reversible (cuando se autorice):
+--   1. Aplicar solo la columna+índice de huella (paso 1) primero, sola,
+--      y confirmar que no rompe ninguna fila existente (import_fingerprint
+--      empieza NULL para todo lo ya guardado, el índice único ignora NULL).
+--   2. Aplicar la tabla de auditoría (paso 2) por separado.
+--   3. Recién ahí habilitar en el cliente el botón real de "Confirmar
+--      importación" (hoy no existe: solo hay vista previa).
+--   4. La ejecución real debe ser idempotente, por tarjeta+período
+--      explícito, y detenerse ante el primer conflicto real (nunca seguir
+--      "a la fuerza" sobre datos que no coinciden).
+--   5. Para revertir: las columnas/tabla son aditivas, se pueden dropear
+--      sin afectar credit_card_movements/credit_card_statements existentes.
+--
+-- Verificación previa recomendada (solo lectura, nunca a ciegas) antes de
+-- aplicar cualquier parte:
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_schema='public' AND table_name='credit_card_movements'
+--   ORDER BY ordinal_position;
+-- ============================================================

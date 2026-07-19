@@ -1,0 +1,16 @@
+# Respaldos locales de cada etapa (redundantes con el historial de git,
+# no corresponde versionarlos).
+respaldos/
+
+# PDF reales de resúmenes de tarjeta (datos financieros reales/sensibles,
+# nunca deben publicarse en un repositorio público).
+resumenes_historicos/
+
+# Resultados/JSON derivados de los PDF reales (contienen montos,
+# comerciantes y fechas reales extraídos de los resúmenes -- mismo motivo
+# que resumenes_historicos/, nunca a un repositorio público). Los fixtures
+# en pruebas/fixtures_* SÍ están anonimizados y se versionan normalmente.
+pruebas/resultados_*/
+
+# Artefactos temporales generados al correr las suites de prueba.
+pruebas/_extracted_*.js

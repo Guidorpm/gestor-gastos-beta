@@ -1,0 +1,112 @@
+-- ============================================================
+-- 6B4.11 — Reparación propuesta de RLS para comprobantes de operadores
+-- ------------------------------------------------------------
+-- NO EJECUTADO EN ESTA ETAPA. Este archivo es una PROPUESTA aditiva —
+-- requiere que el titular confirme antes los nombres reales de columnas
+-- señalados más abajo (correr primero
+-- 6b4_11_verificacion_comprobantes_operadores.sql, sección "credit_cards_columns"
+-- y "documents_rls").
+--
+-- HALLAZGO QUE MOTIVA ESTA PROPUESTA (verificado leyendo
+-- migraciones/6b2_documentos_tarjetas.sql, sin ejecutar nada):
+--   Las políticas RLS de "documents" para filas de tarjeta
+--   (documents_credit_select/insert/update/delete) y de
+--   "storage.objects" (storage_credit_documents_*) están escritas
+--   EXCLUSIVAMENTE en términos de "uploaded_by = auth.uid()" /
+--   "(storage.foldername(name))[2] = auth.uid()::text" — es decir, cada
+--   política solo reconoce a la persona que subió el archivo, sin ningún
+--   chequeo de "¿este usuario tiene acceso legítimo a la tarjeta/
+--   movimiento al que pertenece este documento?". Esto es coherente para
+--   el titular (que sube sus propios documentos), pero no contempla que
+--   un operador autorizado por el titular pueda insertar/ver un
+--   comprobante vinculado a una tarjeta que no le pertenece a él como
+--   "uploaded_by" de otro documento ya existente del mismo movimiento.
+--
+-- IMPORTANTE: esto NO fue confirmado como la causa del reporte "los
+-- operadores no pueden cargar comprobantes desde PC" — las causas
+-- confirmadas con evidencia directa de código fueron client-side
+-- (ver CIERRE_REPARACION_COMPROBANTES_MOBILE_OPERADORES_6B4_11_20260716.md).
+-- Esta migración queda preparada por si, tras la prueba manual, se
+-- confirma que además hace falta un ajuste de RLS.
+--
+-- PRERREQUISITO OBLIGATORIO ANTES DE EJECUTAR (no completado en esta
+-- etapa): reemplazar <TABLA_ACCESO_OPERADOR> y <COLUMNA_GRUPO_TARJETA>
+-- más abajo por los nombres reales, confirmados con
+-- 6b4_11_verificacion_comprobantes_operadores.sql. Si credit_cards no
+-- tiene ningún concepto de grupo/empresa compartida (son 100% del
+-- titular, sin operadores con acceso directo a nivel de tabla), esta
+-- migración NO aplica y debe descartarse en favor de una revisión de
+-- diseño distinta — no forzar una política sobre una relación que no
+-- existe.
+--
+-- Es ADITIVA (agrega políticas nuevas con nombre propio, nunca reemplaza
+-- ni elimina documents_credit_select/insert/update/delete ni
+-- storage_credit_documents_*), IDEMPOTENTE (DROP...IF EXISTS antes de
+-- recrear), y limitada a INSERT/SELECT operativos (nunca UPDATE/DELETE:
+-- un operador autorizado puede cargar y ver, nunca reemplazar ni borrar
+-- documentos ajenos sin autorización explícita, tal como pide la etapa).
+-- No abre acceso global: exige uploaded_by = auth.uid() en el INSERT (el
+-- operador solo puede insertar SUS PROPIAS filas) y un chequeo de
+-- pertenencia real a la tarjeta para el SELECT.
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- Ejemplo de política adicional de SELECT para "documents" (tarjetas):
+-- permite ver un documento de tarjeta a cualquier usuario que tenga
+-- acceso operativo real a esa tarjeta (vía la tabla/columna real que el
+-- titular confirme), ADEMÁS de a quien lo subió (documents_credit_select
+-- sigue existiendo, sin cambios).
+-- ------------------------------------------------------------
+-- DROP POLICY IF EXISTS documents_credit_select_operador ON public.documents;
+-- CREATE POLICY documents_credit_select_operador ON public.documents
+--   FOR SELECT USING (
+--     card_id IS NOT NULL
+--     AND EXISTS (
+--       SELECT 1 FROM public.<TABLA_ACCESO_OPERADOR> acceso
+--       WHERE acceso.<COLUMNA_GRUPO_TARJETA> = documents.card_id
+--         AND acceso.user_id = auth.uid()
+--         AND acceso.role IN ('admin','operator')
+--     )
+--   );
+
+-- ------------------------------------------------------------
+-- Ejemplo de política adicional de INSERT: el operador solo puede
+-- insertar documentos marcados con SU PROPIO uploaded_by (nunca en
+-- nombre de otro usuario), y solo si tiene acceso operativo real a la
+-- tarjeta/movimiento correspondiente.
+-- ------------------------------------------------------------
+-- DROP POLICY IF EXISTS documents_credit_insert_operador ON public.documents;
+-- CREATE POLICY documents_credit_insert_operador ON public.documents
+--   FOR INSERT WITH CHECK (
+--     uploaded_by = auth.uid()
+--     AND card_id IS NOT NULL
+--     AND EXISTS (
+--       SELECT 1 FROM public.<TABLA_ACCESO_OPERADOR> acceso
+--       WHERE acceso.<COLUMNA_GRUPO_TARJETA> = documents.card_id
+--         AND acceso.user_id = auth.uid()
+--         AND acceso.role IN ('admin','operator')
+--     )
+--   );
+
+-- ------------------------------------------------------------
+-- Storage: mismo criterio para storage.objects (el segundo segmento de
+-- la ruta sigue exigiendo auth.uid() del propio operador que sube, nunca
+-- se abre a "cualquier autenticado"; se agrega el mismo chequeo de acceso
+-- real a la tarjeta antes de permitir el INSERT/SELECT).
+-- ------------------------------------------------------------
+-- DROP POLICY IF EXISTS storage_credit_documents_select_operador ON storage.objects;
+-- CREATE POLICY storage_credit_documents_select_operador ON storage.objects
+--   FOR SELECT USING (
+--     bucket_id = 'documents'
+--     AND (storage.foldername(name))[1] = 'credit-cards'
+--     AND EXISTS (
+--       SELECT 1 FROM public.<TABLA_ACCESO_OPERADOR> acceso
+--       WHERE acceso.<COLUMNA_GRUPO_TARJETA>::text = (storage.foldername(name))[3]
+--         AND acceso.user_id = auth.uid()
+--         AND acceso.role IN ('admin','operator')
+--     )
+--   );
+
+-- Nada de este archivo se ejecutó. Todo queda comentado a propósito hasta
+-- que el titular confirme los nombres reales y autorice explícitamente
+-- correrlo.
