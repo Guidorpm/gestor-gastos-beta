@@ -1401,6 +1401,32 @@ function renderForcedPasswordChange(alias){
 // sesión o recargar la aplicación ya no se reabre automáticamente el último
 // espacio, Tarjetas o Reportes visitado.
 async function loadGroups(){
+  // AJUSTE LOCAL - DEUDAS ARRASTRADAS: BUG REAL -- loadGroups() es el
+  // único punto de entrada real después de CUALQUIER autenticación
+  // (carga inicial con sesión ya activa, login explícito, cambio forzado
+  // de contraseña), pero nunca limpiaba el estado de un espacio/usuario
+  // anterior (group/membership/members/services/obligations/payments/
+  // contributions/documents/consolidations). Si un
+  // cambio de sesión (p.ej. Guido -> Fabiana en la misma pestaña, sin una
+  // recarga completa de la página) ocurre mientras esas variables todavía
+  // tienen datos del usuario anterior, cualquier render que las use antes
+  // de volver a entrar a un espacio (o incluso el propio "Deudas
+  // arrastradas" si algo dispara un re-render con el group/obligations
+  // viejos) podía mostrar información de OTRA sesión. Se limpia acá,
+  // ANTES de cargar los espacios del usuario actual -- nunca se confía en
+  // que el próximo openGroup()/reloadGroup() vaya a sobrescribir esto a
+  // tiempo. No se toca localStorage (no se usa para saldos/pagos, ver
+  // auditoría previa) ni ninguna tabla de Tarjetas (ya se limpia aparte,
+  // sin cambios acá).
+  group=null;
+  membership=null;
+  members=[];
+  services=[];
+  obligations=[];
+  payments=[];
+  contributions=[];
+  documents=[];
+  consolidations=[];
   app.innerHTML='<div class="spinner">Cargando tus espacios…</div>';
 
   const {data:permissionData,error:permissionError}=await sb.rpc('current_platform_permissions');
@@ -15330,15 +15356,23 @@ function renderServices(ms){
   const currentTotals=monthTotals(baseMonth);
   const displayedTotals=ms.map(monthTotals);
   const basePeriod=periodDate(baseMonth);
-  const previousPendingAmount=previousDebts.reduce((a,o)=>a+Number(o.amount||0),0);
+  // AJUSTE LOCAL - DEUDAS ARRASTRADAS: BUG REAL -- estos totales sumaban
+  // Number(o.amount||0) (el importe ORIGINAL de la obligación) en vez del
+  // saldo real pendiente (balanceFor(o), que ya descuenta los pagos
+  // reales de la obligación, con la MISMA regla que el detalle del
+  // espacio). Una obligación con pago parcial (o incluso ya saldada del
+  // todo, balance=0) inflaba estos totales con su importe completo.
+  // balanceFor ya es la única fuente real de saldo -- nunca se crea acá
+  // una copia divergente del cálculo.
+  const previousPendingAmount=previousDebts.reduce((a,o)=>a+balanceFor(o),0);
   const currentPendingAmount=pending
     .filter(o=>o.period===basePeriod)
-    .reduce((a,o)=>a+Number(o.amount||0),0);
+    .reduce((a,o)=>a+balanceFor(o),0);
   const futurePendingAmount=pending
     .filter(o=>o.period>basePeriod)
-    .reduce((a,o)=>a+Number(o.amount||0),0);
-  const pendingTotalAmount=pending.reduce((a,o)=>a+Number(o.amount||0),0);
-  const overdueAmount=over.reduce((a,o)=>a+Number(o.amount||0),0);
+    .reduce((a,o)=>a+balanceFor(o),0);
+  const pendingTotalAmount=pending.reduce((a,o)=>a+balanceFor(o),0);
+  const overdueAmount=over.reduce((a,o)=>a+balanceFor(o),0);
   const missing=services.filter(s=>
     s.frequency!=='one_time'
     && monthAppliesToService(s,baseMonth)
@@ -15492,7 +15526,7 @@ function renderServices(ms){
               <strong>${esc(service?.name||'Servicio')}</strong>
               <small>${monthLabel(debtMonth)} · vencía ${fmtDate(o.due_date)}</small>
             </div>
-            <div class="debt-amount">${fmtMoney(o.amount)}</div>
+            <div class="debt-amount">${fmtMoney(balanceFor(o))}</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
               <button class="btn soft small" data-old-debt="${o.service_id}|${debtMonth}">Abrir deuda</button>
               ${canEdit()?`<button class="btn primary small" data-next-invoice="${o.service_id}|${nextMonth}">
