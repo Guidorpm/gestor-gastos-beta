@@ -463,7 +463,27 @@ function saveNavigationState(){
 }
 
 let session=null, groups=[], group=null, membership=null, members=[], services=[], obligations=[], payments=[], contributions=[], documents=[], serviceCategories=[], internalAccounts=[], consolidations=[];
-let spacesDashboard={ownedGroupIds:[],services:[],obligations:[],payments:[],documents:[]};
+// HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: el baseline publicado (05ba8f0)
+// no traía soporte de public.payment_allocations -- balanceFor/paidAmountFor
+// contaban SOLO el pago legado (payments.total_amount por obligation_id) e
+// ignoraban las imputaciones activas, mostrando una deuda falsa cuando un
+// pago fue distribuido entre dos períodos. Caso real confirmado (alquiler
+// GR, junio/julio 2026): junio -- obligación $900.000, pago legado
+// $800.000, imputación activa $100.000, saldo correcto $0; julio --
+// obligación $900.000, pago legado $400.000, imputación activa $500.000
+// (ambas imputaciones provienen de un único pago distribuido de $600.000),
+// saldo correcto $0. Con el bug, Fabiana veía junio con $100.000 de deuda
+// en vez de $0 (el legado por sí solo no llegaba al importe total, y la
+// imputación que cubría la diferencia se ignoraba por completo).
+// paymentAllocationsLoadError es una señal EXTRA (no existía en el soporte
+// de referencia): si la consulta a payment_allocations falla, nunca se
+// debe mostrar un saldo/deuda calculado como si no existieran imputaciones
+// -- ver renderServices()/renderReports()/renderAnnualOverview() y, para
+// el Panel general, spacesDashboard.paymentAllocationsLoadError (bandera
+// separada, ver loadSpacesDashboard()).
+let paymentAllocations=[];
+let paymentAllocationsLoadError=false;
+let spacesDashboard={ownedGroupIds:[],services:[],obligations:[],payments:[],paymentAllocations:[],documents:[]};
 // MEJORA 6B3 - Recuerda qué pantalla principal está activa ('spaces','group',
 // 'creditCards') para que refreshDashboardData() pueda re-renderizar la
 // pantalla correcta sin forzar una navegación a Mis espacios cada vez que se
@@ -1406,7 +1426,7 @@ async function loadGroups(){
   // (carga inicial con sesión ya activa, login explícito, cambio forzado
   // de contraseña), pero nunca limpiaba el estado de un espacio/usuario
   // anterior (group/membership/members/services/obligations/payments/
-  // contributions/documents/consolidations). Si un
+  // paymentAllocations/contributions/documents/consolidations). Si un
   // cambio de sesión (p.ej. Guido -> Fabiana en la misma pestaña, sin una
   // recarga completa de la página) ocurre mientras esas variables todavía
   // tienen datos del usuario anterior, cualquier render que las use antes
@@ -1418,12 +1438,18 @@ async function loadGroups(){
   // tiempo. No se toca localStorage (no se usa para saldos/pagos, ver
   // auditoría previa) ni ninguna tabla de Tarjetas (ya se limpia aparte,
   // sin cambios acá).
+  // HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: se agrega paymentAllocations
+  // (imputaciones del espacio anterior) y paymentAllocationsLoadError (nunca
+  // debe sobrevivir un error de la sesión anterior a la sesión nueva) a la
+  // misma limpieza ya publicada.
   group=null;
   membership=null;
   members=[];
   services=[];
   obligations=[];
   payments=[];
+  paymentAllocations=[];
+  paymentAllocationsLoadError=false;
   contributions=[];
   documents=[];
   consolidations=[];
@@ -1455,7 +1481,15 @@ async function loadGroups(){
 
 async function loadSpacesDashboard(){
   const owned=groups.filter(g=>g.created_by===session.user.id&&(g.status||'active')!=='deleted');
-  spacesDashboard={ownedGroupIds:owned.map(g=>g.id),services:[],obligations:[],payments:[],documents:[]};
+  // CORRECCIÓN — bandera de error PROPIA del Panel general
+  // (spacesDashboard.paymentAllocationsLoadError), separada de la bandera
+  // del espacio abierto (paymentAllocationsLoadError, ver reloadGroup()).
+  // Antes se usaba una única bandera global compartida por ambas consultas
+  // -- una carga exitosa de una podía borrar el error real de la otra. Cada
+  // reasignación completa de spacesDashboard (como esta) reinicia su propia
+  // bandera a false; recién se marca true si la consulta de ESTA función
+  // falla.
+  spacesDashboard={ownedGroupIds:owned.map(g=>g.id),services:[],obligations:[],payments:[],paymentAllocations:[],documents:[],paymentAllocationsLoadError:false};
 
   if(!owned.length)return;
 
@@ -1464,13 +1498,17 @@ async function loadSpacesDashboard(){
   const [servicesResult,obligationsResult,paymentsResult,documentsResult]=await Promise.all([
     sb.from('services').select('id,group_id,name,active,is_private').in('group_id',groupIds).eq('active',true),
     sb.from('obligations').select('id,service_id,period,amount,status,due_date,services!inner(group_id,name)').in('services.group_id',groupIds),
-    sb.from('payments').select('id,obligation_id,total_amount,paid_at,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
+    sb.from('payments').select('id,obligation_id,total_amount,paid_at,voided,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
     sb.from('documents').select('id,group_id,obligation_id,payment_id,kind').in('group_id',groupIds)
   ]);
 
   const error=[servicesResult,obligationsResult,paymentsResult,documentsResult].find(result=>result.error)?.error;
   if(error){
     console.warn('No se pudieron cargar métricas generales:',error.message);
+    // Si fallaron los datos base (obligaciones/pagos), tampoco se puede
+    // confiar en ningún cálculo financiero derivado -- se marca el mismo
+    // estado de error que usa la consulta de payment_allocations.
+    spacesDashboard.paymentAllocationsLoadError=true;
     return;
   }
 
@@ -1490,14 +1528,92 @@ async function loadSpacesDashboard(){
       : obligations?.services?.group_id
   }));
   spacesDashboard.documents=documentsResult.data||[];
+
+  // HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: consulta SEPARADA, a propósito
+  // (mismo patrón que el resto del Panel general con datos opcionales): si
+  // falla, NUNCA se debe interpretar como "sin imputaciones" -- eso mostraría
+  // exactamente la deuda falsa que este hotfix corrige. Se marca el error en
+  // spacesDashboard.paymentAllocationsLoadError -- PROPIA del Panel general,
+  // nunca la bandera compartida con el espacio actualmente abierto (ver
+  // reloadGroup()) -- para que dashboardMetricsForGroup()/
+  // serviceObligationRowsForMonth()/renderOwnerDashboard()/
+  // renderMonthlyObligationsBlock() oculten los números de deuda en vez de
+  // mostrar uno potencialmente incorrecto, sin afectar ni ser afectadas por
+  // el estado de un espacio individual.
+  const allocationsResult=await sb
+    .from('payment_allocations')
+    .select('id,payment_id,obligation_id,allocated_amount,is_active,obligations!inner(service_id,services!inner(group_id))')
+    .in('obligations.services.group_id',groupIds)
+    .eq('is_active',true);
+  if(allocationsResult.error){
+    console.warn('No se pudo cargar la distribución de pagos:',allocationsResult.error.message);
+    spacesDashboard.paymentAllocations=[];
+    spacesDashboard.paymentAllocationsLoadError=true;
+    toast('No se pudieron verificar las imputaciones de pagos del Panel general. Los saldos no se muestran hasta poder reintentar.');
+  }else{
+    spacesDashboard.paymentAllocations=(allocationsResult.data||[]).map(({obligations,...row})=>({
+      ...row,
+      group_id:Array.isArray(obligations?.services)?obligations.services[0]?.group_id:obligations?.services?.group_id
+    }));
+    spacesDashboard.paymentAllocationsLoadError=false;
+  }
 }
+// HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: regla de lectura única -- un pago
+// SIN asignaciones activas VÁLIDAS en payment_allocations se sigue leyendo
+// por su obligation_id legado (comportamiento previo, sin cambios). Un pago
+// CON 1+ asignaciones activas VÁLIDAS se lee SOLO por esas asignaciones --
+// su obligation_id legado NUNCA se suma además, para no contar el mismo
+// pago dos veces. Un pago anulado (voided=true) nunca cuenta, ni por la
+// rama legado ni por la de asignaciones. Pura función (sin estado propio),
+// reutilizada por paidAmountFor (Servicios/Reportes) y dashboardPaidFor
+// (Panel general) -- una sola fuente de verdad para esta regla.
+//
+// CORRECCIÓN — "pago anulado con imputación todavía activa": la versión
+// anterior filtraba pagos anulados SOLO en la rama legado
+// (fromLegacyPayments) y confiaba en que el servidor ya hubiera
+// desactivado (is_active=false) cualquier asignación de un pago voided --
+// eso nunca se verificaba acá, así que fromAllocations sumaba una
+// imputación activa aunque su pago padre estuviera anulado (o aunque su
+// payment_id ni siquiera existiera en paymentsList). Ahora una asignación
+// solo se considera VÁLIDA si, ADEMÁS de is_active===true (comparación
+// estricta, nunca "!==false" -- un valor null/undefined/inesperado ya NO
+// se trata como activo), su payment_id corresponde a un pago REALMENTE
+// presente en paymentsList y ese pago tiene voided!==true. Nunca se
+// depende de que un trigger del servidor haya desactivado la imputación
+// de antemano.
+function paidAmountForWithAllocations(obligationId,paymentsList,allocationsList){
+  const paymentsArr=paymentsList||[];
+  const allocations=allocationsList||[];
+  const presentNonVoidedPaymentIds=new Set(
+    paymentsArr.filter(p=>p.voided!==true).map(p=>p.id)
+  );
+  const validAllocations=allocations.filter(a=>
+    a.is_active===true
+    && presentNonVoidedPaymentIds.has(a.payment_id)
+  );
+  const activePaymentIdsWithAllocations=new Set(validAllocations.map(a=>a.payment_id));
+  const fromAllocations=validAllocations
+    .filter(a=>a.obligation_id===obligationId)
+    .reduce((sum,a)=>sum+Number(a.allocated_amount||0),0);
+  const fromLegacyPayments=paymentsArr
+    .filter(p=>p.obligation_id===obligationId&&p.voided!==true&&!activePaymentIdsWithAllocations.has(p.id))
+    .reduce((sum,p)=>sum+Number(p.total_amount||0),0);
+  return fromAllocations+fromLegacyPayments;
+}
+// CORRECCIÓN — si la carga de imputaciones del Panel general falló
+// (spacesDashboard.paymentAllocationsLoadError), estas dos funciones NUNCA
+// deben producir una cifra utilizable como definitiva -- devuelven null en
+// vez de un número calculado solo con pagos legado. Los consumidores
+// (dashboardMetricsForGroup, serviceObligationRowsForMonth) deben tratar
+// null como "no disponible", nunca como 0.
 function dashboardPaidFor(obligationId){
-  return spacesDashboard.payments
-    .filter(payment=>payment.obligation_id===obligationId)
-    .reduce((sum,payment)=>sum+Number(payment.total_amount||0),0);
+  if(spacesDashboard.paymentAllocationsLoadError)return null;
+  return paidAmountForWithAllocations(obligationId,spacesDashboard.payments,spacesDashboard.paymentAllocations);
 }
 function dashboardBalanceFor(obligation){
-  return Math.max(0,Number(obligation.amount||0)-dashboardPaidFor(obligation.id));
+  const paid=dashboardPaidFor(obligation.id);
+  if(paid===null)return null;
+  return Math.max(0,Number(obligation.amount||0)-paid);
 }
 // Promedio mensual: año actual usa enero->mes actual / meses transcurridos;
 // año cerrado usa el año completo / 12; año futuro no calcula promedio (0).
@@ -1524,9 +1640,15 @@ function dashboardMetricsForGroup(groupId){
   const paymentIds=new Set(paymentsForGroup.map(item=>item.id));
 
   const total=obligationsForGroup.reduce((sum,item)=>sum+Number(item.amount||0),0);
-  const paid=obligationsForGroup.reduce((sum,item)=>sum+dashboardPaidFor(item.id),0);
-  const pending=obligationsForGroup.reduce((sum,item)=>sum+dashboardBalanceFor(item),0);
-  const unpaid=obligationsForGroup.filter(item=>dashboardBalanceFor(item)>0.01).length;
+  // CORRECCIÓN — si spacesDashboard.paymentAllocationsLoadError es true,
+  // paid/pending/unpaid quedan explícitamente en null (nunca 0 ni una suma
+  // parcial): total/invoices/receipts/activeServices/averageMonthly no
+  // dependen del estado de pago, así que siguen calculándose con
+  // normalidad.
+  const financialDataUnavailable=spacesDashboard.paymentAllocationsLoadError===true;
+  const paid=financialDataUnavailable?null:obligationsForGroup.reduce((sum,item)=>sum+dashboardPaidFor(item.id),0);
+  const pending=financialDataUnavailable?null:obligationsForGroup.reduce((sum,item)=>sum+dashboardBalanceFor(item),0);
+  const unpaid=financialDataUnavailable?null:obligationsForGroup.filter(item=>dashboardBalanceFor(item)>0.01).length;
   const invoices=spacesDashboard.documents.filter(item=>
     item.group_id===groupId
     && item.kind==='invoice'
@@ -1545,7 +1667,7 @@ function dashboardMetricsForGroup(groupId){
     .reduce((sum,item)=>sum+Number(item.amount||0),0);
   const averageMonthly=(isFutureYear||monthsToUse===0)?0:totalForAverage/monthsToUse;
 
-  return{groupId,total,paid,pending,unpaid,invoices,receipts,activeServices,averageMonthly,obligations:obligationsForGroup.length};
+  return{groupId,total,paid,pending,unpaid,invoices,receipts,activeServices,averageMonthly,obligations:obligationsForGroup.length,financialDataUnavailable};
 }
 
 // MEJORA 6B3 - Métricas de Tarjetas consolidadas para la fila "Tarjetas" del
@@ -1668,7 +1790,7 @@ function obligationsFilterRows(rows,mode){
 // (pendiente o pago parcial, una vez descartada la urgencia por fecha)
 // 6) pagadas. "no_amount" y "missing" comparten el primer lugar porque
 // ambos significan "no se puede calcular con los datos actuales".
-const OBLIGATION_STATUS_RANK={no_amount:0,missing:0,overdue:1,today:2,soon:3,financial_review:3,usd_decision_pending:3,percepcion_review:3,reversal_expected:3,carry_difference:3,partial:4,pending:4,paid:5};
+const OBLIGATION_STATUS_RANK={no_amount:0,missing:0,unavailable:1,overdue:1,today:2,soon:3,financial_review:3,usd_decision_pending:3,percepcion_review:3,reversal_expected:3,carry_difference:3,partial:4,pending:4,paid:5};
 // Decide qué estado se muestra cuando podrían aplicar varios a la vez
 // (ej: parcial y vencida), según la prioridad visual pedida: sin importe >
 // vencida > vence hoy > próxima a vencer > pago parcial/pendiente > pagada >
@@ -1679,6 +1801,14 @@ function obligationDisplayStatus(dueDate,paymentCode,paymentLabel){
   }
   if(paymentCode==='missing'){
     return{code:'missing',label:paymentLabel||'Falta información',colorClass:'gray',rank:OBLIGATION_STATUS_RANK.missing};
+  }
+  // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: si no se pudieron verificar
+  // las imputaciones del Panel general, la obligación NUNCA se marca como
+  // pagada/parcial/pendiente/vencida (eso exigiría confiar en un saldo
+  // calculado con datos incompletos) -- se muestra un estado propio, sin
+  // relación con la fecha de vencimiento.
+  if(paymentCode==='unavailable'){
+    return{code:'unavailable',label:paymentLabel||'No disponible',colorClass:'gray',rank:OBLIGATION_STATUS_RANK.unavailable};
   }
   // CORRECCIÓN 6B4.8 - Fase 6: revisión financiera pendiente es un estado
   // documental propio, nunca "falta información" (el PDF ya está cargado).
@@ -1725,8 +1855,28 @@ function serviceObligationRowsForMonth(monthKeyStr){
     const due=obligation.due_date;
     if(!due||due.slice(0,7)!==monthKeyStr)return;
     seenServiceIds.add(obligation.service_id);
-    const paidArs=dashboardPaidFor(obligation.id);
     const amountRaw=obligation.amount;
+    // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: dashboardPaidFor devuelve
+    // null cuando spacesDashboard.paymentAllocationsLoadError es true --
+    // ANTES de calcular hasAmount/remainingArs/paymentCode (que harían
+    // aritmética con ese null, coercionándolo silenciosamente a 0 y
+    // mostrando un saldo/pendiente FALSO), se corta acá: la fila queda
+    // marcada 'unavailable', nunca 'pagada'/'parcial'/'pendiente'.
+    if(spacesDashboard.paymentAllocationsLoadError){
+      rows.push({
+        kind:'service',
+        concept:obligation.service_name||'Servicio',
+        typeLabel:'Servicio',
+        spaceLabel:groupNameById.get(obligation.group_id)||'Espacio',
+        dueDate:due,
+        amountArs:Number(amountRaw||0),amountUsd:0,perceptionArs:0,targetArs:Number(amountRaw||0),
+        paidArs:null,paidUsd:0,remainingArs:null,remainingUsd:0,
+        paymentCode:'unavailable',paymentLabel:'No disponible',reviewCount:null,
+        action:{type:'service',groupId:obligation.group_id}
+      });
+      return;
+    }
+    const paidArs=dashboardPaidFor(obligation.id);
     // MEJORA 6B2 - "Sin importe": amount null/vacío, o 0 sin pagos registrados.
     const hasAmount=!(amountRaw===null||amountRaw===undefined||amountRaw===''||(Number(amountRaw)===0&&paidArs<=0));
     if(!hasAmount){
@@ -1937,15 +2087,23 @@ function buildMonthlyObligations(){
 }
 
 function monthlyObligationsSummary(rows){
+  // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: filas 'unavailable' tienen
+  // paidArs/remainingArs=null -- se excluyen de los reduce (tratadas como 0
+  // SOLO para que la suma no rompa aritméticamente), pero
+  // hasUnavailableFinancialData avisa a renderMonthlyObligationsBlock() que
+  // paidArs/pendingArs NUNCA deben mostrarse como si fueran el total real
+  // (mostrarían menos de lo que en verdad se debe).
+  const hasUnavailableFinancialData=rows.some(row=>row.paymentCode==='unavailable');
   return{
-    totalArs:rows.reduce((sum,row)=>sum+(['missing','no_amount','financial_review','usd_decision_pending','percepcion_review','reversal_expected','carry_difference'].includes(row.paymentCode)?0:row.amountArs),0),
-    paidArs:rows.reduce((sum,row)=>sum+row.paidArs,0),
-    pendingArs:rows.reduce((sum,row)=>sum+row.remainingArs,0),
+    totalArs:rows.reduce((sum,row)=>sum+(['missing','no_amount','financial_review','usd_decision_pending','percepcion_review','reversal_expected','carry_difference','unavailable'].includes(row.paymentCode)?0:row.amountArs),0),
+    paidArs:rows.reduce((sum,row)=>sum+(row.paidArs||0),0),
+    pendingArs:rows.reduce((sum,row)=>sum+(row.remainingArs||0),0),
     pendingUsd:rows.reduce((sum,row)=>sum+row.remainingUsd,0),
     overdue:rows.filter(row=>row.display.code==='overdue').length,
     dueToday:rows.filter(row=>row.display.code==='today').length,
     missing:rows.filter(row=>row.display.code==='missing').length,
-    noAmount:rows.filter(row=>row.display.code==='no_amount').length
+    noAmount:rows.filter(row=>row.display.code==='no_amount').length,
+    hasUnavailableFinancialData
   };
 }
 
@@ -1975,6 +2133,11 @@ function monthlyObligationRowHtml(row){
   const isCard=row.kind==='card';
   const isMissing=row.paymentCode==='missing';
   const isNoAmount=row.paymentCode==='no_amount';
+  // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: fila con paidArs/remainingArs
+  // null (imputaciones del Panel general no verificadas) -- nunca se
+  // formatea ese null como plata, se muestra "No disponible".
+  const isUnavailable=row.paymentCode==='unavailable';
+  const rowFmt=(n)=>n===null?'No disponible':formatARS(n);
   const actionAttr=isCard
     ?`data-open-card-obligation="${row.action.cardId}" data-open-card-statement="${row.action.statementId||''}"`
     :`data-open-service-obligation="${row.action.groupId}"`;
@@ -1998,14 +2161,14 @@ function monthlyObligationRowHtml(row){
       ${isCard?'<span class="obligation-tag">Obligación de pago — no suma como gasto nuevo</span>':''}
     </div>
     <div class="obligation-due"><span>Vencimiento</span><strong>${row.dueDate?fmtDate(row.dueDate):'—'}</strong></div>
-    <div class="obligation-amount"><span>Saldo ARS</span><strong>${formatARS(row.remainingArs)}</strong></div>
+    <div class="obligation-amount"><span>Saldo ARS</span><strong>${rowFmt(row.remainingArs)}</strong></div>
     <div class="obligation-amount"><span>Saldo USD</span><strong>${formatUSD(row.remainingUsd)}</strong></div>
     <div class="obligation-status"><span class="obligation-pill ${row.display.colorClass}">${esc(row.display.label)}</span></div>
     <div class="obligation-action"><button class="btn outline small" ${actionAttr}>${esc(actionLabel)}</button></div>
-    ${isMissing?'':`<details class="obligation-more"><summary>Ver detalle</summary><div class="obligation-more-grid">
+    ${isMissing||isUnavailable?'':`<details class="obligation-more"><summary>Ver detalle</summary><div class="obligation-more-grid">
       <div><span>Original ARS</span><strong>${formatARS(row.amountArs)}</strong></div>
       ${row.perceptionArs>0.01?`<div><span>Percepciones descontables</span><strong>− ${formatARS(row.perceptionArs)}</strong></div><div><span>Objetivo de pago</span><strong>${formatARS(row.targetArs)}</strong></div>`:''}
-      <div><span>Pagado ARS</span><strong>${formatARS(row.paidArs)}</strong></div>
+      <div><span>Pagado ARS</span><strong>${rowFmt(row.paidArs)}</strong></div>
       <div><span>Original USD</span><strong>${formatUSD(row.amountUsd)}</strong></div>
       <div><span>Pagado USD</span><strong>${formatUSD(row.paidUsd)}</strong></div>
     </div></details>`}
@@ -2026,11 +2189,14 @@ function renderMonthlyObligationsBlock(){
   return `<div class="owner-panel card obligations-panel">
     <h2>Obligaciones del mes · ${esc(monthText)}</h2>
     <p class="sub">Servicios, impuestos y tarjetas de crédito con vencimiento en ${esc(monthText)}. Las tarjetas figuran acá como obligación de pago — no se suman al gasto ni al promedio mensual de consumo.</p>
+    ${summary.hasUnavailableFinancialData?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:12px 14px;margin-bottom:14px;border-radius:8px">
+      <strong>No se pudieron verificar las imputaciones de pagos.</strong> Total pagado y Total pendiente no se muestran hasta poder confirmarlas -- recargá para reintentar.
+    </div>`:''}
     ${creditDueAlertHtml(rows)}
     <div class="owner-metrics-grid">
       <div class="owner-metric"><span>Total de obligaciones ARS</span><strong>${formatARS(summary.totalArs)}</strong></div>
-      <div class="owner-metric"><span>Total pagado ARS</span><strong>${formatARS(summary.paidArs)}</strong></div>
-      <div class="owner-metric"><span>Total pendiente ARS</span><strong>${formatARS(summary.pendingArs)}</strong></div>
+      <div class="owner-metric"><span>Total pagado ARS</span><strong>${summary.hasUnavailableFinancialData?'No disponible':formatARS(summary.paidArs)}</strong></div>
+      <div class="owner-metric"><span>Total pendiente ARS</span><strong>${summary.hasUnavailableFinancialData?'No disponible':formatARS(summary.pendingArs)}</strong></div>
       <div class="owner-metric"><span>Total pendiente USD</span><strong>${formatUSD(summary.pendingUsd)}</strong></div>
       <div class="owner-metric"><span>Vencidas</span><strong>${summary.overdue}</strong></div>
       <div class="owner-metric"><span>Vencen hoy</span><strong>${summary.dueToday}</strong></div>
@@ -2070,11 +2236,18 @@ function renderOwnerDashboard(){
   // espacio real): mismas columnas, mismo formato, y entra en los totales
   // superiores igual que GR/Casa.
   const cardMetrics=dashboardCardMetrics(year);
+  // CORRECCIÓN — si CUALQUIER espacio propio no pudo verificar sus
+  // imputaciones (dashboardMetricsForGroup ya lo marca con
+  // financialDataUnavailable), el total consolidado de pagado/pendiente/no
+  // abonados NUNCA se calcula como una suma parcial -- queda en null.
+  // Tarjetas (cardMetrics) es un cálculo estructuralmente separado
+  // (resúmenes de tarjeta, no payment_allocations) y nunca se ve afectado.
+  const anyGroupFinancialDataUnavailable=rows.some(row=>row.metrics.financialDataUnavailable);
   const total={
     total:rows.reduce((sum,row)=>sum+row.metrics.total,0)+cardMetrics.total,
-    paid:rows.reduce((sum,row)=>sum+row.metrics.paid,0)+cardMetrics.paid,
-    pending:rows.reduce((sum,row)=>sum+row.metrics.pending,0)+cardMetrics.pending,
-    unpaid:rows.reduce((sum,row)=>sum+row.metrics.unpaid,0)+cardMetrics.unpaid,
+    paid:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.paid,0)+cardMetrics.paid,
+    pending:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.pending,0)+cardMetrics.pending,
+    unpaid:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.unpaid,0)+cardMetrics.unpaid,
     invoices:rows.reduce((sum,row)=>sum+row.metrics.invoices,0)+cardMetrics.invoices,
     receipts:rows.reduce((sum,row)=>sum+row.metrics.receipts,0)+cardMetrics.receipts,
     activeServices:rows.reduce((sum,row)=>sum+row.metrics.activeServices,0)+cardMetrics.activeServices,
@@ -2084,15 +2257,21 @@ function renderOwnerDashboard(){
     // recalcular con /12 fijo.
     averageMonthly:rows.reduce((sum,row)=>sum+row.metrics.averageMonthly,0)+cardMetrics.averageMonthly
   };
+  const ownerFmt=(n)=>n===null?'No disponible':fmtMoney(n);
+  const ownerCount=(n)=>n===null?'No disponible':n;
 
   return `<div class="owner-panel card">
     <h2>Panel general del titular · ${baseMonth.slice(0,4)}</h2>
     <p class="sub">Métricas de todos tus espacios más Tarjetas, separadas y consolidadas. Solo vos ves este panel.<br>Incluye gastos de los espacios y obligaciones de tarjetas.</p>
 
+    ${anyGroupFinancialDataUnavailable?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:12px 14px;margin-bottom:14px;border-radius:8px">
+      <strong>No se pudieron verificar las imputaciones de pagos de uno o más espacios.</strong> Pagado, Pendiente y No abonados no se muestran hasta poder confirmarlas -- recargá para reintentar.
+    </div>`:''}
+
     <div class="owner-metrics-grid">
       <div class="owner-metric"><span>Total anual cargado</span><strong>${fmtMoney(total.total)}</strong></div>
-      <div class="owner-metric"><span>Total pagado</span><strong>${fmtMoney(total.paid)}</strong></div>
-      <div class="owner-metric"><span>Pendiente total</span><strong>${fmtMoney(total.pending)}</strong></div>
+      <div class="owner-metric"><span>Total pagado</span><strong>${ownerFmt(total.paid)}</strong></div>
+      <div class="owner-metric"><span>Pendiente total</span><strong>${ownerFmt(total.pending)}</strong></div>
       <div class="owner-metric"><span>Promedio mensual</span><strong>${fmtMoney(total.averageMonthly)}</strong></div>
     </div>
     <div class="owner-metrics-grid" style="margin-top:10px">
@@ -2122,13 +2301,13 @@ function renderOwnerDashboard(){
         ${rows.map(row=>`<tr class="owner-row-group" data-open-owner-group="${row.group.id}" tabindex="0" role="button" aria-label="Abrir ${esc(row.group.name)}" title="Abrir ${esc(row.group.name)}">
           <td><strong>${esc(row.group.name)}</strong><br><small>${row.group.type==='company'?'Empresa':'Grupo familiar'}</small><br><small class="owner-row-hint">Abrir →</small></td>
           <td>${fmtMoney(row.metrics.total)}</td>
-          <td>${fmtMoney(row.metrics.paid)}</td>
-          <td>${fmtMoney(row.metrics.pending)}</td>
+          <td>${ownerFmt(row.metrics.paid)}</td>
+          <td>${ownerFmt(row.metrics.pending)}</td>
           <td>${fmtMoney(row.metrics.averageMonthly)}</td>
           <td>${row.metrics.activeServices}</td>
           <td>${row.metrics.invoices}</td>
           <td>${row.metrics.receipts}</td>
-          <td>${row.metrics.unpaid}</td>
+          <td>${ownerCount(row.metrics.unpaid)}</td>
         </tr>`).join('')}
         <tr class="owner-row-cards" data-open-owner-cards="1" tabindex="0" role="button" aria-label="Abrir Tarjetas de crédito" title="Abrir Tarjetas de crédito">
           <td><strong>Tarjetas</strong><br><small>Obligaciones de pago</small><br><small class="owner-row-hint">Abrir →</small></td>
@@ -14453,6 +14632,20 @@ async function reloadGroup(){
   const err=[m,s,o,p,c,d,g].find(x=>x.error)?.error;
   if(err)toast(err.message);
 
+  // CORRECCIÓN BLOQUEANTE — el estado financiero del espacio (saldos,
+  // "Deudas arrastradas", estados de pago) solo puede quedar disponible
+  // cuando TODAS estas fuentes cargaron sin error: services, obligations,
+  // payments, payment_allocations. La versión anterior solo miraba el
+  // resultado de la consulta de payment_allocations -- si services u
+  // obligations u payments fallaban pero payment_allocations cargaba bien
+  // (o si obligationIds quedaba vacío A CAUSA de esa falla, no porque el
+  // espacio realmente no tuviera obligaciones), paymentAllocationsLoadError
+  // terminaba en false y todo el resto de la app calculaba saldos con
+  // datos incompletos -- una deuda falsa. coreFinancialDataError se
+  // captura ANTES de tocar paymentAllocations, y una consulta exitosa de
+  // payment_allocations NUNCA puede borrar este error.
+  const coreFinancialDataError=!!(s.error||o.error||p.error);
+
   members=m.data||[];
   services=s.data||[];
   obligations=(o.data||[]).map(({services,...x})=>x);
@@ -14474,8 +14667,47 @@ async function reloadGroup(){
     }else{
       consolidations=consolidationResult.data||[];
     }
+    // HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: consulta SEPARADA (mismo
+    // patrón que la consulta de consolidaciones de arriba), acotada
+    // EXCLUSIVAMENTE a las obligaciones de ESTE espacio (nunca trae
+    // imputaciones de otro espacio). Ante error: NUNCA se interpreta como
+    // "sin imputaciones" -- se marca paymentAllocationsLoadError=true y se
+    // avisa con un toast claro, para que renderServices() oculte los
+    // números de deuda en vez de mostrar uno que podría ser incorrecto.
+    const allocationsResult=await sb
+      .from('payment_allocations')
+      .select('*,obligations!inner(service_id,services!inner(group_id))')
+      .eq('obligations.services.group_id',group.id)
+      .eq('is_active',true);
+    // CORRECCIÓN BLOQUEANTE — si services/obligations/payments ya
+    // fallaron (coreFinancialDataError), el resultado de
+    // payment_allocations NUNCA puede bajar la bandera a false, aunque
+    // esa consulta puntual haya funcionado bien.
+    if(coreFinancialDataError){
+      paymentAllocations=[];
+      paymentAllocationsLoadError=true;
+      toast('No se pudieron cargar los datos base de este espacio (servicios, obligaciones o pagos). Los saldos y "Deudas arrastradas" no se muestran hasta poder reintentar.');
+    }else if(allocationsResult.error){
+      console.warn('No se pudo cargar la distribución de pagos:',allocationsResult.error.message);
+      paymentAllocations=[];
+      paymentAllocationsLoadError=true;
+      toast('No se pudieron verificar las imputaciones de pagos de este espacio. Los saldos y "Deudas arrastradas" no se muestran hasta poder reintentar.');
+    }else{
+      paymentAllocations=(allocationsResult.data||[]).map(({obligations,...x})=>x);
+      paymentAllocationsLoadError=false;
+    }
   }else{
     consolidations=[];
+    paymentAllocations=[];
+    // CORRECCIÓN BLOQUEANTE — un obligationIds.length de 0 puede
+    // significar "este espacio realmente no tiene obligaciones" (caso
+    // legítimo, saldo disponible y en cero) O "obligations falló y por
+    // eso el arreglo quedó vacío" (coreFinancialDataError) -- nunca se
+    // asume el primer caso sin descartar el segundo.
+    paymentAllocationsLoadError=coreFinancialDataError;
+    if(coreFinancialDataError){
+      toast('No se pudieron cargar los datos base de este espacio (servicios, obligaciones o pagos). Los saldos no se muestran hasta poder reintentar.');
+    }
   }
   const listedMembership=groups.find(x=>x.id===group.id)?.membership;
   const selfMembership=members.find(x=>x.user_id===session.user.id);
@@ -14685,8 +14917,15 @@ function paymentCreatedByLabel(payment){
   if(!author)return '';
   return `Cargado por ${author.display_name||'un integrante'}`;
 }
+// HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: antes sumaba directo
+// paymentsFor(obligationId) (payments.obligation_id), ignorando las
+// imputaciones activas de payment_allocations -- un pago distribuido entre
+// dos períodos se contaba entero en su obligation_id legado, mostrando una
+// deuda falsa en la obligación que en realidad ya estaba cubierta por una
+// imputación. Reutiliza paidAmountForWithAllocations (única fuente real,
+// misma regla que dashboardPaidFor) en vez de crear un cálculo divergente.
 function paidAmountFor(obligationId){
-  return paymentsFor(obligationId).reduce((sum,p)=>sum+Number(p.total_amount||0),0);
+  return paidAmountForWithAllocations(obligationId,payments,paymentAllocations);
 }
 function balanceFor(obligation){
   if(!obligation)return 0;
@@ -14701,13 +14940,25 @@ function creditBalanceFor(obligation){
   if(!obligation)return 0;
   return Math.max(0,paidAmountFor(obligation.id)-Number(obligation.amount||0));
 }
+// CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: si no se pudieron verificar las
+// imputaciones de ESTE espacio (paymentAllocationsLoadError), paidAmountFor
+// seguiría calculando con paymentAllocations=[] -- un resultado
+// potencialmente incorrecto (cuenta solo pagos legado). Esta función es el
+// origen de fullyPaid/partial/balance que usan dueState/boxText/
+// openObligation/openPayModal/openFolder -- se corta ACÁ, antes de calcular
+// nada, para que NINGÚN consumidor pueda derivar un estado financiero de un
+// dato incompleto. unavailable:true es la señal explícita para esos
+// consumidores.
 function paymentProgress(obligation){
   const amount=Number(obligation?.amount||0);
+  if(paymentAllocationsLoadError){
+    return{amount,paid:null,balance:null,creditBalance:null,fullyPaid:false,partial:false,unavailable:true};
+  }
   const paid=paidAmountFor(obligation?.id);
   const signedBalance=amount-paid;
   const balance=Math.max(0,signedBalance);
   const creditBalance=Math.max(0,-signedBalance);
-  return{amount,paid,balance,creditBalance,fullyPaid:amount>0&&balance<=0.01,partial:paid>0&&balance>0.01};
+  return{amount,paid,balance,creditBalance,fullyPaid:amount>0&&balance<=0.01,partial:paid>0&&balance>0.01,unavailable:false};
 }
 // CORRECCIÓN 6B4.15 - Metadata técnica de obligations (anulación, historial
 // de ediciones, moneda/proveedor/n° de factura sin columna real en el
@@ -14848,12 +15099,25 @@ function servicePriorityNotifications(){
   const today=todayInArgentina();
   const currentPeriodKey=monthKey(today);
 
+  // CORRECCIÓN BLOQUEANTE — HOTFIX PAYMENT_ALLOCATIONS: si no se pudieron
+  // verificar las imputaciones de pagos de este espacio, ningún aviso
+  // financiero (vencido, vence hoy, vence pronto, saldo pendiente, pago
+  // parcial, comprobante faltante basado en la existencia de un pago) se
+  // genera para ningún servicio -- mostrar un saldo o estado de pago no
+  // verificado sería informar una deuda potencialmente falsa (incluyendo
+  // el caso "Pendiente $0" cuando en realidad no se sabe cuánto se pagó).
+  // Se agrega un único aviso explicando la suspensión.
+  if(paymentAllocationsLoadError){
+    items.push({key:'__payment_allocations_unavailable__',priority:0,serviceId:null,period:currentPeriodKey,message:'No se pudieron verificar las imputaciones de pagos. Los avisos de vencimiento y pago de este espacio están temporalmente suspendidos para evitar informar deudas incorrectas.'});
+  }
+
   services.forEach(service=>{
     const applies=monthAppliesToService(service,currentPeriodKey);
     const o=obligationFor(service.id,currentPeriodKey);
 
-    // Regla 1: "mes sin datos" -- solo desde el día 10, solo si corresponde
-    // este mes, nunca sobre un registro ya anulado.
+    // Regla 1: "mes sin datos" -- no depende del saldo/pagos, se mantiene
+    // aunque las imputaciones no estén verificadas. Solo desde el día 10,
+    // solo si corresponde este mes, nunca sobre un registro ya anulado.
     if(applies&&today.getDate()>=10){
       const missingAmount=!o||o.amount===null||o.amount===undefined||o.amount===''||Number(o.amount)===0;
       const missingDue=!o||!o.due_date;
@@ -14864,7 +15128,21 @@ function servicePriorityNotifications(){
 
     if(!o||isObligationVoided(o))return;
 
+    // Regla 5a: la factura no depende del estado de pago -- se mantiene
+    // aunque las imputaciones no estén verificadas.
+    const hasInvoice=documents.some(d=>d.obligation_id===o.id&&d.kind==='invoice');
+    if(!hasInvoice){
+      push(5,service.id,currentPeriodKey,'missing_invoice',`${service.name}: falta la factura de ${monthLabel(currentPeriodKey)}.`);
+    }
+
+    // CORRECCIÓN BLOQUEANTE: a partir de acá todo depende del saldo
+    // verificado (vencido/vence hoy/vence pronto/saldo pendiente/pago
+    // parcial/comprobante faltante según progress.paid) -- con las
+    // imputaciones sin verificar no se genera ninguno de estos avisos.
+    if(paymentAllocationsLoadError)return;
+
     const progress=paymentProgress(o);
+    if(progress.unavailable)return;
     if(progress.fullyPaid)return; // Regla 3: se detiene al pagar.
 
     // Regla 4: pago parcial -- el mensaje SIEMPRE informa el saldo
@@ -14880,12 +15158,8 @@ function servicePriorityNotifications(){
       else if(days<=3)push(4,service.id,currentPeriodKey,'due_soon',`${service.name}: vence en ${days} día${days===1?'':'s'}. Pendiente ${amountText}.`);
     }
 
-    // Regla 5: factura y comprobante se notifican POR SEPARADO -- nunca un
-    // solo aviso genérico de "falta documento".
-    const hasInvoice=documents.some(d=>d.obligation_id===o.id&&d.kind==='invoice');
-    if(!hasInvoice){
-      push(5,service.id,currentPeriodKey,'missing_invoice',`${service.name}: falta la factura de ${monthLabel(currentPeriodKey)}.`);
-    }
+    // Regla 5b: comprobante faltante -- depende de progress.paid, por eso
+    // se evalúa después del corte de arriba.
     if(progress.paid>0){
       const hasReceipt=receiptsForObligation(o.id).length>0;
       if(!hasReceipt){
@@ -14959,7 +15233,19 @@ function dueState(o){
   const target=consolidationTarget(o.id);
   if(target)return{cls:'included',label:`Incluida en ${monthLabel(target.period.slice(0,7))}`};
   const progress=paymentProgress(o);
-  if(o.status==='paid'||progress.fullyPaid)return{cls:'paid',label:'Abonado'};
+  // CORRECCIÓN BLOQUEANTE — el orden anterior comprobaba o.status==='paid'
+  // ANTES de progress.unavailable: un registro con status='paid' persistido
+  // (dato real de la base) se mostraba "Abonado" aunque el pago real NO
+  // pudiera verificarse en este momento (paymentAllocationsLoadError=true),
+  // exactamente el estado financiero falso que este hotfix corrige. Ahora
+  // progress.unavailable se comprueba PRIMERO -- el status persistido
+  // NUNCA prevalece sobre un error de carga que impide verificar los
+  // pagos. Solo llegan hasta acá casos que no requieren cálculo financiero
+  // (obligación inexistente, anulada, o incluida en otra factura, ya
+  // descartados arriba).
+  if(progress.unavailable)return{cls:'unavailable',label:'No disponible'};
+  if(o.status==='paid')return{cls:'paid',label:'Abonado'};
+  if(progress.fullyPaid)return{cls:'paid',label:'Abonado'};
   const d=daysUntil(o.due_date);
   if(d===null)return{cls:'missing',label:'Falta vencimiento'};
   const prefix=progress.partial?'Saldo parcial · ':'';
@@ -14981,7 +15267,14 @@ function boxText(o,service){
   const target=consolidationTarget(o.id);
   if(target)return[`Incluida en ${monthLabel(target.period.slice(0,7))}`,formatObligationAmount(o,o.amount)];
   const progress=paymentProgress(o);
-  if(o.status==='paid'||progress.fullyPaid)return['Abonado',formatObligationAmount(o,progress.paid||o.amount)];
+  // CORRECCIÓN BLOQUEANTE — mismo criterio que dueState(): progress.unavailable
+  // se comprueba ANTES que o.status==='paid'. El status persistido nunca
+  // debe prevalecer sobre un error de carga que impide verificar los pagos;
+  // se muestra el estado "No disponible" (de dueState) junto con el importe
+  // ORIGINAL (dato real, no derivado del estado de pago).
+  if(progress.unavailable)return[dueState(o).label,formatObligationAmount(o,o.amount)];
+  if(o.status==='paid')return['Abonado',formatObligationAmount(o,o.amount)];
+  if(progress.fullyPaid)return['Abonado',formatObligationAmount(o,progress.paid||o.amount)];
   if(progress.partial)return[`Parcial · saldo ${formatObligationAmount(o,progress.balance)}`,`Pagado ${formatObligationAmount(o,progress.paid)} de ${formatObligationAmount(o,progress.amount)}`];
   return[dueState(o).label,formatObligationAmount(o,o.amount)];
 }
@@ -15066,9 +15359,16 @@ function monthQuickSummary(key){
     missing
   };
 }
+// CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: si el espacio actualmente
+// abierto no pudo verificar sus imputaciones (paymentAllocationsLoadError),
+// "Vista rápida" NUNCA muestra Pagado/Pendiente/No abonados calculados con
+// pagos legado solamente -- Total cargado/Facturas/Comprobantes/Sin cargar
+// no dependen del estado de pago y siguen mostrándose con normalidad.
 function renderAnnualOverview(){
   const year=baseMonth.slice(0,4);
   const months=Array.from({length:12},(_,index)=>`${year}-${String(index+1).padStart(2,'0')}`);
+  const annualFmt=(n)=>paymentAllocationsLoadError?'No disponible':fmtMoney(n);
+  const annualCount=(n)=>paymentAllocationsLoadError?'—':n;
   return `<div class="annual-overview card">
     <div class="annual-overview-head">
       <div>
@@ -15076,6 +15376,9 @@ function renderAnnualOverview(){
         <small>Resumen mensual de importes, facturas, comprobantes y pendientes.</small>
       </div>
     </div>
+    ${paymentAllocationsLoadError?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:12px 14px;margin-bottom:14px;border-radius:8px">
+      <strong>No se pudieron verificar las imputaciones de pagos de este espacio.</strong> Pagado, Pendiente y No abonados no se muestran hasta poder confirmarlas.
+    </div>`:''}
     <div class="annual-grid">
       ${months.map(key=>{
         const data=monthQuickSummary(key);
@@ -15085,11 +15388,11 @@ function renderAnnualOverview(){
             <small>${data.count} cargado${data.count===1?'':'s'}</small>
           </div>
           <div class="annual-total">${fmtMoney(data.total)}</div>
-          <div class="annual-paid">Pagado ${fmtMoney(data.paid)} · Pendiente ${fmtMoney(data.pending)}</div>
+          <div class="annual-paid">Pagado ${annualFmt(data.paid)} · Pendiente ${annualFmt(data.pending)}</div>
           <div class="annual-mini">
             <span><small>Facturas</small><strong>${data.withInvoice}</strong></span>
             <span><small>Comprob.</small><strong>${data.withReceipt}</strong></span>
-            <span class="${data.unpaid?'bad':''}"><small>No abonados</small><strong>${data.unpaid}</strong></span>
+            <span class="${data.unpaid?'bad':''}"><small>No abonados</small><strong>${annualCount(data.unpaid)}</strong></span>
             <span class="${data.missing?'warn':''}"><small>Sin cargar</small><strong>${data.missing}</strong></span>
           </div>
         </div>`;
@@ -15378,6 +15681,12 @@ function renderServices(ms){
     && monthAppliesToService(s,baseMonth)
     && !obligationFor(s.id,baseMonth)
   ).length;
+  // HOTFIX PRODUCCIÓN - PAYMENT_ALLOCATIONS: si la carga de imputaciones
+  // falló (paymentAllocationsLoadError), ninguno de los importes que
+  // dependen de balanceFor/paidAmountFor se muestra como un número --
+  // mostrarlos igual sería exactamente "renderizar una deuda como si no
+  // existieran imputaciones", el bug que este hotfix corrige.
+  const fmtPending=(n)=>paymentAllocationsLoadError?'No disponible':fmtMoney(n);
 
   return `<div class="pagehead">
     <div>
@@ -15386,6 +15695,10 @@ function renderServices(ms){
     </div>
     ${canEdit()?'<div class="actions"><button class="btn outline" id="prevMonth">‹ Mes</button><button class="btn outline" id="nextMonth">Mes ›</button><button class="btn primary" id="addService">+ Agregar</button></div>':''}
   </div>
+
+  ${paymentAllocationsLoadError?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:12px 14px;margin-bottom:14px;border-radius:8px">
+    <strong>No se pudieron verificar las imputaciones de pagos de este espacio.</strong> Los importes de "Deudas arrastradas" y los totales pendientes no se muestran hasta poder confirmar los pagos distribuidos entre períodos -- recargá el espacio para reintentar.
+  </div>`:''}
 
   ${canViewReports()?renderBalance():''}
 
@@ -15408,23 +15721,23 @@ function renderServices(ms){
     <div class="stat card">
       <span>Total cargado de ${monthLabel(baseMonth)}</span>
       <strong>${fmtMoney(currentTotals.total)}</strong>
-      <small class="mini">Pagado ${fmtMoney(currentTotals.paid)} · Pendiente ${fmtMoney(currentTotals.pending)}</small>
+      <small class="mini">Pagado ${fmtPending(currentTotals.paid)} · Pendiente ${fmtPending(currentTotals.pending)}</small>
       <small class="hint">Este número mira solo el mes que estás viendo.</small>
     </div>
     <div class="stat card">
       <span>Pendiente acumulado de todos los meses</span>
-      <strong>${fmtMoney(pendingTotalAmount)}</strong>
-      <small class="mini">Meses anteriores ${fmtMoney(previousPendingAmount)} · ${monthLabel(baseMonth)} ${fmtMoney(currentPendingAmount)} · Meses futuros cargados ${fmtMoney(futurePendingAmount)}</small>
+      <strong>${fmtPending(pendingTotalAmount)}</strong>
+      <small class="mini">Meses anteriores ${fmtPending(previousPendingAmount)} · ${monthLabel(baseMonth)} ${fmtPending(currentPendingAmount)} · Meses futuros cargados ${fmtPending(futurePendingAmount)}</small>
       <small class="hint">Incluye todo lo pendiente, aunque sea de otro mes.</small>
     </div>
     <div class="stat card">
       <span>Ya vencido</span>
-      <strong>${fmtMoney(overdueAmount)}</strong>
+      <strong>${fmtPending(overdueAmount)}</strong>
       <small class="hint">Facturas pendientes cuyo vencimiento ya pasó.</small>
     </div>
     <div class="stat card">
       <span>Arrastre de meses anteriores</span>
-      <strong>${fmtMoney(previousPendingAmount)}</strong>
+      <strong>${fmtPending(previousPendingAmount)}</strong>
       <small class="hint">Deudas pendientes de meses anteriores al mes que estás viendo.</small>
     </div>
   </div>
@@ -15500,7 +15813,7 @@ function renderServices(ms){
               <div class="monthly-total-month">${monthLabel(total.key)}</div>
               <div class="monthly-total-value">${fmtMoney(total.total)}</div>
               <div class="monthly-total-detail">
-                Pagado ${fmtMoney(total.paid)} · Pendiente ${fmtMoney(total.pending)}
+                Pagado ${fmtPending(total.paid)} · Pendiente ${fmtPending(total.pending)}
                 ${total.included?` · Incluido en otra FC ${fmtMoney(total.included)}`:''}
               </div>
             </td>
@@ -15512,7 +15825,11 @@ function renderServices(ms){
     </div>
   </div>
 
-  ${previousDebts.length?`
+  ${paymentAllocationsLoadError?`
+    <div class="debt-panel card">
+      <h2>Deudas arrastradas</h2>
+      <p><strong>No disponible.</strong> No se pudieron verificar las imputaciones de pagos de este espacio -- no se muestra ninguna deuda hasta poder confirmarlas (nunca se asume que no existen). Recargá el espacio para reintentar.</p>
+    </div>`:(previousDebts.length?`
     <div class="debt-panel card">
       <h2>Deudas arrastradas</h2>
       <p>Estas facturas no desaparecen al cambiar de mes. Permanecen pendientes hasta que se registre el pago.</p>
@@ -15536,7 +15853,7 @@ function renderServices(ms){
           </div>`;
         }).join('')}
       </div>
-    </div>`:''}`;
+    </div>`:'')}`;
 }
 function balanceData(){
   const rows=members.filter(m=>m.role==='admin'&&Number(m.participation_percent)>0).map(m=>({m,owed:0,paid:0,balance:0}));
@@ -15584,6 +15901,18 @@ function renderReportBars(items,emptyText){
 }
 function renderReports(){
   if(!canViewReports())return`<div class="notice">No tenés permiso para ver reportes de este espacio.</div>`;
+  // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: prácticamente todo este
+  // informe deriva de balanceFor/paidAmountFor (pagado/pendiente/vencido/
+  // categorías/pronóstico). Si no se pudieron verificar las imputaciones
+  // de este espacio, NINGUNA de esas métricas se genera -- se muestra un
+  // aviso claro en su lugar, nunca un informe calculado con datos
+  // incompletos.
+  if(paymentAllocationsLoadError){
+    return `<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:16px;border-radius:8px">
+      <strong>No se pudieron verificar las imputaciones de pagos de este espacio.</strong>
+      <p>Los reportes financieros (pagado, pendiente, vencido, categorías, pronóstico) no se generan hasta poder confirmarlas -- recargá el espacio para reintentar.</p>
+    </div>`;
+  }
 
   const current=reportMonthData(baseMonth);
   const pending=pendingObligations();
@@ -16282,7 +16611,14 @@ function openObligation(serviceId,key){
     return [...new Set(list)].sort();
   })();
 
-  const priorCandidates=obligations
+  // CORRECCIÓN BLOQUEANTE — HOTFIX PAYMENT_ALLOCATIONS: priorCandidates se
+  // arma con balanceFor(), que depende de las imputaciones de pagos. Con
+  // paymentAllocationsLoadError=true ese saldo no está verificado (podría
+  // mostrar una deuda anterior como pendiente cuando en realidad ya fue
+  // cubierta por una imputación, o al revés) -- no se ofrece consolidar
+  // nada hasta poder confirmarlo. Ni se calcula la lista ni se muestran
+  // los controles para elegirla.
+  const priorCandidates=paymentAllocationsLoadError?[]:obligations
     .filter(item=>
       item.service_id===serviceId
       && item.period<periodDate(key)
@@ -16325,13 +16661,16 @@ function openObligation(serviceId,key){
       </div>`:''}
 
     ${o?`
+      ${progress.unavailable?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:12px;border-radius:8px">
+        <strong>No se pudieron verificar las imputaciones de pagos de este espacio.</strong> Pagado y Saldo pendiente no se muestran hasta poder confirmarlas -- solo se conservan visibles el importe original y los documentos.
+      </div>`:''}
       <div class="payment-summary">
         <div class="item"><span>Total factura</span><strong>${formatObligationAmount(o,progress.amount)}</strong></div>
-        <div class="item"><span>Pagado</span><strong>${formatObligationAmount(o,progress.paid)}</strong></div>
-        <div class="item"><span>Saldo pendiente</span><strong>${formatObligationAmount(o,progress.balance)}</strong></div>
-        ${progress.creditBalance>0.01?`<div class="item"><span>Saldo a favor</span><strong>${formatObligationAmount(o,progress.creditBalance)}</strong></div>`:''}
+        <div class="item"><span>Pagado</span><strong>${progress.unavailable?'No disponible':formatObligationAmount(o,progress.paid)}</strong></div>
+        <div class="item"><span>Saldo pendiente</span><strong>${progress.unavailable?'No disponible':formatObligationAmount(o,progress.balance)}</strong></div>
+        ${!progress.unavailable&&progress.creditBalance>0.01?`<div class="item"><span>Saldo a favor</span><strong>${formatObligationAmount(o,progress.creditBalance)}</strong></div>`:''}
       </div>
-      ${progress.creditBalance>0.01?`<div class="notice" style="border-color:#a8d4f5;background:#e7f5ff">
+      ${!progress.unavailable&&progress.creditBalance>0.01?`<div class="notice" style="border-color:#a8d4f5;background:#e7f5ff">
         <strong>Hay un saldo a favor de ${fmtMoney(progress.creditBalance)}.</strong>
         Se pagó más de lo que figura como importe de este mes. Los pagos no se recortan ni se borran — requiere revisión manual antes de imputarlo a otro mes.
       </div>`:''}
@@ -16386,7 +16725,12 @@ function openObligation(serviceId,key){
     <div class="category-help" style="margin:-6px 0 10px">Moneda/proveedor/número de factura no tienen columna propia en el esquema actual — se guardan como metadata dentro de la nota, nunca mezclados con tu texto libre.</div>
     `:''}
 
-    ${priorCandidates.length&&!sourceLink?`
+    ${paymentAllocationsLoadError&&!sourceLink&&!voided?`
+      <div class="notice" style="border-color:#c0392b;background:#fdecea;color:#7a1f1f">
+        <strong>No se pueden consolidar deudas hasta verificar las imputaciones de pagos.</strong> Recargá el espacio.
+      </div>`:''}
+
+    ${priorCandidates.length&&!sourceLink&&!paymentAllocationsLoadError?`
       <div class="consolidation-box">
         <strong>¿Cómo debe tratarse esta factura?</strong>
         <div class="consolidation-options">
@@ -16528,7 +16872,7 @@ function openObligation(serviceId,key){
       ${editableNow?`
         <button class="btn soft" id="saveObligation">Guardar cambios</button>
         <button class="btn primary" id="addInvoiceButton">Agregar factura</button>
-        ${o&&!sourceLink&&progress.balance>0.01?'<button class="btn primary" id="markPaid">Registrar pago</button>':''}
+        ${o&&!sourceLink&&!progress.unavailable&&progress.balance>0.01?'<button class="btn primary" id="markPaid">Registrar pago</button>':''}
       `:''}
     </div>`);
 
@@ -16568,7 +16912,11 @@ function openObligation(serviceId,key){
     const debtsBox=document.getElementById('consolidationDebts');
     if(debtsBox)debtsBox.classList.toggle('hidden',mode!=='consolidated');
 
-    const selected=[...document.querySelectorAll('[data-consolidation-source]:checked')]
+    // CORRECCIÓN BLOQUEANTE — HOTFIX PAYMENT_ALLOCATIONS: sin las
+    // imputaciones verificadas no se calcula ningún total incluido (no
+    // deberían existir checkboxes data-consolidation-source en el DOM en
+    // este estado, pero se refuerza igual sin depender solo de eso).
+    const selected=paymentAllocationsLoadError?[]:[...document.querySelectorAll('[data-consolidation-source]:checked')]
       .map(input=>obligations.find(item=>item.id===input.dataset.consolidationSource))
       .filter(Boolean);
     const includedTotal=selected.reduce((sum,item)=>sum+balanceFor(item),0);
@@ -16612,6 +16960,15 @@ function openObligation(serviceId,key){
       ? [...document.querySelectorAll('[data-consolidation-source]:checked')]
           .map(input=>input.dataset.consolidationSource)
       : [];
+
+    // CORRECCIÓN BLOQUEANTE — HOTFIX PAYMENT_ALLOCATIONS: nunca confiar
+    // solo en ocultar los controles de consolidación en el HTML. Si de
+    // algún modo se intenta guardar en modo "consolidated" con las
+    // imputaciones de pagos sin verificar, se detiene ANTES de cualquier
+    // escritura (ni siquiera se guardan los demás cambios del mes).
+    if(paymentAllocationsLoadError&&mode==='consolidated'){
+      throw new Error('No se pueden consolidar deudas hasta verificar las imputaciones de pagos. Recargá el espacio.');
+    }
 
     if(amountValue<=0||!dueValue){
       throw new Error('Completá importe y vencimiento');
@@ -16704,23 +17061,34 @@ function openObligation(serviceId,key){
 
     if(error)throw error;
 
-    const {error:deleteLinkError}=await sb
-      .from('obligation_consolidations')
-      .delete()
-      .eq('target_obligation_id',saved.id);
-
-    if(deleteLinkError)throw deleteLinkError;
-
-    if(mode==='consolidated'&&selectedSourceIds.length){
-      const {error:insertLinkError}=await sb
+    // CORRECCIÓN BLOQUEANTE — HOTFIX PAYMENT_ALLOCATIONS: con las
+    // imputaciones de pagos sin verificar no se toca obligation_consolidations
+    // en absoluto -- ni se borran vínculos existentes ni se crean nuevos.
+    // El bloque de arriba ya impide llegar hasta acá en modo "consolidated",
+    // pero además se protege el modo "additional": antes este guardado
+    // borraba incondicionalmente cualquier vínculo existente apuntando a
+    // este registro, lo que podía desactivar una consolidación real sin
+    // que el usuario lo pidiera, precisamente mientras no se puede
+    // verificar el saldo involucrado.
+    if(!paymentAllocationsLoadError){
+      const {error:deleteLinkError}=await sb
         .from('obligation_consolidations')
-        .insert(selectedSourceIds.map(sourceId=>({
-          source_obligation_id:sourceId,
-          target_obligation_id:saved.id,
-          created_by:session.user.id
-        })));
+        .delete()
+        .eq('target_obligation_id',saved.id);
 
-      if(insertLinkError)throw insertLinkError;
+      if(deleteLinkError)throw deleteLinkError;
+
+      if(mode==='consolidated'&&selectedSourceIds.length){
+        const {error:insertLinkError}=await sb
+          .from('obligation_consolidations')
+          .insert(selectedSourceIds.map(sourceId=>({
+            source_obligation_id:sourceId,
+            target_obligation_id:saved.id,
+            created_by:session.user.id
+          })));
+
+        if(insertLinkError)throw insertLinkError;
+      }
     }
 
     if(uploadInvoice&&file){
@@ -16874,6 +17242,15 @@ async function deleteObligationMonth(obligationId,serviceId,key){
 }
 
 function openPayModal(o){
+  // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: registrar un pago requiere
+  // saber el saldo REAL -- si no se pudieron verificar las imputaciones de
+  // este espacio, se detiene ANTES de calcular cualquier valor por
+  // defecto (progress.balance sería null, y null<=0.01 es true en JS, lo
+  // que hubiera mostrado "ya está abonada" de forma completamente falsa).
+  if(paymentAllocationsLoadError){
+    toast('No se pudieron verificar las imputaciones de pagos de este espacio -- no se puede registrar un pago hasta confirmar el saldo real. Recargá el espacio para reintentar.');
+    return;
+  }
   const progress=paymentProgress(o);
 
   if(progress.balance<=0.01){
@@ -17149,23 +17526,28 @@ function openFolder(serviceId){
           <span>
             ${sourceLink&&target
               ? `<span class="included-badge">Incluida en ${monthLabel(target.period.slice(0,7))}</span>`
-              : progress.fullyPaid
-                ? 'Abonado'
-                : progress.partial
-                  ? '<span class="partial-badge">Parcial</span>'
-                  : includedSources.length
-                    ? '<span class="consolidated-badge">Factura consolidada</span>'
-                    : 'Pendiente'}
+              : progress.unavailable
+                ? '<span class="partial-badge" style="background:#fdecea;color:#7a1f1f">No disponible</span>'
+                : progress.fullyPaid
+                  ? 'Abonado'
+                  : progress.partial
+                    ? '<span class="partial-badge">Parcial</span>'
+                    : includedSources.length
+                      ? '<span class="consolidated-badge">Factura consolidada</span>'
+                      : 'Pendiente'}
           </span>
         </div>
 
         <div class="payment-summary">
           <div class="item"><span>Total</span><strong>${fmtMoney(progress.amount)}</strong></div>
-          <div class="item"><span>Pagado</span><strong>${fmtMoney(progress.paid)}</strong></div>
-          <div class="item"><span>Saldo</span><strong>${fmtMoney(progress.balance)}</strong></div>
+          <div class="item"><span>Pagado</span><strong>${progress.unavailable?'No disponible':fmtMoney(progress.paid)}</strong></div>
+          <div class="item"><span>Saldo</span><strong>${progress.unavailable?'No disponible':fmtMoney(progress.balance)}</strong></div>
         </div>
+        ${progress.unavailable?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:10px;border-radius:8px;margin-top:8px">
+          No se pudieron verificar las imputaciones de pagos de este espacio -- solo se conservan visibles el importe original y los documentos.
+        </div>`:''}
 
-        ${includedSources.length?`
+        ${!progress.unavailable&&includedSources.length?`
           <div class="notice" style="margin-top:10px">
             Esta factura incluye ${includedSources.length} deuda${includedSources.length===1?'':'s'} anterior${includedSources.length===1?'':'es'}
             por ${fmtMoney(includedTotal)}.
@@ -17176,7 +17558,7 @@ function openFolder(serviceId){
           <p>Se conserva como historial, pero no se suma por separado a la deuda exigible.</p>
         `:''}
 
-        ${paymentRows.length?`<p>${paymentRows.length} pago${paymentRows.length===1?'':'s'} registrado${paymentRows.length===1?'':'s'} · ${fmtMoney(progress.paid)}</p>`:''}
+        ${paymentRows.length?`<p>${paymentRows.length} pago${paymentRows.length===1?'':'s'} registrado${paymentRows.length===1?'':'s'}${progress.unavailable?'':` · ${fmtMoney(progress.paid)}`}</p>`:''}
 
         ${invoices.length?`
           <div class="document-group">
@@ -17293,7 +17675,8 @@ function openPaymentDetail(id){
 
     <div class="notice">
       Este pago: ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}
-      ${o?`<br>Total factura: ${fmtMoney(o.amount)} · Pagado acumulado: ${fmtMoney(paidAmountFor(o.id))} · Saldo: ${fmtMoney(balanceFor(o))}`:''}
+      ${o?`<br>Total factura: ${fmtMoney(o.amount)} · Pagado acumulado: ${paymentAllocationsLoadError?'No disponible':fmtMoney(paidAmountFor(o.id))} · Saldo: ${paymentAllocationsLoadError?'No disponible':fmtMoney(balanceFor(o))}`:''}
+      ${paymentAllocationsLoadError?'<br><small style="color:#7a1f1f">No se pudieron verificar las imputaciones de pagos de este espacio.</small>':''}
       <!-- CORRECCIÓN 6B4.11.1 - Sección 5 del pedido: "created_by" es solo
       trazabilidad de quién lo registró (nunca define propiedad -- el pago
       pertenece al grupo/servicio, no a quien lo cargó). Se muestra como
