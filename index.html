@@ -483,7 +483,7 @@ let session=null, groups=[], group=null, membership=null, members=[], services=[
 // separada, ver loadSpacesDashboard()).
 let paymentAllocations=[];
 let paymentAllocationsLoadError=false;
-let spacesDashboard={ownedGroupIds:[],services:[],obligations:[],payments:[],paymentAllocations:[],documents:[]};
+let spacesDashboard={ownedGroupIds:[],authorizedGroupIds:[],services:[],obligations:[],payments:[],paymentAllocations:[],documents:[]};
 // MEJORA 6B3 - Recuerda qué pantalla principal está activa ('spaces','group',
 // 'creditCards') para que refreshDashboardData() pueda re-renderizar la
 // pantalla correcta sin forzar una navegación a Mis espacios cada vez que se
@@ -1030,6 +1030,14 @@ async function init(){
       session=newSession;
       if(!newSession){
         group=null;
+        // CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: al cerrar
+        // sesión, limpiar también el panel agregado "Obligaciones del
+        // mes" (spacesDashboard) -- nunca debe seguir en memoria para el
+        // próximo login en la misma pestaña. Se reasigna completa (mismo
+        // patrón que loadSpacesDashboard) para no dejar ningún campo
+        // (obligations/payments/paymentAllocations/services/documents/
+        // paymentAllocationsLoadError) con datos de la sesión anterior.
+        spacesDashboard={ownedGroupIds:[],authorizedGroupIds:[],services:[],obligations:[],payments:[],paymentAllocations:[],documents:[],paymentAllocationsLoadError:false};
         renderAuth('login');
       }
     });
@@ -1481,6 +1489,19 @@ async function loadGroups(){
 
 async function loadSpacesDashboard(){
   const owned=groups.filter(g=>g.created_by===session.user.id&&(g.status||'active')!=='deleted');
+  // CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: BUG REAL -- esta
+  // función solo cargaba datos de espacios PROPIOS (owned), así que
+  // "Obligaciones del mes" (serviceObligationRowsForMonth) quedaba vacío
+  // para cualquier operador (ej. Fabiana, operadora de GR sin ser su
+  // titular) aunque su espacio tuviera obligaciones reales pendientes.
+  // authorized trae TODOS los espacios activos donde el usuario tiene
+  // membership ACTIVA real (propia u operador) -- groups ya viene
+  // filtrado por loadGroups() a memberships activas, así que alcanza con
+  // excluir espacios no activos. ownedGroupIds se conserva intacto (sin
+  // ampliar) porque sigue siendo la fuente real de partes EXCLUSIVAS del
+  // titular (renderOwnerDashboard, dashboardCardMetrics, "Obligaciones
+  // del mes" faltantes) -- esta corrección nunca las toca.
+  const authorized=groups.filter(g=>(g.status||'active')==='active');
   // CORRECCIÓN — bandera de error PROPIA del Panel general
   // (spacesDashboard.paymentAllocationsLoadError), separada de la bandera
   // del espacio abierto (paymentAllocationsLoadError, ver reloadGroup()).
@@ -1489,11 +1510,11 @@ async function loadSpacesDashboard(){
   // reasignación completa de spacesDashboard (como esta) reinicia su propia
   // bandera a false; recién se marca true si la consulta de ESTA función
   // falla.
-  spacesDashboard={ownedGroupIds:owned.map(g=>g.id),services:[],obligations:[],payments:[],paymentAllocations:[],documents:[],paymentAllocationsLoadError:false};
+  spacesDashboard={ownedGroupIds:owned.map(g=>g.id),authorizedGroupIds:authorized.map(g=>g.id),services:[],obligations:[],payments:[],paymentAllocations:[],documents:[],paymentAllocationsLoadError:false};
 
-  if(!owned.length)return;
+  if(!authorized.length)return;
 
-  const groupIds=owned.map(g=>g.id);
+  const groupIds=authorized.map(g=>g.id);
 
   const [servicesResult,obligationsResult,paymentsResult,documentsResult]=await Promise.all([
     sb.from('services').select('id,group_id,name,active,is_private').in('group_id',groupIds).eq('active',true),
@@ -1611,9 +1632,54 @@ function dashboardPaidFor(obligationId){
   return paidAmountForWithAllocations(obligationId,spacesDashboard.payments,spacesDashboard.paymentAllocations);
 }
 function dashboardBalanceFor(obligation){
-  const paid=dashboardPaidFor(obligation.id);
-  if(paid===null)return null;
-  return Math.max(0,Number(obligation.amount||0)-paid);
+  if(spacesDashboard.paymentAllocationsLoadError)return null;
+  return calculateRealObligationBalance(obligation,spacesDashboard.payments,spacesDashboard.paymentAllocations);
+}
+// CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: única función real de
+// saldo, reutilizada por balanceFor() (espacio abierto) y
+// dashboardBalanceFor() (panel agregado "Obligaciones del mes") -- nunca
+// una fórmula paralela. paidAmountForWithAllocations ya es la única
+// fuente real de "cuánto se pagó" (pagos legado + imputaciones activas,
+// sin doble conteo, sin pagos anulados); esto solo resta ese resultado
+// del importe original, con piso en cero.
+function calculateRealObligationBalance(obligation,paymentsList,allocationsList){
+  if(!obligation)return 0;
+  return Math.max(0,Number(obligation.amount||0)-paidAmountForWithAllocations(obligation.id,paymentsList,allocationsList));
+}
+// CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: "¿este servicio debe
+// mostrarse en el contexto actual?" -- única fuente real de autorización +
+// privacidad para el panel agregado "Obligaciones del mes", que antes
+// dependía de ownedGroupIds (solo espacios propios) y dejaba a cualquier
+// operador (ej. Fabiana en GR) sin ver sus propias obligaciones. groupsById
+// debe traer al menos {id,status,created_by}; authorizedGroupIds son los
+// IDs de espacios donde el usuario actual tiene membership ACTIVA real
+// (propia u operador) -- nunca "todos los grupos existentes".
+function isServiceVisibleForCurrentContext(service,groupsById,authorizedGroupIds,currentUserId){
+  if(!service||service.active===false)return false;
+  const group=groupsById.get(service.group_id);
+  if(!group)return false;
+  if((group.status||'active')!=='active')return false;
+  const authorized=authorizedGroupIds instanceof Set?authorizedGroupIds:new Set(authorizedGroupIds||[]);
+  if(!authorized.has(service.group_id))return false;
+  // SOLO TITULAR: un servicio privado solo es visible para el titular real
+  // de ESE espacio (group.created_by) -- nunca para un operador, aunque
+  // tenga membership activa y el espacio esté autorizado.
+  if(service.is_private&&group.created_by!==currentUserId)return false;
+  return true;
+}
+// CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: única fuente real de
+// "¿esta obligación debe mostrarse?" -- filtra ANTES de calcular ningún
+// importe (nunca al revés). Reutilizada por serviceObligationRowsForMonth()
+// (panel agregado); el detalle de un espacio abierto (reloadGroup) ya
+// consulta exclusivamente ese group.id desde el servidor, así que su
+// propio filtrado (isEffectivePending) ya cumple el mismo criterio sin
+// necesitar pasar por acá.
+function getVisibleObligationsForCurrentContext(obligationsList,servicesById,groupsById,authorizedGroupIds,currentUserId){
+  return (obligationsList||[]).filter(o=>{
+    if(!o||o.status==='cancelled')return false;
+    const service=servicesById.get(o.service_id);
+    return isServiceVisibleForCurrentContext(service,groupsById,authorizedGroupIds,currentUserId);
+  });
 }
 // Promedio mensual: año actual usa enero->mes actual / meses transcurridos;
 // año cerrado usa el año completo / 12; año futuro no calcula promedio (0).
@@ -1845,13 +1911,26 @@ function obligationDisplayStatus(dueDate,paymentCode,paymentLabel){
 
 // Servicios/impuestos de los espacios propios con vencimiento en el mes.
 function serviceObligationRowsForMonth(monthKeyStr){
-  const ownedGroupIds=new Set(spacesDashboard.ownedGroupIds||[]);
+  // CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: BUG REAL -- antes
+  // filtraba por ownedGroupIds (solo espacios propios), dejando a
+  // cualquier operador (ej. Fabiana, operadora de GR) sin ver sus propias
+  // obligaciones pendientes en este panel, aunque sí existieran y sí se
+  // vieran correctamente en el detalle del espacio (mismos datos, otro
+  // camino de cálculo). authorizedGroupIds ya viene ampliado en
+  // loadSpacesDashboard() a TODOS los espacios activos con membership
+  // activa real (propia u operador) -- getVisibleObligationsForCurrentContext
+  // filtra además por servicio activo y privacidad compatible (SOLO
+  // TITULAR: un servicio privado de un espacio operado nunca se muestra acá).
+  const authorizedGroupIds=new Set(spacesDashboard.authorizedGroupIds||[]);
+  const groupById=new Map(groups.map(g=>[g.id,g]));
+  const serviceById=new Map((spacesDashboard.services||[]).map(s=>[s.id,s]));
   const groupNameById=new Map(groups.map(g=>[g.id,g.name]));
   const rows=[];
   const seenServiceIds=new Set();
-  (spacesDashboard.obligations||[]).forEach(obligation=>{
-    if(obligation.status==='cancelled')return;
-    if(!ownedGroupIds.has(obligation.group_id))return;
+  const visibleObligations=getVisibleObligationsForCurrentContext(
+    spacesDashboard.obligations,serviceById,groupById,authorizedGroupIds,session.user.id
+  );
+  visibleObligations.forEach(obligation=>{
     const due=obligation.due_date;
     if(!due||due.slice(0,7)!==monthKeyStr)return;
     seenServiceIds.add(obligation.service_id);
@@ -1893,7 +1972,7 @@ function serviceObligationRowsForMonth(monthKeyStr){
       return;
     }
     const amountArs=Number(amountRaw||0);
-    const remainingArs=Math.max(0,amountArs-paidArs);
+    const remainingArs=calculateRealObligationBalance(obligation,spacesDashboard.payments,spacesDashboard.paymentAllocations);
     const paymentCode=remainingArs<=0.01?'paid':paidArs>0?'partial':'pending';
     const paymentLabel={paid:'Pagada',partial:'Pago parcial',pending:'Pendiente'}[paymentCode];
     rows.push({
@@ -1917,16 +1996,23 @@ function serviceObligationRowsForMonth(monthKeyStr){
   // periodicidad no mensual.
   const currentMonthKey=monthKey(new Date());
   if(monthKeyStr<=currentMonthKey){
-    const ownedServices=(spacesDashboard.services||[]).filter(s=>ownedGroupIds.has(s.group_id));
+    const visibleServices=(spacesDashboard.services||[]).filter(s=>
+      isServiceVisibleForCurrentContext(s,groupById,authorizedGroupIds,session.user.id)
+    );
+    const visibleServiceIds=new Set(visibleServices.map(s=>s.id));
     const monthsByService=new Map();
+    // Historial de meses con obligación (incluye cancelled a propósito --
+    // "ya tuvo obligación alguna vez" es la señal real, sin importar su
+    // estado actual; misma semántica que la versión anterior, ahora
+    // filtrada por autorización+privacidad en vez de solo espacios propios).
     (spacesDashboard.obligations||[]).forEach(o=>{
-      if(!ownedGroupIds.has(o.group_id))return;
+      if(!visibleServiceIds.has(o.service_id))return;
       const list=monthsByService.get(o.service_id)||[];
       const m=String(o.due_date||o.period||'').slice(0,7);
       if(m)list.push(m);
       monthsByService.set(o.service_id,list);
     });
-    ownedServices.forEach(service=>{
+    visibleServices.forEach(service=>{
       if(seenServiceIds.has(service.id))return;
       const months=monthsByService.get(service.id)||[];
       if(!months.length)return;
@@ -2329,6 +2415,16 @@ function renderOwnerDashboard(){
 
 function hasOwnerSpaces(){
   return groups.some(g=>g.created_by===session.user.id&&(g.status||'active')!=='deleted');
+}
+// CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: reemplaza a
+// hasOwnerSpaces() como gate de "Obligaciones del mes" -- ese panel es
+// operativo (qué hay que pagar), no un panel exclusivo del titular. groups
+// ya viene filtrado por loadGroups() a memberships ACTIVAS reales (propia
+// u operador); alcanza con que exista al menos un espacio activo entre
+// ellas. hasOwnerSpaces() sigue existiendo tal cual, sin cambios, para lo
+// que sí es exclusivo del titular (Panel general, forecast).
+function hasAnyActiveGroupAccess(){
+  return groups.some(g=>(g.status||'active')==='active');
 }
 function cardBrandLabel(value){
   return {visa:'Visa',mastercard:'Mastercard',amex:'Amex',mercado_pago:'Mercado Pago',other:'Otra'}[value]||'Tarjeta';
@@ -14481,7 +14577,7 @@ function renderGroups(){
 
     ${renderOwnerDashboard()}
 
-    ${hasOwnerSpaces()?renderMonthlyObligationsBlock():''}
+    ${hasAnyActiveGroupAccess()?renderMonthlyObligationsBlock():''}
 
     ${hasOwnerSpaces()?`<div class="card owner-panel" style="margin-bottom:18px">
       <div class="statement-top">
@@ -14562,7 +14658,7 @@ function renderGroups(){
   if(document.getElementById('newGroup'))document.getElementById('newGroup').onclick=openCreateGroup;
   if(document.getElementById('openCreditCards'))document.getElementById('openCreditCards').onclick=openCreditCardsModule;
   bindOwnerDashboardNavigation();
-  if(hasOwnerSpaces())bindMonthlyObligationsBlock();
+  if(hasAnyActiveGroupAccess())bindMonthlyObligationsBlock();
 }
 // CORRECCIÓN 6B4.11.3 - Filas navegables del Panel general del titular
 // (GR/Casa/Tarjetas): fila completa clickeable + teclado (Enter/Espacio),
@@ -14928,8 +15024,7 @@ function paidAmountFor(obligationId){
   return paidAmountForWithAllocations(obligationId,payments,paymentAllocations);
 }
 function balanceFor(obligation){
-  if(!obligation)return 0;
-  return Math.max(0,Number(obligation.amount||0)-paidAmountFor(obligation.id));
+  return calculateRealObligationBalance(obligation,payments,paymentAllocations);
 }
 // CORRECCIÓN 6B4.15 - Un importe corregido a la baja por debajo de lo ya
 // pagado antes solo se veía como "$0 pendiente" (balanceFor recorta a 0),

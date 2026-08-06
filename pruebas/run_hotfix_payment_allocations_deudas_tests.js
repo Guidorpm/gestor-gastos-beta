@@ -44,7 +44,12 @@ function extractConst(src, name) {
 // PARTE A — cálculo puro: paidAmountForWithAllocations/paidAmountFor/
 // balanceFor. Puntos 1 a 6.
 // ============================================================
-const FN_NAMES_CALC = ['paidAmountForWithAllocations', 'paidAmountFor', 'balanceFor', 'isEffectivePending', 'pendingObligations', 'carriedDebts', 'consolidationForSource', 'periodDate', 'paymentsFor'];
+// CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: balanceFor() ahora
+// delega en calculateRealObligationBalance() (misma fórmula, sin cambio
+// de comportamiento) -- se agrega a la extracción para que este sandbox
+// siga reflejando el código real en vez de romper por una dependencia
+// nueva no extraída.
+const FN_NAMES_CALC = ['paidAmountForWithAllocations', 'paidAmountFor', 'calculateRealObligationBalance', 'balanceFor', 'isEffectivePending', 'pendingObligations', 'carriedDebts', 'consolidationForSource', 'periodDate', 'paymentsFor'];
 
 function buildCalcRuntime(filePath) {
   const src = fs.readFileSync(filePath, 'utf8');

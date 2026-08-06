@@ -95,7 +95,12 @@ for (const [fileName, src] of [['index.html', srcMain], ['index_operator.html', 
 // PARTE B — Pruebas FUNCIONALES reales (lógica de cálculo, ejecutada
 // con las funciones REALES extraídas de index.html).
 // ============================================================
-const CALC_FUNCTION_NAMES = ['carriedDebts', 'pendingObligations', 'isEffectivePending', 'balanceFor', 'creditBalanceFor', 'paidAmountFor', 'paidAmountForWithAllocations', 'consolidationForSource', 'consolidationsForTarget', 'periodDate'];
+// CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: balanceFor() ahora
+// delega en calculateRealObligationBalance() (misma fórmula, sin cambio
+// de comportamiento) -- se agrega a la extracción para que este sandbox
+// siga reflejando el código real en vez de romper por una dependencia
+// nueva no extraída.
+const CALC_FUNCTION_NAMES = ['carriedDebts', 'pendingObligations', 'isEffectivePending', 'calculateRealObligationBalance', 'balanceFor', 'creditBalanceFor', 'paidAmountFor', 'paidAmountForWithAllocations', 'consolidationForSource', 'consolidationsForTarget', 'periodDate'];
 function buildCalcRuntime(src) {
   let code = "'use strict';\nlet obligations=[], payments=[], paymentAllocations=[], consolidations=[], baseMonth='2026-08';\n";
   for (const n of CALC_FUNCTION_NAMES) {
@@ -303,7 +308,7 @@ runLoadGroupsCheck().then(() => {
   // PARTE D — Paridad (14) y GR/Casa/Tarjetas/RLS sin cambios (15).
   // ============================================================
   console.log('\n--- paridad e impacto fuera de alcance ---');
-  const parityFns = ['loadGroups', 'renderServices', 'carriedDebts', 'pendingObligations', 'isEffectivePending', 'balanceFor', 'paidAmountFor', 'paidAmountForWithAllocations'];
+  const parityFns = ['loadGroups', 'renderServices', 'carriedDebts', 'pendingObligations', 'isEffectivePending', 'calculateRealObligationBalance', 'balanceFor', 'paidAmountFor', 'paidAmountForWithAllocations'];
   for (const name of parityFns) {
     const a = extractFunction(srcMain, name);
     const b = extractFunction(srcOperator, name);
