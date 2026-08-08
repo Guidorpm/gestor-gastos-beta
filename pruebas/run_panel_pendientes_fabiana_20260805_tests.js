@@ -218,7 +218,12 @@ for (const [label, filePath] of Object.entries(FILES)) {
 // que el logout reinicia spacesDashboard por completo).
 for (const [label, filePath] of Object.entries(FILES)) {
   const src = fs.readFileSync(filePath, 'utf8');
-  const logoutBlock = src.slice(src.indexOf('onAuthStateChange'), src.indexOf('onAuthStateChange') + 1600);
+  // CORRECCIÓN FINAL 20260806 - TARJETAS: la corrección final de resúmenes
+  // agregó más líneas de limpieza de Tarjetas (creditCardAccessGranted,
+  // directUploadState, historicalUploadState, etc.) ANTES del reinicio de
+  // spacesDashboard dentro del mismo bloque de logout -- se amplía la
+  // ventana para que la búsqueda siga alcanzando esa línea real.
+  const logoutBlock = src.slice(src.indexOf('onAuthStateChange'), src.indexOf('onAuthStateChange') + 2400);
   ok(`[${label}] (20) El logout (onAuthStateChange, !newSession) reinicia spacesDashboard completo`,
     /spacesDashboard=\{ownedGroupIds:\[\],authorizedGroupIds:\[\][^}]*obligations:\[\][^}]*paymentAllocationsLoadError:false\}/.test(logoutBlock));
 }

@@ -267,8 +267,12 @@ function stateTitularInGR() {
 {
   const fnBody = extractFunction(srcMain, 'openCreditCardsModule');
   ok('U. openCreditCardsModule usa currentScreen=\'creditCards\' (abre directo el módulo Tarjetas)', /currentScreen='creditCards'/.test(fnBody));
-  ok('U. openCreditCardsModule valida hasOwnerSpaces() antes de abrir (permiso real, no solo botón oculto)', /if\(!hasOwnerSpaces\(\)\)return toast\(/.test(fnBody));
-  ok('U. La verificación ocurre ANTES de cambiar de pantalla (bloquea antes de tocar currentScreen/app)', fnBody.indexOf('hasOwnerSpaces()') < fnBody.indexOf("currentScreen='creditCards'"));
+  // CORRECCIÓN FINAL 20260806 - TARJETAS: el gate real pasó de hasOwnerSpaces()
+  // a canAccessTarjetas() (respaldado por la RPC current_credit_card_access(),
+  // que autoriza también el acceso delegado de un operador) -- hasOwnerSpaces()
+  // dejaba afuera a un operador autorizado que no fuera dueño de ningún espacio.
+  ok('U. openCreditCardsModule valida canAccessTarjetas() antes de abrir (permiso real, no solo botón oculto)', /if\(!canAccessTarjetas\(\)\)return toast\(/.test(fnBody));
+  ok('U. La verificación ocurre ANTES de cambiar de pantalla (bloquea antes de tocar currentScreen/app)', fnBody.indexOf('canAccessTarjetas()') < fnBody.indexOf("currentScreen='creditCards'"));
 }
 
 // --- V. Las filas soportan teclado (Enter y barra espaciadora). ---
