@@ -300,15 +300,31 @@ function run(label, src) {
 }
 
 // ------------------------------------------------------------
-// Comparación literal statement vs card_receipt: mismas opciones de
-// upload() -- se verifica leyendo el código fuente real, no se simula.
+// CORRECCIÓN LOCAL CAUSA RAÍZ 20260809 — antes statement y card_receipt
+// compartían literalmente la misma línea .upload(filePath,file,{...}).
+// Ahora, a propósito, difieren SOLO en qué se le pasa como body/contentType
+// (uploadBody/uploadContentType, resueltos ANTES según el kind) -- pero
+// sigue habiendo un ÚNICO punto real de llamada a .upload() (no dos ramas
+// duplicadas), y upsert/cacheControl siguen compartidos e inalterados.
 // ------------------------------------------------------------
 {
-  const uploadCallRegex = /\.upload\(filePath,file,\{contentType:file\.type,upsert:false,cacheControl:'3600'\}\)/;
+  const uploadCallRegex = /\.upload\(filePath,uploadBody,\{contentType:uploadContentType,upsert:false,cacheControl:'3600'\}\)/;
   const mainMatches = (srcMain.match(new RegExp(uploadCallRegex.source, 'g')) || []).length;
-  ok('index.html: existe UNA sola forma de llamar a .upload() en uploadCreditDocument (statement y card_receipt comparten la misma línea de código, no hay dos ramas distintas)', mainMatches === 1);
+  ok('index.html: existe UN ÚNICO punto de llamada a .upload() en uploadCreditDocument (statement y card_receipt pasan por la misma línea; solo difiere qué body/contentType se resolvió antes)', mainMatches === 1);
   const operatorMatches = (srcOperator.match(new RegExp(uploadCallRegex.source, 'g')) || []).length;
   ok('index_operator.html: misma verificación', operatorMatches === 1);
+
+  const kindBranchRegex = /if\(kind===('|")card_receipt\1\)\{[\s\S]{0,400}?file\.arrayBuffer\(\)/;
+  ok('index.html: la rama ArrayBuffer está acotada exclusivamente a kind===\'card_receipt\'', kindBranchRegex.test(srcMain));
+  ok('index_operator.html: misma verificación', kindBranchRegex.test(srcOperator));
+
+  ok('index.html: uploadBody arranca como el File/Blob original (=file) -- statement nunca entra al if, así que nunca se transforma', srcMain.includes('let uploadBody=file;'));
+  ok('index_operator.html: misma verificación', srcOperator.includes('let uploadBody=file;'));
+  ok('index.html: uploadContentType arranca como file.type tal cual -- statement conserva exactamente el valor de siempre', srcMain.includes('let uploadContentType=file.type;'));
+  ok('index_operator.html: misma verificación', srcOperator.includes('let uploadContentType=file.type;'));
+
+  ok('index.html: fallback a application/octet-stream SOLO cuando file.type está vacío, nunca se pisa un MIME real', srcMain.includes("uploadContentType=file.type&&String(file.type).trim()?file.type:'application/octet-stream';"));
+  ok('index_operator.html: misma verificación', srcOperator.includes("uploadContentType=file.type&&String(file.type).trim()?file.type:'application/octet-stream';"));
 }
 
 // ------------------------------------------------------------
@@ -336,7 +352,7 @@ for (const [label, src] of [['index.html', srcMain], ['index_operator.html', src
 
   ok(`[${label}] el toast sigue armándose (no se tocó esa línea) y sigue siendo un string plano de una sola línea, más corto que el inline`, /toast\(`\$\{creditReceiptErrorMessage\(error\)\} \(Código: \$\{creditReceiptDiagnosticCode\(error\)\}\)\$\{safeDetail\?` · \$\{safeDetail\}`:''\}`\);/.test(src));
 
-  ok(`[${label}] uploadCreditDocument/.upload() siguen byte a byte iguales (contentType/upsert/cacheControl)`, src.includes(".upload(filePath,file,{contentType:file.type,upsert:false,cacheControl:'3600'})"));
+  ok(`[${label}] uploadCreditDocument/.upload(): upsert/cacheControl siguen compartidos e inalterados (solo body/contentType se resuelven antes según el kind, ver AUDITORÍA LOCAL CAUSA RAÍZ 20260809)`, src.includes(".upload(filePath,uploadBody,{contentType:uploadContentType,upsert:false,cacheControl:'3600'})"));
 }
 
 run('index.html', srcMain);

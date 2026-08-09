@@ -6931,10 +6931,35 @@ async function uploadCreditDocument(file,{cardId,statementId=null,movementId=nul
     const sub=kind==='statement'?'statement':`payments/${movementId}`;
     const filePath=`credit-cards/${ownerId}/${cardId}/${statementId||'sin-resumen'}/${sub}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
 
+    // CORRECCIÓN LOCAL CAUSA RAÍZ 20260809 - RECEIPT_STORAGE/InvalidRequest
+    // ("No content provided"): la auditoría del bundle real de storage-js
+    // (@supabase/supabase-js@2, ver comentarios de creditReceiptStorageSubcode)
+    // confirmó que subir un File/Blob directo entra en la rama que arma
+    // FormData con body.append('', file) -- evidencia real (Visa 8374,
+    // comprobante JPG 2.0 MB desde iPhone, file.size>0 confirmado) muestra
+    // que el navegador puede entregar ahí una parte vacía igual. Leer los
+    // bytes ACÁ con file.arrayBuffer() antes de llamar a upload() fuerza a
+    // storage-js a su rama binaria directa (un ArrayBuffer no es instanceof
+    // Blob ni FormData) -- esa rama sí usa el content-type explícito que le
+    // pasamos, y nunca depende de cómo el navegador serialice el FormData.
+    // Alcance mínimo: SOLO para card_receipt. 'statement' sigue exactamente
+    // igual que antes (ya funciona en producción, no se toca).
+    let uploadBody=file;
+    let uploadContentType=file.type;
+    if(kind==='card_receipt'){
+      try{
+        uploadBody=await file.arrayBuffer();
+      }catch(readError){
+        readError.creditStage='read_file';
+        throw readError;
+      }
+      uploadContentType=file.type&&String(file.type).trim()?file.type:'application/octet-stream';
+    }
+
     __creditUploadReachedStorage=true;
     const {error:uploadError}=await sb.storage
       .from('documents')
-      .upload(filePath,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
+      .upload(filePath,uploadBody,{contentType:uploadContentType,upsert:false,cacheControl:'3600'});
     if(uploadError){
       uploadError.creditStage='storage';
       throw uploadError;
@@ -7206,6 +7231,7 @@ function creditReceiptErrorMessage(error){
   console.error('Comprobante de pago:',error);
   if(error?.creditPreviewBlocked)return'Modo de prueba local: no se guarda nada real desde localhost/127.0.0.1.';
   if(error?.creditStage==='invalid_file')return String(error.message||'Formato o tamaño de archivo no admitido.');
+  if(error?.creditStage==='read_file')return'No se pudo leer el archivo seleccionado. No quedó nada guardado.';
   if(error?.creditStage==='missing_context')return'No se pudo determinar la tarjeta o el resumen de este pago. No se subió nada.';
   if(error?.creditStage==='storage')return'No se pudo guardar el archivo en el almacenamiento. No quedó nada guardado.';
   if(error?.creditStage==='insert_failed')return'El archivo no pudo vincularse al pago. No quedó nada guardado.';
@@ -7216,6 +7242,7 @@ function creditReceiptErrorMessage(error){
 }
 const CREDIT_RECEIPT_STAGE_CODES={
   invalid_file:'RECEIPT_INVALID_FILE',
+  read_file:'RECEIPT_READ_FILE',
   missing_context:'RECEIPT_CONTEXT',
   insert_failed:'RECEIPT_INSERT',
   insert_orphaned:'RECEIPT_ORPHAN',

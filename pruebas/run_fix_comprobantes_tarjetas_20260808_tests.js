@@ -182,9 +182,15 @@ let sb = {
   storage: {
     from(bucket) {
       return {
-        upload: async (filePath, file, opts) => {
+        upload: async (filePath, body, opts) => {
           if (__uploadDelayMs) await new Promise(r => setTimeout(r, __uploadDelayMs));
-          callLog.push({ op: 'storage.upload', bucket, filePath, contentType: opts && opts.contentType });
+          callLog.push({
+            op: 'storage.upload', bucket, filePath, contentType: opts && opts.contentType,
+            upsert: opts && opts.upsert, cacheControl: opts && opts.cacheControl,
+            bodyIsArrayBuffer: body instanceof ArrayBuffer,
+            bodyByteLength: body instanceof ArrayBuffer ? body.byteLength : undefined,
+            bodyIsFileLike: !(body instanceof ArrayBuffer) && body && typeof body === 'object' && 'arrayBuffer' in body,
+          });
           if (__forceUploadError) return { error: __forceUploadError };
           return { error: null };
         },
@@ -232,8 +238,14 @@ module.exports = {
   return code;
 }
 
-function makeFile(name, { size = 1000, type = 'application/pdf' } = {}) {
-  return { name, size, type };
+function makeFile(name, { size = 1000, type = 'application/pdf', arrayBufferError = null } = {}) {
+  return {
+    name, size, type,
+    arrayBuffer: async () => {
+      if (arrayBufferError) throw arrayBufferError;
+      return new ArrayBuffer(size);
+    },
+  };
 }
 
 let total = 0, failures = 0;
@@ -275,6 +287,79 @@ async function run(label, srcName, src) {
       M.getDb().documents[0].uploaded_by === 'uuid-guido');
     ok(`[${label}] (6) éxito: exactamente 1 fila documents (contador pasaría de 0 a 1)`, M.getDb().documents.length === 1);
     ok(`[${label}] resultado no marca alreadyLoaded en la primera subida`, result.alreadyLoaded !== true);
+  }
+
+  // ------------------------------------------------------------
+  // CORRECCIÓN LOCAL CAUSA RAÍZ 20260809 — PRUEBA COMPARATIVA OBLIGATORIA
+  // A. statement: sigue exactamente igual (File/Blob directo, sin cambios).
+  // B. card_receipt: pasa por file.arrayBuffer() -> upload() recibe un
+  // ArrayBuffer real, nunca el File/Blob original -- fuerza a storage-js a
+  // su rama binaria directa (evita FormData/multipart, la rama donde la
+  // evidencia real mostró "No content provided" pese a file.size>0).
+  // ------------------------------------------------------------
+  M.resetMockBackend();
+  M.seedCard(CARD_8374);
+  {
+    const statementFile = makeFile('resumen.pdf', { size: 500 * 1024, type: 'application/pdf' });
+    await M.uploadCreditDocument(statementFile, { cardId: CARD_8374.id, statementId: STATEMENT_0D2D, kind: 'statement' });
+    const statementUpload = M.getCallLog().find(c => c.op === 'storage.upload');
+    ok(`[${label}] A. statement: upload() NO recibe un ArrayBuffer (sigue exactamente igual que antes)`, statementUpload && statementUpload.bodyIsArrayBuffer === false);
+    ok(`[${label}] A. statement: upload() recibe el File/Blob original (tiene .arrayBuffer propio, no fue leído acá)`, statementUpload && statementUpload.bodyIsFileLike === true);
+    ok(`[${label}] A. statement: contentType sigue siendo file.type tal cual (sin fallback aplicado)`, statementUpload && statementUpload.contentType === 'application/pdf');
+  }
+
+  M.resetMockBackend();
+  M.seedCard(CARD_8374);
+  {
+    // JPG ~2.0 MB, el caso real reportado (Visa 8374, comprobante desde iPhone).
+    const jpgFile = makeFile('comprobante.jpg', { size: 2 * 1024 * 1024, type: 'image/jpeg' });
+    await M.uploadCreditDocument(jpgFile, { cardId: MOVEMENT_0808.card_id, statementId: MOVEMENT_0808.statement_id, movementId: 'mov-jpg', kind: 'card_receipt' });
+    const receiptUpload = M.getCallLog().find(c => c.op === 'storage.upload');
+    ok(`[${label}] B. card_receipt (JPG ~2MB): upload() SÍ recibe un ArrayBuffer`, receiptUpload && receiptUpload.bodyIsArrayBuffer === true);
+    ok(`[${label}] B. card_receipt: ArrayBuffer.byteLength === file.size exacto (copia byte a byte, sin recomprimir/redimensionar)`, receiptUpload && receiptUpload.bodyByteLength === jpgFile.size);
+    ok(`[${label}] B. card_receipt: contentType === image/jpeg (el MIME real del archivo, no inventado)`, receiptUpload && receiptUpload.contentType === 'image/jpeg');
+    ok(`[${label}] B. card_receipt: path exacto sin cambios (mismo formato de siempre)`, receiptUpload && receiptUpload.filePath.includes('/payments/mov-jpg/'));
+    ok(`[${label}] B. card_receipt: upsert sigue false`, receiptUpload && receiptUpload.upsert === false);
+    ok(`[${label}] B. card_receipt: cacheControl sigue '3600'`, receiptUpload && receiptUpload.cacheControl === '3600');
+    ok(`[${label}] B. card_receipt: la fila documents guarda el name/type/size del File ORIGINAL (no del ArrayBuffer)`, M.getDb().documents[0].original_name === 'comprobante.jpg' && M.getDb().documents[0].mime_type === 'image/jpeg' && M.getDb().documents[0].size_bytes === jpgFile.size);
+  }
+
+  // Variantes de tipo de archivo para card_receipt: PDF, PNG, HEIC con MIME,
+  // y MIME vacío (debe caer a application/octet-stream, NUNCA a ''
+  // -- ninguna transformación de contenido en ningún caso, solo el
+  // contentType declarado a Storage).
+  const fileVariants = [
+    { name: 'comprobante.pdf', type: 'application/pdf', expectContentType: 'application/pdf' },
+    { name: 'comprobante.png', type: 'image/png', expectContentType: 'image/png' },
+    { name: 'IMG_4821.HEIC', type: 'image/heic', expectContentType: 'image/heic' },
+    { name: 'IMG_4821.HEIC', type: '', expectContentType: 'application/octet-stream' },
+  ];
+  for (const variant of fileVariants) {
+    M.resetMockBackend();
+    M.seedCard(CARD_8374);
+    const vFile = makeFile(variant.name, { size: 50 * 1024, type: variant.type });
+    await M.uploadCreditDocument(vFile, { cardId: MOVEMENT_0808.card_id, statementId: MOVEMENT_0808.statement_id, movementId: 'mov-variant', kind: 'card_receipt' });
+    const vUpload = M.getCallLog().find(c => c.op === 'storage.upload');
+    ok(`[${label}] variante ${variant.name} (MIME '${variant.type}'): contentType enviado a Storage = '${variant.expectContentType}'`, vUpload && vUpload.contentType === variant.expectContentType);
+    ok(`[${label}] variante ${variant.name}: ArrayBuffer.byteLength === file.size (sin transformar el contenido)`, vUpload && vUpload.bodyByteLength === vFile.size);
+    ok(`[${label}] variante ${variant.name}: el nombre/extensión original guardado en documents no cambia`, M.getDb().documents[0].original_name === variant.name);
+  }
+
+  // Falla al leer el archivo (file.arrayBuffer() rechaza): nunca debe
+  // intentar Storage, y debe usar la etapa específica read_file -- nunca
+  // reutilizar engañosamente 'storage'.
+  M.resetMockBackend();
+  M.seedCard(CARD_8374);
+  {
+    const brokenFile = makeFile('roto.jpg', { size: 1000, type: 'image/jpeg', arrayBufferError: new Error('NotReadableError: could not read file') });
+    let caught = null;
+    try { await M.uploadCreditDocument(brokenFile, { cardId: MOVEMENT_0808.card_id, statementId: MOVEMENT_0808.statement_id, movementId: 'mov-broken', kind: 'card_receipt' }); } catch (e) { caught = e; }
+    ok(`[${label}] error al leer el archivo: se lanza una excepción`, !!caught);
+    ok(`[${label}] error al leer el archivo: creditStage='read_file' (nunca 'storage')`, caught && caught.creditStage === 'read_file');
+    ok(`[${label}] error al leer el archivo: Storage NUNCA se llega a tocar`, !M.getCallLog().some(c => c.op === 'storage.upload'));
+    ok(`[${label}] error al leer el archivo: código RECEIPT_READ_FILE`, M.creditReceiptDiagnosticCode(caught) === 'RECEIPT_READ_FILE');
+    ok(`[${label}] error al leer el archivo: mensaje específico, no reutiliza el de Storage`, M.creditReceiptErrorMessage(caught) === 'No se pudo leer el archivo seleccionado. No quedó nada guardado.');
+    ok(`[${label}] error al leer el archivo: 0 filas documents`, M.getDb().documents.length === 0);
   }
 
   // ------------------------------------------------------------
