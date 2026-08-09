@@ -63,6 +63,7 @@ const ENGINE_FUNCTIONS = [
   'creditStorageOwnerId', 'creditDocumentDisplayName', 'normalizeCreditDocumentName',
   'findMatchingCreditDocument', 'uploadCreditDocument',
   'creditDocumentErrorMessage', 'creditReceiptErrorMessage', 'creditReceiptDiagnosticCode',
+  'creditReceiptStorageSubcode', 'creditReceiptStorageStatusSuffix',
   'confirmCreditReceiptUpload',
 ];
 
@@ -350,7 +351,11 @@ async function run(label, srcName, src) {
   // ------------------------------------------------------------
   {
     const storageErr = new Error('row-level security policy violation'); storageErr.creditStage = 'storage';
-    ok(`[${label}] código y mensaje van juntos (storage)`, M.creditReceiptErrorMessage(storageErr) !== 'No fue posible guardar el archivo.' && M.creditReceiptDiagnosticCode(storageErr) === 'RECEIPT_STORAGE');
+    // AUDITORÍA LOCAL RECEIPT_STORAGE 20260808-C: 'storage' ya no da el
+    // código genérico -- se subclasifica (ver run_subcausa_receipt_storage
+    // para la cobertura completa de subcódigos). Acá solo se confirma que
+    // sigue siendo un código RECEIPT_STORAGE_* específico, nunca el genérico.
+    ok(`[${label}] código y mensaje van juntos (storage)`, M.creditReceiptErrorMessage(storageErr) !== 'No fue posible guardar el archivo.' && M.creditReceiptDiagnosticCode(storageErr).startsWith('RECEIPT_STORAGE_'));
     const contextErr = new Error('sin owner'); contextErr.creditStage = 'missing_context';
     ok(`[${label}] código y mensaje van juntos (missing_context)`, M.creditReceiptDiagnosticCode(contextErr) === 'RECEIPT_CONTEXT');
     const insertErr = new Error('insert'); insertErr.creditStage = 'insert_failed';

@@ -7204,19 +7204,63 @@ function creditReceiptErrorMessage(error){
 const CREDIT_RECEIPT_STAGE_CODES={
   invalid_file:'RECEIPT_INVALID_FILE',
   missing_context:'RECEIPT_CONTEXT',
-  storage:'RECEIPT_STORAGE',
   insert_failed:'RECEIPT_INSERT',
   insert_orphaned:'RECEIPT_ORPHAN',
   unknown_before_upload:'RECEIPT_UNKNOWN_BEFORE_UPLOAD',
   unknown_after_upload:'RECEIPT_UNKNOWN_AFTER_UPLOAD',
 };
+// AUDITORÍA LOCAL RECEIPT_STORAGE 20260808-C - subclasifica un error real
+// devuelto por sb.storage.from('documents').upload(). Confirmado leyendo
+// el bundle real servido por el CDN del proyecto (index.html línea 13:
+// https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2 -- versión resuelta
+// al auditar: 2.112.2) que ese error SIEMPRE es una instancia de
+// StorageApiError o StorageUnknownError (storage-js), con estas
+// propiedades reales (nunca inventadas):
+//   error.name        'StorageApiError' | 'StorageUnknownError' | 'StorageError'
+//   error.status       número HTTP de la respuesta (puede faltar)
+//   error.statusCode   string -- toma body.statusCode, si no body.code, si
+//                       no el status HTTP como texto. OJO: para RLS,
+//                       Supabase Storage suele devolver ACÁ el código de
+//                       error de Postgres '42501' (no un código HTTP).
+//   error.code         string opcional (viene de body.code)
+//   error.message      mensaje ya extraído del cuerpo (msg/message/
+//                       error_description/error/error.message)
+// StorageUnknownError se usa SOLO cuando el fetch nunca llegó a tener una
+// respuesta HTTP real (falla de red/CORS/DNS) -- .status/.statusCode
+// quedan undefined y .originalError guarda el error crudo del fetch.
+// La clasificación se apoya principalmente en el TEXTO del mensaje (más
+// estable entre versiones que un status HTTP exacto) y usa status/
+// statusCode como señal secundaria. Solo códigos que pueden detectarse de
+// forma objetiva -- ningún patrón "por si acaso" sin evidencia real.
+function creditReceiptStorageSubcode(error){
+  if(error?.name==='StorageUnknownError')return'RECEIPT_STORAGE_NETWORK';
+  const raw=String(error?.message||'');
+  const statusCode=String(error?.statusCode||'');
+  const status=Number(error?.status);
+  if(/row-level security/i.test(raw)||statusCode==='42501')return'RECEIPT_STORAGE_RLS';
+  if(/already exists|duplicate/i.test(raw)||status===409||statusCode==='409')return'RECEIPT_STORAGE_DUPLICATE';
+  if(/invalid key|bucket not found|invalid.*(path|key)/i.test(raw))return'RECEIPT_STORAGE_INVALID_KEY';
+  if(status===413||/payload too large|exceeded.*maximum.*size|maximum.*size.*exceeded/i.test(raw))return'RECEIPT_STORAGE_SIZE';
+  if(/mime type/i.test(raw))return'RECEIPT_STORAGE_MIME';
+  if(status===401||status===403||/jwt|unauthorized|missing authorization|invalid.*token/i.test(raw))return'RECEIPT_STORAGE_AUTH';
+  return'RECEIPT_STORAGE_UNKNOWN';
+}
+// Sufijo seguro con el status HTTP real, cuando existe -- información
+// pública (nunca un secreto), útil para el próximo diagnóstico real.
+function creditReceiptStorageStatusSuffix(error){
+  return Number.isFinite(Number(error?.status))?` · HTTP ${Number(error.status)}`:'';
+}
 // CORRECCIÓN LOCAL COMPROBANTES 20260808-B - código diagnóstico seguro
 // (nunca un token/JWT/URL privada/header/SQL/stack trace) que acompaña al
 // mensaje de creditReceiptErrorMessage en la UI -- permite reconocer de un
 // vistazo, sin abrir la consola del navegador, en qué etapa exacta falló
 // un intento real. Complementa (no reemplaza) creditReceiptErrorMessage.
+// AUDITORÍA LOCAL RECEIPT_STORAGE 20260808-C - para creditStage='storage'
+// ya no devuelve el genérico 'RECEIPT_STORAGE': subclasifica con
+// creditReceiptStorageSubcode() y agrega el status HTTP real si existe.
 function creditReceiptDiagnosticCode(error){
   if(error?.creditPreviewBlocked)return'RECEIPT_LOCAL_PREVIEW';
+  if(error?.creditStage==='storage')return creditReceiptStorageSubcode(error)+creditReceiptStorageStatusSuffix(error);
   return CREDIT_RECEIPT_STAGE_CODES[error?.creditStage]||'RECEIPT_UNKNOWN_AFTER_UPLOAD';
 }
 async function deleteCreditDocument(documentId){
