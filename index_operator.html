@@ -7292,6 +7292,41 @@ function creditReceiptFileSummary(file){
   const mime=file?.type?file.type:'MIME vacío';
   return `Archivo: ${ext} · ${size} · ${esc(mime)}`;
 }
+// AUDITORÍA LOCAL InvalidRequest 20260809 - creditReceiptStorageSafeDetail
+// corta apenas encuentra un error.code con forma segura (ej. 'InvalidRequest')
+// y nunca llega a mirar error.message -- por eso "Detalle seguro: ..." nunca
+// apareció en el intento real (8374, HTTP 400, code='InvalidRequest'): el
+// código se mostró, pero el motivo específico que Storage puso en su propio
+// mensaje quedó descartado. Esta función es específica para ESE caso: solo
+// actúa cuando error.code==='InvalidRequest' Y error.status===400 (nunca
+// para otros códigos), y sanitiza error.message con una tubería estricta
+// antes de mostrar nada -- nunca el texto crudo. Basado en Bt() (bundle
+// real de storage-js, ver comentario de creditReceiptStorageSubcode): ese
+// mensaje lo arma el propio servidor de Storage a partir del cuerpo JSON
+// de su respuesta (msg/message/error_description/error), pensado para
+// diagnóstico de desarrollador -- no hay garantía documentada de que nunca
+// incluya un fragmento de lo que el cliente envió (por eso se sanitiza
+// igual, nunca se confía en que ya venga limpio).
+function creditReceiptInvalidRequestSafeMessage(error){
+  if(error?.code!=='InvalidRequest'||Number(error?.status)!==400)return null;
+  let msg=String(error?.message||'');
+  if(!msg.trim())return'Detalle Storage: oculto por seguridad';
+  msg=msg.replace(/[\r\n\t]+/g,' ').trim();
+  msg=msg.replace(/https?:\/\/\S+/gi,'[URL removida]');
+  msg=msg.replace(/\bBearer\s+\S+/gi,'[Bearer removido]');
+  msg=msg.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g,'[JWT removido]');
+  msg=msg.replace(/\b(access_token|refresh_token|api[_-]?key|apikey|authorization|token)\s*[:=]\s*\S+/gi,'[token removido]');
+  msg=msg.replace(/\bcookie\s*[:=]\s*\S+/gi,'[cookie removida]');
+  msg=msg.replace(/\?[A-Za-z0-9_=&%.+-]{6,}/g,'');
+  msg=msg.trim();
+  if(!msg)return'Detalle Storage: oculto por seguridad';
+  if(msg.length>160)msg=msg.slice(0,157)+'...';
+  // Última red de seguridad: si después de sanitizar todavía queda algo con
+  // forma sospechosa, se oculta entero -- mejor pecar de cauteloso que
+  // filtrar un fragmento residual no contemplado arriba.
+  if(/eyJ|bearer|authorization|secret|password|api[_-]?key|token/i.test(msg))return'Detalle Storage: oculto por seguridad';
+  return `Detalle Storage: ${msg}`;
+}
 // CORRECCIÓN LOCAL COMPROBANTES 20260808-B - código diagnóstico seguro
 // (nunca un token/JWT/URL privada/header/SQL/stack trace) que acompaña al
 // mensaje de creditReceiptErrorMessage en la UI -- permite reconocer de un
@@ -11791,12 +11826,17 @@ async function confirmCreditReceiptUpload(movementId,input){
     // técnico crudo, nunca secrets.
     if(label){label.style.pointerEvents='';label.style.opacity='';}
     // AUDITORÍA LOCAL HTTP 400 20260808-D - cuando el fallo fue de Storage,
-    // se agregan hasta 2 líneas extra, seguras: un detalle específico (solo
-    // si se pudo reconocer, nunca inventado) y los metadatos del archivo
-    // elegido (extensión/tamaño/MIME -- nunca la ruta local del disco).
+    // se agregan hasta 3 líneas extra, seguras: un detalle específico (solo
+    // si se pudo reconocer, nunca inventado), el mensaje de InvalidRequest
+    // ya sanitizado (AUDITORÍA LOCAL InvalidRequest 20260809, ver
+    // creditReceiptInvalidRequestSafeMessage) y los metadatos del archivo
+    // elegido (extensión/tamaño/MIME -- nunca la ruta local del disco). El
+    // inline (a diferencia del toast) queda visible después de que el toast
+    // desaparece -- es la fuente completa, el toast es solo un resumen.
     const safeDetail=error?.creditStage==='storage'?creditReceiptStorageSafeDetail(error):null;
+    const invalidRequestDetail=error?.creditStage==='storage'?creditReceiptInvalidRequestSafeMessage(error):null;
     const fileDetailLine=error?.creditStage==='storage'?`<br><small>${esc(creditReceiptFileSummary(file))}</small>`:'';
-    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))} <small>(Código: ${esc(creditReceiptDiagnosticCode(error))})</small>${safeDetail?`<br><small>${esc(safeDetail)}</small>`:''}${fileDetailLine}</span>
+    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))} <small>(Código: ${esc(creditReceiptDiagnosticCode(error))})</small>${safeDetail?`<br><small>${esc(safeDetail)}</small>`:''}${invalidRequestDetail?`<br><small>${esc(invalidRequestDetail)}</small>`:''}${fileDetailLine}</span>
       <div style="margin-top:8px">
         <button type="button" class="btn primary small" data-credit-receipt-confirm="${movementId}">Reintentar</button>
         <button type="button" class="btn outline small" data-credit-receipt-cancel="${movementId}">Cancelar</button>

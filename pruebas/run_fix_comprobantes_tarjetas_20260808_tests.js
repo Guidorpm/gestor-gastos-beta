@@ -65,6 +65,7 @@ const ENGINE_FUNCTIONS = [
   'creditDocumentErrorMessage', 'creditReceiptErrorMessage', 'creditReceiptDiagnosticCode',
   'creditReceiptStorageSubcode', 'creditReceiptStorageStatusSuffix',
   'creditReceiptStorageSafeDetail', 'creditReceiptFileSummary', 'formatFileSize',
+  'creditReceiptInvalidRequestSafeMessage',
   'confirmCreditReceiptUpload',
 ];
 
@@ -431,6 +432,35 @@ async function run(label, srcName, src) {
     ok(`[${label}] error real: el inline muestra el código diagnóstico (RECEIPT_INSERT)`, M.getStatusEl(MOVEMENT_0808.id).innerHTML.includes('RECEIPT_INSERT'));
     ok(`[${label}] error real: el toast muestra el mismo código diagnóstico`, M.getToasts().some(t => t.includes('RECEIPT_INSERT')));
     ok(`[${label}] error real: nunca cae en el texto genérico sin código`, !M.getToasts().some(t => t === 'No fue posible guardar el archivo.'));
+  }
+
+  // AUDITORÍA LOCAL InvalidRequest 20260809 — flujo completo real: HTTP
+  // 400 + code='InvalidRequest' (el caso real de 8374) debe mostrar en el
+  // INLINE el código, el "Storage code: InvalidRequest" Y el "Detalle
+  // Storage: ..." sanitizado, y el resumen del archivo -- el inline es la
+  // fuente completa (queda después de que el toast desaparece); el toast
+  // puede ser más corto pero nunca es la única fuente de información.
+  M.resetMockBackend();
+  M.seedCard(CARD_8374);
+  M.seedMovements([MOVEMENT_0808]);
+  {
+    const invalidRequestErr = new Error('The multipart boundary could not be parsed');
+    invalidRequestErr.status = 400;
+    invalidRequestErr.statusCode = '400';
+    invalidRequestErr.code = 'InvalidRequest';
+    invalidRequestErr.name = 'StorageApiError';
+    M.setForceUploadError(invalidRequestErr);
+    M.setPendingReceiptFile(MOVEMENT_0808.id, makeFile('comprobante.heic', { type: '' }));
+    await M.confirmCreditReceiptUpload(MOVEMENT_0808.id, input);
+    const inlineHtml = M.getStatusEl(MOVEMENT_0808.id).innerHTML;
+    ok(`[${label}] InvalidRequest real: inline muestra el código RECEIPT_STORAGE_UNKNOWN`, inlineHtml.includes('RECEIPT_STORAGE_UNKNOWN'));
+    ok(`[${label}] InvalidRequest real: inline muestra el HTTP 400`, inlineHtml.includes('HTTP 400'));
+    ok(`[${label}] InvalidRequest real: inline muestra "Storage code: InvalidRequest"`, inlineHtml.includes('Storage code: InvalidRequest'));
+    ok(`[${label}] InvalidRequest real: inline muestra el detalle sanitizado del mensaje`, inlineHtml.includes('Detalle Storage: The multipart boundary could not be parsed'));
+    ok(`[${label}] InvalidRequest real: inline muestra el resumen del archivo (extensión/tamaño/MIME)`, inlineHtml.includes('Archivo: HEIC') && inlineHtml.includes('MIME vacío'));
+    ok(`[${label}] InvalidRequest real: 0 filas documents`, M.getDb().documents.length === 0);
+    ok(`[${label}] InvalidRequest real: nunca se muestra como éxito`, !M.getToasts().includes('Comprobante guardado correctamente.'));
+    ok(`[${label}] InvalidRequest real: el toast también lleva el código (aunque más corto que el inline)`, M.getToasts().some(t => t.includes('RECEIPT_STORAGE_UNKNOWN')));
   }
 
   fs.unlinkSync(tmpFile);

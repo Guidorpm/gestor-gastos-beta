@@ -83,10 +83,11 @@ function run(label, src) {
     extractFunction(src, 'creditReceiptStorageStatusSuffix') + '\n' +
     extractFunction(src, 'creditReceiptStorageSafeDetail') + '\n' +
     extractFunction(src, 'creditReceiptFileSummary') + '\n' +
+    extractFunction(src, 'creditReceiptInvalidRequestSafeMessage') + '\n' +
     extractFunction(src, 'formatFileSize') + '\n' +
     extractFunction(src, 'esc') + '\n' +
     extractFunction(src, 'receiptFileIsAcceptable') + '\n' +
-    `module.exports={creditReceiptStorageSubcode,creditReceiptStorageStatusSuffix,creditReceiptStorageSafeDetail,creditReceiptFileSummary,receiptFileIsAcceptable};\n`;
+    `module.exports={creditReceiptStorageSubcode,creditReceiptStorageStatusSuffix,creditReceiptStorageSafeDetail,creditReceiptFileSummary,creditReceiptInvalidRequestSafeMessage,receiptFileIsAcceptable};\n`;
   const tmpFile = path.join(__dirname, `_extracted_subcausa_${label.replace(/[^a-z0-9]/gi, '_')}.js`);
   fs.writeFileSync(tmpFile, code);
   delete require.cache[require.resolve(tmpFile)];
@@ -216,6 +217,60 @@ function run(label, src) {
     ok(`[${label}] fileSummary: HEIC con MIME vacío (caso típico iPhone)`, M.creditReceiptFileSummary({ name: 'IMG_4821.HEIC', size: 1.4 * 1024 * 1024, type: '' }) === `Archivo: HEIC · ${M.creditReceiptFileSummary({ name: 'x', size: 1.4 * 1024 * 1024, type: 'x' }).split(' · ')[1]} · MIME vacío`);
     ok(`[${label}] fileSummary: nunca contiene "/" ni "\\\\" propios de una ruta de archivo (más allá del MIME, que sí lleva "/")`, !/[a-zA-Z]:\\|\/(Users|home|var|private)\//.test(M.creditReceiptFileSummary({ name: 'foto.jpg', size: 100, type: 'image/jpeg' })));
     ok(`[${label}] fileSummary: PDF de resumen (mismo formato que un comprobante)`, M.creditReceiptFileSummary({ name: 'resumen.pdf', size: 500 * 1024, type: 'application/pdf' }).startsWith('Archivo: PDF ·'));
+  }
+
+  // ------------------------------------------------------------
+  // AUDITORÍA LOCAL InvalidRequest 20260809 —
+  // creditReceiptInvalidRequestSafeMessage: caso real confirmado (8374,
+  // HTTP 400, code='InvalidRequest') -- sanitiza error.message, NUNCA lo
+  // muestra crudo, y solo actúa para code+status exactos.
+  // ------------------------------------------------------------
+  {
+    const invalidReq = (message) => new StorageApiError(message, 400, '400', 'InvalidRequest');
+
+    ok(`[${label}] InvalidRequest: solo actúa cuando code==='InvalidRequest' Y status===400`, M.creditReceiptInvalidRequestSafeMessage(new StorageApiError('x', 403, '403', 'InvalidRequest')) === null);
+    ok(`[${label}] InvalidRequest: nunca actúa para otros códigos`, M.creditReceiptInvalidRequestSafeMessage(new StorageApiError('x', 400, '400', 'BucketNotFound')) === null);
+
+    ok(`[${label}] InvalidRequest: mensaje corto normal se muestra sanitizado`, M.creditReceiptInvalidRequestSafeMessage(invalidReq('The request body is not valid multipart/form-data')) === 'Detalle Storage: The request body is not valid multipart/form-data');
+
+    ok(`[${label}] InvalidRequest: mensaje vacío -> oculto por seguridad`, M.creditReceiptInvalidRequestSafeMessage(invalidReq('')) === 'Detalle Storage: oculto por seguridad');
+
+    const withUrl = M.creditReceiptInvalidRequestSafeMessage(invalidReq('failed while fetching https://xyzcompany.supabase.co/storage/v1/object/documents/secret-path?token=abc123'));
+    ok(`[${label}] InvalidRequest: URL completa nunca aparece cruda`, !/https?:\/\//.test(withUrl));
+
+    const withBearer = M.creditReceiptInvalidRequestSafeMessage(invalidReq('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij.signature123456 rejected'));
+    ok(`[${label}] InvalidRequest: "Bearer ..." nunca aparece crudo`, !/Bearer\s+eyJ/i.test(withBearer));
+
+    const withJwt = M.creditReceiptInvalidRequestSafeMessage(invalidReq('token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c invalid'));
+    ok(`[${label}] InvalidRequest: estructura de JWT (3 segmentos con puntos) nunca aparece cruda`, !/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(withJwt));
+
+    const withQuerystring = M.creditReceiptInvalidRequestSafeMessage(invalidReq('bad request for path?apikey=sbp_1234567890abcdef&signature=xyz'));
+    ok(`[${label}] InvalidRequest: querystring con posible apikey nunca aparece cruda`, !/apikey=|signature=/i.test(withQuerystring));
+
+    const withNewlines = M.creditReceiptInvalidRequestSafeMessage(invalidReq('line one\nline two\r\nline three\ttabbed'));
+    ok(`[${label}] InvalidRequest: saltos de línea/tabs se reemplazan por espacios (una sola línea)`, withNewlines && !/[\r\n\t]/.test(withNewlines));
+
+    const longMsg = 'x'.repeat(300);
+    const withLongMsg = M.creditReceiptInvalidRequestSafeMessage(invalidReq(longMsg));
+    ok(`[${label}] InvalidRequest: mensaje largo se trunca (nunca supera ~180 caracteres totales con el prefijo)`, withLongMsg.length <= 180);
+
+    const withSecretWord = M.creditReceiptInvalidRequestSafeMessage(invalidReq('internal secret password leaked in log'));
+    ok(`[${label}] InvalidRequest: mensaje con palabras sensibles residuales -> oculto por seguridad (red de seguridad final)`, withSecretWord === 'Detalle Storage: oculto por seguridad');
+
+    // Ningún resultado, para ningún caso de esta batería, puede contener
+    // patrones sensibles -- barrido final sobre todos los casos anteriores.
+    const allResults = [withUrl, withBearer, withJwt, withQuerystring, withNewlines, withLongMsg, withSecretWord];
+    ok(`[${label}] InvalidRequest: ningún resultado de la batería contiene Bearer/JWT/URL/apikey crudos`, allResults.every(r => !/Bearer\s+eyJ|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|https?:\/\/|apikey=/i.test(r)));
+  }
+
+  // ------------------------------------------------------------
+  // Confirma que la clasificación previa (subcode RLS/AUTH/DUPLICATE/
+  // NETWORK/UNKNOWN) sigue intacta -- esta corrección es puramente
+  // aditiva, no reemplaza nada de lo ya publicado.
+  // ------------------------------------------------------------
+  {
+    ok(`[${label}] clasificación previa intacta: RLS`, M.creditReceiptStorageSubcode(new StorageApiError('new row violates row-level security policy', 400, '42501')) === 'RECEIPT_STORAGE_RLS');
+    ok(`[${label}] clasificación previa intacta: caso real 8374 (InvalidRequest) sigue cayendo en UNKNOWN (no se reclasifica el subcode, solo se agrega detalle)`, M.creditReceiptStorageSubcode(new StorageApiError('Bad Request', 400, '400', 'InvalidRequest')) === 'RECEIPT_STORAGE_UNKNOWN');
   }
 
   fs.unlinkSync(tmpFile);
