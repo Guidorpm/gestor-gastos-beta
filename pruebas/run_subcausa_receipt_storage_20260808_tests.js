@@ -311,6 +311,34 @@ function run(label, src) {
   ok('index_operator.html: misma verificación', operatorMatches === 1);
 }
 
+// ------------------------------------------------------------
+// AUDITORÍA LOCAL LEGIBILIDAD 20260809 — el diagnóstico inline de
+// comprobantes quedaba en una sola línea y se cortaba horizontalmente
+// porque reutilizaba .obligation-pill (white-space:nowrap, pensada para
+// una insignia corta). Verificaciones de código fuente real (CSS y
+// markup), no de renderizado visual real (no hay navegador en esta
+// suite) -- confirman que la causa fue corregida sin tocar
+// .obligation-pill (que se sigue usando igual en el resto de la app).
+// ------------------------------------------------------------
+for (const [label, src] of [['index.html', srcMain], ['index_operator.html', srcOperator]]) {
+  const cssMatch = /\.credit-receipt-diagnostic\{([^}]*)\}/.exec(src);
+  ok(`[${label}] existe la clase .credit-receipt-diagnostic`, !!cssMatch);
+  const cssBody = cssMatch ? cssMatch[1] : '';
+  ok(`[${label}] .credit-receipt-diagnostic: white-space:normal (nunca nowrap)`, /white-space:normal/.test(cssBody));
+  ok(`[${label}] .credit-receipt-diagnostic: overflow-wrap:anywhere (permite wrap seguro de textos largos/sin espacios)`, /overflow-wrap:anywhere/.test(cssBody));
+  ok(`[${label}] .credit-receipt-diagnostic: display:block (nunca inline-flex de una insignia)`, /display:block/.test(cssBody));
+  ok(`[${label}] .obligation-pill (insignias del resto de la app) sigue intacta, todavía con white-space:nowrap`, /\.obligation-pill\{[^}]*white-space:nowrap[^}]*\}/.test(src));
+
+  const catchBlockMatch = /if\(status\)status\.innerHTML=`<div class="credit-receipt-diagnostic">[\s\S]{0,400}?<\/div>\s*<div style="margin-top:8px">/.exec(src);
+  ok(`[${label}] el catch de confirmCreditReceiptUpload usa el nuevo contenedor .credit-receipt-diagnostic (ya no <span class="obligation-pill violet"> envolviendo todo)`, !!catchBlockMatch);
+  ok(`[${label}] cada dato (Código/HTTP/Storage code/Detalle/Archivo) se arma como <div> propio, no concatenado con <br><small>`, src.includes('diagnosticLines.map(l=>`<div>${l}</div>`)'));
+  ok(`[${label}] la línea "Código:" y la línea "HTTP:" quedan separadas (no concatenadas en un solo string)`, src.includes("`Código: ${esc(codeOnly)}`") && src.includes("httpPart.replace('HTTP','HTTP:')"));
+
+  ok(`[${label}] el toast sigue armándose (no se tocó esa línea) y sigue siendo un string plano de una sola línea, más corto que el inline`, /toast\(`\$\{creditReceiptErrorMessage\(error\)\} \(Código: \$\{creditReceiptDiagnosticCode\(error\)\}\)\$\{safeDetail\?` · \$\{safeDetail\}`:''\}`\);/.test(src));
+
+  ok(`[${label}] uploadCreditDocument/.upload() siguen byte a byte iguales (contentType/upsert/cacheControl)`, src.includes(".upload(filePath,file,{contentType:file.type,upsert:false,cacheControl:'3600'})"));
+}
+
 run('index.html', srcMain);
 run('index_operator.html', srcOperator);
 

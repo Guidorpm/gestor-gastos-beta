@@ -379,6 +379,16 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .obligation-pill.neutral{background:#eef1fb;color:#3d4a8a}
 .obligation-pill.violet{background:#f3e3ff;color:#6d2fa0}
 .obligation-action{text-align:right}
+/* AUDITORÍA LOCAL LEGIBILIDAD 20260809 - diagnóstico de error de
+   comprobantes de tarjetas: antes reutilizaba .obligation-pill (pensada
+   para una insignia corta, con white-space:nowrap) para envolver TODO el
+   mensaje multilínea -- eso lo colapsaba visualmente a una sola línea y
+   lo cortaba horizontalmente. Bloque propio, nunca nowrap, cada dato en
+   su propia línea. No modifica .obligation-pill (se sigue usando en el
+   resto de la app tal cual). */
+.credit-receipt-diagnostic{display:block;white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.5;padding:10px 12px;border-radius:13px;background:#f3e3ff;color:#6d2fa0;font-size:12px;max-width:100%}
+.credit-receipt-diagnostic>div{margin-top:4px}
+.credit-receipt-diagnostic>div:first-child{margin-top:0;font-size:13px;font-weight:700}
 .obligation-row .obligation-more{grid-column:1/-1;border-top:1px dashed var(--line);margin-top:2px;padding-top:8px}
 .obligation-row .obligation-more>summary{list-style:none;cursor:pointer;font-size:11px;font-weight:800;color:var(--muted)}
 .obligation-row .obligation-more>summary::-webkit-details-marker{display:none}
@@ -11833,10 +11843,28 @@ async function confirmCreditReceiptUpload(movementId,input){
     // elegido (extensión/tamaño/MIME -- nunca la ruta local del disco). El
     // inline (a diferencia del toast) queda visible después de que el toast
     // desaparece -- es la fuente completa, el toast es solo un resumen.
+    // AUDITORÍA LOCAL LEGIBILIDAD 20260809 - antes todo esto se armaba como
+    // una sola cadena dentro de <span class="obligation-pill violet">
+    // (white-space:nowrap -- pensada para una insignia corta), lo que lo
+    // colapsaba a una sola línea recortada. Ahora cada dato es su propio
+    // <div> dentro de .credit-receipt-diagnostic (bloque, sin nowrap, con
+    // overflow-wrap:anywhere) -- nunca cambia el contenido/sanitización,
+    // solo cómo se presenta.
     const safeDetail=error?.creditStage==='storage'?creditReceiptStorageSafeDetail(error):null;
     const invalidRequestDetail=error?.creditStage==='storage'?creditReceiptInvalidRequestSafeMessage(error):null;
-    const fileDetailLine=error?.creditStage==='storage'?`<br><small>${esc(creditReceiptFileSummary(file))}</small>`:'';
-    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))} <small>(Código: ${esc(creditReceiptDiagnosticCode(error))})</small>${safeDetail?`<br><small>${esc(safeDetail)}</small>`:''}${invalidRequestDetail?`<br><small>${esc(invalidRequestDetail)}</small>`:''}${fileDetailLine}</span>
+    const fullCode=creditReceiptDiagnosticCode(error);
+    const [codeOnly,httpPart]=fullCode.split(' · ');
+    const diagnosticLines=[
+      `Código: ${esc(codeOnly)}`,
+      httpPart?esc(httpPart.replace('HTTP','HTTP:')):null,
+      safeDetail?esc(safeDetail):null,
+      invalidRequestDetail?esc(invalidRequestDetail):null,
+      error?.creditStage==='storage'?esc(creditReceiptFileSummary(file)):null,
+    ].filter(Boolean);
+    if(status)status.innerHTML=`<div class="credit-receipt-diagnostic">
+        <div>${esc(creditReceiptErrorMessage(error))}</div>
+        ${diagnosticLines.map(l=>`<div>${l}</div>`).join('')}
+      </div>
       <div style="margin-top:8px">
         <button type="button" class="btn primary small" data-credit-receipt-confirm="${movementId}">Reintentar</button>
         <button type="button" class="btn outline small" data-credit-receipt-cancel="${movementId}">Cancelar</button>

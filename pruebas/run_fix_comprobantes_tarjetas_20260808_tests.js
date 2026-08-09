@@ -454,7 +454,7 @@ async function run(label, srcName, src) {
     await M.confirmCreditReceiptUpload(MOVEMENT_0808.id, input);
     const inlineHtml = M.getStatusEl(MOVEMENT_0808.id).innerHTML;
     ok(`[${label}] InvalidRequest real: inline muestra el código RECEIPT_STORAGE_UNKNOWN`, inlineHtml.includes('RECEIPT_STORAGE_UNKNOWN'));
-    ok(`[${label}] InvalidRequest real: inline muestra el HTTP 400`, inlineHtml.includes('HTTP 400'));
+    ok(`[${label}] InvalidRequest real: inline muestra el HTTP 400`, inlineHtml.includes('HTTP: 400'));
     ok(`[${label}] InvalidRequest real: inline muestra "Storage code: InvalidRequest"`, inlineHtml.includes('Storage code: InvalidRequest'));
     ok(`[${label}] InvalidRequest real: inline muestra el detalle sanitizado del mensaje`, inlineHtml.includes('Detalle Storage: The multipart boundary could not be parsed'));
     ok(`[${label}] InvalidRequest real: inline muestra el resumen del archivo (extensión/tamaño/MIME)`, inlineHtml.includes('Archivo: HEIC') && inlineHtml.includes('MIME vacío'));
