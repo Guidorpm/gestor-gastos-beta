@@ -277,7 +277,14 @@ async function run() {
     // ============================================================
     // PERÍODO DIRECTO (7-13)
     // ============================================================
-    const directFnSrc = extractFunction(src, 'runDirectStatementUpload');
+    // CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - runDirectStatementUpload
+    // se separó en runDirectStatementPreview (vista previa, siempre
+    // previewOnly:true) y runDirectStatementSave (guardado real,
+    // previewOnly:false) -- ambas preservan exactamente estas mismas
+    // líneas de transmisión de contexto (statementId/selectedPeriod), se
+    // verifica sobre la primera, que es la que efectivamente arma el
+    // contexto por primera vez.
+    const directFnSrc = extractFunction(src, 'runDirectStatementPreview');
     const openDirectFnSrc = extractFunction(src, 'openDirectStatementUploadModal');
     ok(`[${label}] (7) El botón directo transmite selectedStatementId`, /statementId:directUploadState\.selectedStatementId\|\|null/.test(directFnSrc));
     ok(`[${label}] (8) Transmite selectedPeriod`, /selectedPeriod:directUploadState\.selectedPeriod\|\|directUploadState\.manualPeriod\|\|null/.test(directFnSrc));

@@ -361,7 +361,14 @@ async function run() {
       return m ? m[0] : '';
     })();
     ok(`[${label}] (7b) "Subir resumen" también aparece cuando la tarjeta todavía no tiene resumen`, /id="openDirectStatementUpload">Subir resumen</.test(detailFnEmpty));
-    ok(`[${label}] (8) El botón directo usa el mismo motor que la carga histórica (processCreditStatementFile) dentro de runDirectStatementUpload`, /async function runDirectStatementUpload[\s\S]{0,1500}processCreditStatementFile\(directUploadState\.file,card/.test(src));
+    // CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - runDirectStatementUpload
+    // se separó en runDirectStatementPreview (vista previa) y
+    // runDirectStatementSave (guardado real) -- ambas llaman al mismo
+    // motor único (processCreditStatementFile(directUploadState.file,card,...)),
+    // nunca un segundo parser -- se exige en las dos.
+    ok(`[${label}] (8) El botón directo usa el mismo motor que la carga histórica (processCreditStatementFile) dentro de runDirectStatementPreview/runDirectStatementSave`,
+      /async function runDirectStatementPreview[\s\S]{0,1500}processCreditStatementFile\(directUploadState\.file,card/.test(src)
+      && /async function runDirectStatementSave[\s\S]{0,1500}processCreditStatementFile\(directUploadState\.file,card/.test(src));
     ok(`[${label}] La carga histórica también llama a processCreditStatementFile (mismo motor, nunca un segundo parser)`, /async function runHistoricalUpload[\s\S]{0,4500}processCreditStatementFile\(row\.file,card/.test(src));
     // (9)/(10): 5044 (sin período en nombre, tarjeta sola) y 8374 (reprocesar) ambos pueden usar
     // el flujo directo porque processCreditStatementFile no exige nombre de archivo -- se verifica

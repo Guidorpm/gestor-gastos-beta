@@ -14058,7 +14058,15 @@ function closeHistoricalUploadModal(){
 // antes de usarse (ver openDirectStatementUploadModal). manualConfirmed y
 // manualPeriod respaldan los casos C/D de coincidencia de período
 // (confirmación explícita / selección manual, nunca inventados).
-let directUploadState={card:null,file:null,status:'idle',result:null,error:null,selectedStatementId:null,selectedPeriod:null,manualConfirmed:false,manualPeriod:''};
+// CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - flujo obligatorio de DOS
+// pasos (vista previa -> Guardar resumen), igual en localhost y en
+// producción -- ver runDirectStatementPreview/runDirectStatementSave.
+// status ahora distingue 'idle' | 'previewing' | 'saving'; saveOutcome
+// (null | 'saved' | 'partial' | 'error') y saveError quedan reservados
+// EXCLUSIVAMENTE para el resultado del segundo paso (el guardado real) --
+// nunca se confunden con directUploadState.error, que sigue siendo el de
+// la vista previa (nunca escribe nada).
+let directUploadState={card:null,file:null,status:'idle',result:null,error:null,saveOutcome:null,saveError:null,selectedStatementId:null,selectedPeriod:null,manualConfirmed:false,manualPeriod:''};
 async function openDirectStatementUploadModal(card,selectedStatement){
   if(!card)return toast('Elegí una tarjeta primero');
   // Nunca se acepta un statement arbitrario: se valida que pertenezca
@@ -14066,7 +14074,7 @@ async function openDirectStatementUploadModal(card,selectedStatement){
   const validStatement=(selectedStatement&&selectedStatement.card_id===card.id)?selectedStatement:null;
   directUploadState={
     card:creditCards.find(c=>c.id===card.id)||card,
-    file:null,status:'idle',result:null,error:null,
+    file:null,status:'idle',result:null,error:null,saveOutcome:null,saveError:null,
     selectedStatementId:validStatement?validStatement.id:null,
     selectedPeriod:validStatement?normalizeCreditStatementPeriod(validStatement.statement_month):null,
     manualConfirmed:false,manualPeriod:'',
@@ -14080,7 +14088,7 @@ function refreshDirectStatementUploadModal(){
 }
 function closeDirectStatementUploadModal(){
   closeModal();
-  directUploadState={card:null,file:null,status:'idle',result:null,error:null,selectedStatementId:null,selectedPeriod:null,manualConfirmed:false,manualPeriod:''};
+  directUploadState={card:null,file:null,status:'idle',result:null,error:null,saveOutcome:null,saveError:null,selectedStatementId:null,selectedPeriod:null,manualConfirmed:false,manualPeriod:''};
 }
 // Resumen legible del análisis de UN archivo (vista previa local o
 // resultado real ya persistido) -- movimientos, impuestos, pagos,
@@ -14615,22 +14623,76 @@ function directStatementResultHtml(result){
   ${creditPreviewTraceabilityHtml(result)}
   ${creditPaymentReconciliationHtml(result.paymentReconciliation)}`;
 }
+// CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - clasifica el resultado de
+// un intento de GUARDADO real (segundo paso, previewOnly:false) en 3
+// categorías honestas -- nunca se simula éxito:
+//   'error'   -- no se escribió absolutamente nada (los gates de Paso
+//                1-3, o Paso 4/5 si falló la subida del PDF -- ver
+//                uploadCreditDocument, que hace rollback automático del
+//                archivo recién subido antes de propagar el error).
+//   'partial' -- el PDF quedó preservado/vinculado, pero el resumen y/o
+//                sus movimientos quedaron incompletos o requieren
+//                revisión manual (reconciliación documental pendiente).
+//   'saved'   -- resumen y (si correspondía) movimientos completados.
+const CREDIT_DIRECT_SAVE_NOTHING_WRITTEN_STAGES=['document_failed','access_denied','mismatch','uncertain_unconfirmed','period_mismatch','period_confirmation_required','period_required','invalid_statement_context','analysis_failed','review_required'];
+const CREDIT_DIRECT_SAVE_PARTIAL_STAGES=['document_only','pending_reprocess','statement_failed','statement_ambiguous','document_unlinked'];
+function classifyCreditDirectSaveOutcome(stage){
+  if(CREDIT_DIRECT_SAVE_NOTHING_WRITTEN_STAGES.includes(stage))return'error';
+  if(CREDIT_DIRECT_SAVE_PARTIAL_STAGES.includes(stage))return'partial';
+  return'saved';
+}
 function renderDirectStatementUploadModalBody(){
   const card=directUploadState.card;
-  const previewOnly=isCreditLocalPreviewMode();
-  const busy=directUploadState.status==='processing';
+  const status=directUploadState.status;
+  const previewing=status==='previewing';
+  const saving=status==='saving';
   const result=directUploadState.result;
+  // CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - la vista previa (Paso 1)
+  // SIEMPRE corre con previewOnly:true, sin importar el host -- nunca más
+  // se decide por isCreditLocalPreviewMode() si el primer procesamiento
+  // escribe o no. "Guardar resumen" (Paso 2) es la ÚNICA acción que
+  // puede invocar previewOnly:false, y solo aparece cuando la vista
+  // previa terminó realmente en preview_complete y todavía no se intentó
+  // guardar (directUploadState.saveOutcome===null) -- una vez que el
+  // guardado se resolvió (saved/partial/error), no se vuelve a ofrecer
+  // el mismo botón: hay que elegir un archivo de nuevo (o reabrir) para
+  // otro intento, nunca un reintento automático silencioso.
+  const isPreviewReady=!!(result&&result.stage==='preview_complete'&&!directUploadState.saveOutcome);
   // CORRECCIÓN CIERRE DEFINITIVO 20260806 - PERÍODO DIRECTO: casos C/D de
   // coincidencia de período. needsConfirmation cubre tanto identidad
   // UNCERTAIN como "PDF sin período con contexto de pantalla" (caso C);
   // needsManualPeriod cubre "sin período en ningún lado" (caso D) -- nunca
   // se guarda nada hasta que exista selección y/o confirmación explícita.
-  const needsConfirmation=result&&(result.stage==='uncertain_unconfirmed'||result.stage==='period_confirmation_required');
-  const needsManualPeriod=result&&result.stage==='period_required';
+  const needsConfirmation=result&&(result.stage==='uncertain_unconfirmed'||result.stage==='period_confirmation_required')&&!directUploadState.saveOutcome;
+  const needsManualPeriod=result&&result.stage==='period_required'&&!directUploadState.saveOutcome;
   const contextLabel=directUploadState.selectedPeriod?monthLabel(directUploadState.selectedPeriod):null;
+
+  let mainButtonHtml='';
+  if(!directUploadState.saveOutcome){
+    if(isPreviewReady){
+      mainButtonHtml=`<button type="button" class="btn primary" id="directStatementMainAction" data-action="save" ${saving?'disabled':''}>${saving?'Guardando…':'Guardar resumen'}</button>`;
+    }else{
+      const previewDisabled=!directUploadState.file||previewing||(needsConfirmation&&!directUploadState.manualConfirmed)||(needsManualPeriod&&!directUploadState.manualPeriod);
+      mainButtonHtml=`<button type="button" class="btn primary" id="directStatementMainAction" data-action="preview" ${previewDisabled?'disabled':''}>${previewing?'Procesando…':'Procesar vista previa'}</button>`;
+    }
+  }
+
+  const saveOutcomeLabel={saved:'Guardado exitoso.',partial:'Guardado parcial — requiere revisión.',error:'Error de guardado — no se completó.'};
+  const statusBannerHtml=saving
+    ?`<div class="notification-warning" style="background:#fff7dc;border-color:#f0d98c;color:#7b5d00"><strong>Guardando…</strong> No cierres esta ventana ni vuelvas a hacer click.</div>`
+    :directUploadState.saveOutcome==='saved'
+      ?`<div class="notification-warning" style="background:#e8f7ed;border-color:#b7e3c4;color:#19734f"><strong>${esc(saveOutcomeLabel.saved)}</strong></div>`
+      :directUploadState.saveOutcome==='partial'
+        ?`<div class="notification-warning" style="background:#fff7dc;border-color:#f0d98c;color:#7b5d00"><strong>${esc(saveOutcomeLabel.partial)}</strong> ${esc(directUploadState.saveError||'')}</div>`
+        :directUploadState.saveOutcome==='error'
+          ?`<div class="notification-warning"><strong>${esc(saveOutcomeLabel.error)}</strong> ${esc(directUploadState.saveError||'')}</div>`
+          :isPreviewReady
+            ?`<div class="notification-warning" style="background:#eef6ff;border-color:#bcdcff;color:#0b4a8f"><strong>Vista previa — todavía no se realizó ningún cambio.</strong> Revisá el resultado antes de guardar.</div>`
+            :'';
+
   return `<h2>Subir resumen</h2>
     <p class="sub">${esc(creditCardName(card))}${contextLabel?` · resumen seleccionado: ${esc(contextLabel)}`:''} · seleccioná el PDF del resumen de esta tarjeta. Usa el mismo motor de lectura y conciliación que "Cargar resúmenes históricos".</p>
-    ${previewOnly?`<div class="notification-warning" style="background:#fff7dc;border-color:#f0d98c;color:#7b5d00"><strong>MODO DE PRUEBA LOCAL — NO SE GUARDARÁ NADA.</strong> Estás en localhost/127.0.0.1: el PDF se lee y se analiza igual, pero no se sube ningún archivo ni se crea ningún resumen o movimiento real.</div>`:''}
+    ${statusBannerHtml}
     ${!creditDocumentsMigrationOk?`<div class="notification-warning">Todavía falta activar el almacenamiento de documentos de tarjetas. Podés analizar el PDF, pero no se va a poder subir hasta que se aplique la migración.</div>`:''}
     <div style="margin:10px 0">${fileUploadButtonHtml('directStatementFileInput','Seleccionar PDF',{accept:'application/pdf,.pdf',multiple:false})}</div>
     ${directUploadState.file?`<div class="credit-note">Archivo seleccionado: ${esc(directUploadState.file.name)}</div>`:''}
@@ -14646,16 +14708,23 @@ function renderDirectStatementUploadModalBody(){
     </div>`:''}
     <div class="actions end">
       <button type="button" class="btn soft" id="closeDirectStatementUpload">Cerrar</button>
-      <button type="button" class="btn primary" id="confirmDirectStatementUpload" ${(!directUploadState.file||busy||(needsConfirmation&&!directUploadState.manualConfirmed)||(needsManualPeriod&&!directUploadState.manualPeriod))?'disabled':''}>${busy?'Procesando…':(previewOnly?'Procesar en vista previa':'Subir resumen')}</button>
+      ${mainButtonHtml}
     </div>`;
 }
 function bindDirectStatementUploadModal(){
   const input=document.getElementById('directStatementFileInput');
   if(input){
     input.onchange=()=>{
+      // CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - elegir un archivo
+      // (nuevo o el mismo de nuevo) siempre vuelve al estado inicial:
+      // nunca dispara ningún procesamiento ni guardado por sí solo, y
+      // limpia cualquier resultado de guardado previo -- un archivo
+      // nuevo siempre exige pasar de nuevo por la vista previa completa.
       directUploadState.file=input.files?.[0]||null;
       directUploadState.result=null;
       directUploadState.error=null;
+      directUploadState.saveOutcome=null;
+      directUploadState.saveError=null;
       directUploadState.manualConfirmed=false;
       directUploadState.manualPeriod='';
       refreshDirectStatementUploadModal();
@@ -14675,18 +14744,40 @@ function bindDirectStatementUploadModal(){
       refreshDirectStatementUploadModal();
     };
   }
-  const confirmButton=document.getElementById('confirmDirectStatementUpload');
-  if(confirmButton)confirmButton.onclick=()=>runDirectStatementUpload();
+  // CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - un único botón visible
+  // por vez (ver renderDirectStatementUploadModalBody), pero su acción
+  // real depende de data-action -- 'preview' NUNCA escribe
+  // (runDirectStatementPreview siempre fuerza previewOnly:true); 'save'
+  // es la ÚNICA vía posible hacia una escritura real
+  // (runDirectStatementSave, previewOnly:false explícito), y exige que
+  // la vista previa ya haya terminado en preview_complete.
+  const mainActionButton=document.getElementById('directStatementMainAction');
+  if(mainActionButton){
+    const action=mainActionButton.dataset.action;
+    mainActionButton.onclick=()=>{
+      if(action==='save')runDirectStatementSave();
+      else runDirectStatementPreview();
+    };
+  }
   const closeButton=document.getElementById('closeDirectStatementUpload');
   if(closeButton)closeButton.onclick=()=>closeDirectStatementUploadModal();
 }
-async function runDirectStatementUpload(){
-  if(!directUploadState.file||directUploadState.status==='processing')return;
+// CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - Paso 1: SIEMPRE vista
+// previa, SIEMPRE previewOnly:true (nunca depende de
+// isCreditLocalPreviewMode() -- antes, en producción, este mismo llamado
+// ya escribía de una, sin ningún paso de confirmación intermedio; ver la
+// auditoría real que encontró exactamente este problema con Visa 5044).
+// Nunca sube nada a Storage, nunca crea/actualiza documents, statement ni
+// movimientos -- processCreditStatementFile corta antes de tocar
+// cualquiera de esas tablas cuando previewOnly es true.
+async function runDirectStatementPreview(){
+  if(!directUploadState.file||directUploadState.status!=='idle')return;
   const card=directUploadState.card;
-  directUploadState.status='processing';
+  directUploadState.status='previewing';
   directUploadState.error=null;
+  directUploadState.saveOutcome=null;
+  directUploadState.saveError=null;
   refreshDirectStatementUploadModal();
-  const previewOnly=isCreditLocalPreviewMode();
   try{
     // CORRECCIÓN CIERRE DEFINITIVO 20260806 - PERÍODO DIRECTO: se
     // transmite el contexto real de pantalla (selectedStatementId ya
@@ -14696,25 +14787,63 @@ async function runDirectStatementUpload(){
     // vuelve a buscar otro statement cuando ya recibió uno válido, salvo
     // para revalidarlo. manualConfirmed cubre los casos UNCERTAIN/C.
     const result=await processCreditStatementFile(directUploadState.file,card,{
-      previewOnly,
+      previewOnly:true,
       statementId:directUploadState.selectedStatementId||null,
       selectedPeriod:directUploadState.selectedPeriod||directUploadState.manualPeriod||null,
       manualConfirmed:directUploadState.manualConfirmed,
     });
     directUploadState.status='idle';
     directUploadState.result=result;
-    if(previewOnly){
-      creditLocalPreviewState=result;
-    }else if(['document_failed','access_denied','mismatch','uncertain_unconfirmed','period_mismatch','period_confirmation_required','period_required','invalid_statement_context'].includes(result.stage)){
+    creditLocalPreviewState=result;
+    if(result.stage!=='preview_complete'&&CREDIT_DIRECT_SAVE_NOTHING_WRITTEN_STAGES.includes(result.stage)){
       directUploadState.error=result.resultMessage;
+    }
+    refreshDirectStatementUploadModal();
+  }catch(error){
+    directUploadState.status='idle';
+    directUploadState.error=historicalUploadErrorMessage(error);
+    refreshDirectStatementUploadModal();
+  }
+}
+// CORRECCIÓN CONFIRMACIÓN EXPLÍCITA 20260808 - Paso 2: el ÚNICO punto que
+// puede escribir de verdad (Storage, documents, statement, movimientos).
+// Exige que la vista previa ya haya terminado en preview_complete
+// (defensa en profundidad además del botón, que ya solo aparece en ese
+// estado) -- nunca se dispara por onchange del archivo, por terminar el
+// análisis, por render ni por reabrir el modal, solo por este click
+// explícito. Vuelve a llamar a processCreditStatementFile COMPLETO (el
+// motor vuelve a correr sus propias validaciones desde cero) con el
+// MISMO archivo/tarjeta/opciones ya usados en la vista previa -- nunca
+// reconstruye nada a partir del HTML ya renderizado.
+async function runDirectStatementSave(){
+  if(!directUploadState.file||directUploadState.status!=='idle')return;
+  if(!directUploadState.result||directUploadState.result.stage!=='preview_complete'||directUploadState.saveOutcome)return;
+  const card=directUploadState.card;
+  directUploadState.status='saving';
+  refreshDirectStatementUploadModal();
+  try{
+    const result=await processCreditStatementFile(directUploadState.file,card,{
+      previewOnly:false,
+      statementId:directUploadState.selectedStatementId||null,
+      selectedPeriod:directUploadState.selectedPeriod||directUploadState.manualPeriod||null,
+      manualConfirmed:directUploadState.manualConfirmed,
+    });
+    directUploadState.status='idle';
+    directUploadState.result=result;
+    const outcome=classifyCreditDirectSaveOutcome(result.stage);
+    directUploadState.saveOutcome=outcome;
+    if(outcome==='error'){
+      directUploadState.saveError=result.resultMessage;
     }else{
+      directUploadState.saveError=outcome==='partial'?result.resultMessage:null;
       await refreshDashboardData();
       toast(result.resultMessage||'Procesado.');
     }
     refreshDirectStatementUploadModal();
   }catch(error){
     directUploadState.status='idle';
-    directUploadState.error=historicalUploadErrorMessage(error);
+    directUploadState.saveOutcome='error';
+    directUploadState.saveError=historicalUploadErrorMessage(error);
     refreshDirectStatementUploadModal();
   }
 }
