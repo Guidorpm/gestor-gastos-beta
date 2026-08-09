@@ -62,7 +62,7 @@ const ENGINE_FUNCTIONS = [
   'esc', 'isCreditLocalPreviewMode', 'assertCreditWriteAllowed', 'receiptFileIsAcceptable',
   'creditStorageOwnerId', 'creditDocumentDisplayName', 'normalizeCreditDocumentName',
   'findMatchingCreditDocument', 'uploadCreditDocument',
-  'creditDocumentErrorMessage', 'creditReceiptErrorMessage',
+  'creditDocumentErrorMessage', 'creditReceiptErrorMessage', 'creditReceiptDiagnosticCode',
   'confirmCreditReceiptUpload',
 ];
 
@@ -71,6 +71,7 @@ function buildEngineRuntime(src) {
   code += extractConst(src, 'RECEIPT_ALLOWED_EXT') + '\n';
   code += `let creditDocumentsMigrationOk=true;\n`;
   code += extractConst(src, 'creditReceiptUploadsInFlight') + '\n';
+  code += extractConst(src, 'CREDIT_RECEIPT_STAGE_CODES') + '\n';
   for (const n of ENGINE_FUNCTIONS) code += extractFunction(src, n) + '\n';
   code += `
 // ============================================================
@@ -125,12 +126,14 @@ let db, callLog;
 let __forceUploadError = null;
 let __forceRemoveError = null;
 let __forceDocumentsInsertError = null;
+let __forceFindMatchingErrorInner = null;
 function resetMockBackend() {
   db = { documents: [] };
   callLog = [];
   __forceUploadError = null;
   __forceRemoveError = null;
   __forceDocumentsInsertError = null;
+  __forceFindMatchingErrorInner = null;
   __toasts = [];
   __refreshBehavior = async () => undefined;
   __refreshCalls = 0;
@@ -194,16 +197,17 @@ let sb = {
 let creditDocuments = [];
 let creditCards = [];
 let __fileHash = null; // sin dedupe por hash salvo que un test lo pida explícitamente
-async function computeFileHash(file){ return __fileHash; }
+async function computeFileHash(file){ if (__forceFindMatchingErrorInner) throw __forceFindMatchingErrorInner; return __fileHash; }
 async function computeStoredFileHash(filePath){ return null; }
 
 module.exports = {
   uploadCreditDocument, confirmCreditReceiptUpload,
-  creditDocumentErrorMessage, creditReceiptErrorMessage,
+  creditDocumentErrorMessage, creditReceiptErrorMessage, creditReceiptDiagnosticCode,
   setLocation: (host) => { location.hostname = host; },
   setForceUploadError: (err) => { __forceUploadError = err; },
   setForceRemoveError: (err) => { __forceRemoveError = err; },
   setForceDocumentsInsertError: (err) => { __forceDocumentsInsertError = err; },
+  setForceFindMatchingError: (err) => { __forceFindMatchingErrorInner = err; },
   setRefreshBehavior: (fn) => { __refreshBehavior = fn; },
   setFileHash: (h) => { __fileHash = h; },
   setUploadDelayMs: (ms) => { __uploadDelayMs = ms; },
@@ -314,6 +318,48 @@ async function run(label, srcName, src) {
   }
 
   // ------------------------------------------------------------
+  // 7-inesperado — error inesperado ANTES de tocar Storage (dentro de
+  // findMatchingCreditDocument, único hueco real encontrado al re-auditar)
+  // sin creditStage propio: la red de seguridad debe asignarle
+  // 'unknown_before_upload', nunca dejarlo pasar sin etapa.
+  // ------------------------------------------------------------
+  M.resetMockBackend();
+  M.seedCard(CARD_8374);
+  {
+    // candidates.length>0 es la única forma real de que
+    // findMatchingCreditDocument llegue a calcular un hash (y por lo tanto,
+    // a poder fallar) -- se siembra un documento existente para el mismo
+    // movimiento antes de forzar el error.
+    M.seedDocuments([{ id: 'doc-existing', kind: 'card_receipt', movement_id: 'mov-w', card_id: CARD_8374.id, statement_id: STATEMENT_0D2D, file_path: 'credit-cards/x/y/z/payments/mov-w/old.pdf' }]);
+    M.setForceFindMatchingError(new Error('fallo inesperado de hashing'));
+    let caught = null;
+    try { await M.uploadCreditDocument(makeFile('r.pdf'), { cardId: MOVEMENT_0808.card_id, statementId: MOVEMENT_0808.statement_id, movementId: 'mov-w', kind: 'card_receipt' }); } catch (e) { caught = e; }
+    ok(`[${label}] (7-inesperado) error inesperado antes de Storage: se lanza igual`, !!caught);
+    ok(`[${label}] (7-inesperado) red de seguridad: nunca queda sin creditStage`, caught && !!caught.creditStage);
+    ok(`[${label}] (7-inesperado) red de seguridad: etapa correcta 'unknown_before_upload' (nunca tocó Storage)`, caught && caught.creditStage === 'unknown_before_upload');
+    ok(`[${label}] (7-inesperado) Storage nunca se llegó a tocar`, !M.getCallLog().some(c => c.op === 'storage.upload'));
+    ok(`[${label}] (7-inesperado) mensaje específico, no el genérico ciego`, M.creditReceiptErrorMessage(caught).includes('falló antes de llegar al almacenamiento'));
+    ok(`[${label}] (7-inesperado) código diagnóstico específico`, M.creditReceiptDiagnosticCode(caught) === 'RECEIPT_UNKNOWN_BEFORE_UPLOAD');
+    M.setForceFindMatchingError(null);
+  }
+
+  // ------------------------------------------------------------
+  // el mensaje inline y el toast muestran SIEMPRE el mismo código
+  // diagnóstico junto al mensaje amigable (nunca el texto genérico ciego,
+  // sin código, para un error real conocido)
+  // ------------------------------------------------------------
+  {
+    const storageErr = new Error('row-level security policy violation'); storageErr.creditStage = 'storage';
+    ok(`[${label}] código y mensaje van juntos (storage)`, M.creditReceiptErrorMessage(storageErr) !== 'No fue posible guardar el archivo.' && M.creditReceiptDiagnosticCode(storageErr) === 'RECEIPT_STORAGE');
+    const contextErr = new Error('sin owner'); contextErr.creditStage = 'missing_context';
+    ok(`[${label}] código y mensaje van juntos (missing_context)`, M.creditReceiptDiagnosticCode(contextErr) === 'RECEIPT_CONTEXT');
+    const insertErr = new Error('insert'); insertErr.creditStage = 'insert_failed';
+    ok(`[${label}] código y mensaje van juntos (insert_failed)`, M.creditReceiptDiagnosticCode(insertErr) === 'RECEIPT_INSERT');
+    const orphanErr = new Error('orphan'); orphanErr.creditStage = 'insert_orphaned';
+    ok(`[${label}] código y mensaje van juntos (insert_orphaned)`, M.creditReceiptDiagnosticCode(orphanErr) === 'RECEIPT_ORPHAN');
+  }
+
+  // ------------------------------------------------------------
   // flujo completo real: confirmCreditReceiptUpload
   // ------------------------------------------------------------
   const inputId = 'creditReceiptInput-' + MOVEMENT_0808.id;
@@ -375,6 +421,9 @@ async function run(label, srcName, src) {
     ok(`[${label}] error real: nunca se muestra como éxito`, !M.getToasts().includes('Comprobante guardado correctamente.'));
     ok(`[${label}] error real: status ofrece Reintentar y Cancelar`, M.getStatusEl(MOVEMENT_0808.id).innerHTML.includes('data-credit-receipt-confirm') && M.getStatusEl(MOVEMENT_0808.id).innerHTML.includes('data-credit-receipt-cancel'));
     ok(`[${label}] error real: 0 filas documents`, M.getDb().documents.length === 0);
+    ok(`[${label}] error real: el inline muestra el código diagnóstico (RECEIPT_INSERT)`, M.getStatusEl(MOVEMENT_0808.id).innerHTML.includes('RECEIPT_INSERT'));
+    ok(`[${label}] error real: el toast muestra el mismo código diagnóstico`, M.getToasts().some(t => t.includes('RECEIPT_INSERT')));
+    ok(`[${label}] error real: nunca cae en el texto genérico sin código`, !M.getToasts().some(t => t === 'No fue posible guardar el archivo.'));
   }
 
   fs.unlinkSync(tmpFile);

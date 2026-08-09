@@ -6872,92 +6872,116 @@ async function uploadCreditDocument(file,{cardId,statementId=null,movementId=nul
   // (hoy, solo confirmCreditReceiptUpload -- ver creditReceiptErrorMessage)
   // distinga la causa real sin exponer nunca el texto crudo de
   // Postgres/Storage en la UI.
-  if(!receiptFileIsAcceptable(file)){
-    const err=new Error('Formato de archivo no admitido (solo PDF, JPG, PNG, WEBP o HEIC)');
-    err.creditStage='invalid_file';
-    throw err;
-  }
-  if(file.size>10*1024*1024){
-    const err=new Error('El archivo supera el límite de 10 MB');
-    err.creditStage='invalid_file';
-    throw err;
-  }
-
-  // CORRECCIÓN INTEGRACIÓN REAL 20260806 - resuelve y valida el owner_id
-  // real ANTES de tocar Storage -- si la tarjeta no existe o no tiene
-  // owner_id, esto falla acá, nunca después de haber subido el archivo.
-  let ownerId;
+  //
+  // CORRECCIÓN LOCAL COMPROBANTES 20260808-B - RED DE SEGURIDAD: un intento
+  // real (Visa 8374, pago 08/08) siguió mostrando el mensaje genérico pese
+  // a este etiquetado -- el único hueco real encontrado al re-auditar es
+  // que findMatchingCreditDocument() (debajo) no estaba envuelto en ningún
+  // try/catch: si esa llamada llegara a lanzar algo inesperado, el error
+  // salía de esta función SIN creditStage, y creditReceiptErrorMessage()
+  // caía en su fallback genérico. Este try/catch exterior es la red de
+  // seguridad pedida: si CUALQUIER excepción (conocida o no) llega hasta
+  // acá sin creditStage ya asignado, se le asigna 'unknown_before_upload' o
+  // 'unknown_after_upload' según si ya se había llegado a intentar la
+  // subida real a Storage -- nunca se pierde la etapa en silencio. Ninguna
+  // de las etapas ya tageadas (invalid_file/missing_context/storage/
+  // insert_failed/insert_orphaned) se modifica: esto solo actúa cuando
+  // faltan.
+  let __creditUploadReachedStorage=false;
   try{
-    ownerId=creditStorageOwnerId(cardId);
-  }catch(contextError){
-    contextError.creditStage='missing_context';
-    throw contextError;
-  }
-
-  // CORRECCIÓN 6B4.5.2 - Si el mismo archivo ya está vinculado a este mismo
-  // resumen/comprobante, no se sube de nuevo: se devuelve la fila existente
-  // marcada como "ya cargada".
-  const duplicate=await findMatchingCreditDocument({cardId,statementId,movementId,kind,file});
-  if(duplicate)return{filePath:duplicate.file_path,document:duplicate,alreadyLoaded:true};
-
-  const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-  const sub=kind==='statement'?'statement':`payments/${movementId}`;
-  const filePath=`credit-cards/${ownerId}/${cardId}/${statementId||'sin-resumen'}/${sub}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
-
-  const {error:uploadError}=await sb.storage
-    .from('documents')
-    .upload(filePath,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
-  if(uploadError){
-    uploadError.creditStage='storage';
-    throw uploadError;
-  }
-
-  // CORRECCIÓN 6B4.5 - Éxito atómico: subir el archivo a Storage no alcanza
-  // para considerar la carga completa. Se exige que el insert en
-  // public.documents devuelva realmente la fila creada (.select().single());
-  // un error==null sin fila no es prueba de que quedó guardada. Si la
-  // metadata no se puede confirmar, se deshace SOLO el archivo recién
-  // subido en esta misma operación (nunca uno histórico) y nunca se informa
-  // éxito al usuario.
-  let inserted=null,documentError=null;
-  try{
-    const result=await sb.from('documents').insert({
-      group_id:null,
-      obligation_id:null,
-      payment_id:null,
-      card_id:cardId,
-      statement_id:statementId,
-      movement_id:movementId,
-      kind,
-      file_path:filePath,
-      original_name:file.name,
-      mime_type:file.type,
-      size_bytes:file.size,
-      uploaded_by:session.user.id
-    }).select('*').single();
-    inserted=result.data;
-    documentError=result.error;
-  }catch(unexpectedError){
-    documentError=unexpectedError;
-  }
-
-  if(documentError||!inserted){
-    console.error('uploadCreditDocument: no se pudo confirmar la fila en public.documents',documentError||'insert sin error pero sin fila devuelta');
-    try{
-      await sb.storage.from('documents').remove([filePath]);
-    }catch(rollbackError){
-      console.error('uploadCreditDocument: además falló el rollback del archivo recién subido',rollbackError);
-      const err=new Error('El archivo quedó almacenado, pero necesita reparar su vínculo.');
-      err.orphanedPath=filePath;
-      err.needsReconcile=true;
-      err.creditStage='insert_orphaned';
+    if(!receiptFileIsAcceptable(file)){
+      const err=new Error('Formato de archivo no admitido (solo PDF, JPG, PNG, WEBP o HEIC)');
+      err.creditStage='invalid_file';
       throw err;
     }
-    const insertErr=new Error('El archivo no pudo vincularse al resumen. No se registró como completado.');
-    insertErr.creditStage='insert_failed';
-    throw insertErr;
+    if(file.size>10*1024*1024){
+      const err=new Error('El archivo supera el límite de 10 MB');
+      err.creditStage='invalid_file';
+      throw err;
+    }
+
+    // CORRECCIÓN INTEGRACIÓN REAL 20260806 - resuelve y valida el owner_id
+    // real ANTES de tocar Storage -- si la tarjeta no existe o no tiene
+    // owner_id, esto falla acá, nunca después de haber subido el archivo.
+    let ownerId;
+    try{
+      ownerId=creditStorageOwnerId(cardId);
+    }catch(contextError){
+      contextError.creditStage='missing_context';
+      throw contextError;
+    }
+
+    // CORRECCIÓN 6B4.5.2 - Si el mismo archivo ya está vinculado a este mismo
+    // resumen/comprobante, no se sube de nuevo: se devuelve la fila existente
+    // marcada como "ya cargada".
+    const duplicate=await findMatchingCreditDocument({cardId,statementId,movementId,kind,file});
+    if(duplicate)return{filePath:duplicate.file_path,document:duplicate,alreadyLoaded:true};
+
+    const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const sub=kind==='statement'?'statement':`payments/${movementId}`;
+    const filePath=`credit-cards/${ownerId}/${cardId}/${statementId||'sin-resumen'}/${sub}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
+
+    __creditUploadReachedStorage=true;
+    const {error:uploadError}=await sb.storage
+      .from('documents')
+      .upload(filePath,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
+    if(uploadError){
+      uploadError.creditStage='storage';
+      throw uploadError;
+    }
+
+    // CORRECCIÓN 6B4.5 - Éxito atómico: subir el archivo a Storage no alcanza
+    // para considerar la carga completa. Se exige que el insert en
+    // public.documents devuelva realmente la fila creada (.select().single());
+    // un error==null sin fila no es prueba de que quedó guardada. Si la
+    // metadata no se puede confirmar, se deshace SOLO el archivo recién
+    // subido en esta misma operación (nunca uno histórico) y nunca se informa
+    // éxito al usuario.
+    let inserted=null,documentError=null;
+    try{
+      const result=await sb.from('documents').insert({
+        group_id:null,
+        obligation_id:null,
+        payment_id:null,
+        card_id:cardId,
+        statement_id:statementId,
+        movement_id:movementId,
+        kind,
+        file_path:filePath,
+        original_name:file.name,
+        mime_type:file.type,
+        size_bytes:file.size,
+        uploaded_by:session.user.id
+      }).select('*').single();
+      inserted=result.data;
+      documentError=result.error;
+    }catch(unexpectedError){
+      documentError=unexpectedError;
+    }
+
+    if(documentError||!inserted){
+      console.error('uploadCreditDocument: no se pudo confirmar la fila en public.documents',documentError||'insert sin error pero sin fila devuelta');
+      try{
+        await sb.storage.from('documents').remove([filePath]);
+      }catch(rollbackError){
+        console.error('uploadCreditDocument: además falló el rollback del archivo recién subido',rollbackError);
+        const err=new Error('El archivo quedó almacenado, pero necesita reparar su vínculo.');
+        err.orphanedPath=filePath;
+        err.needsReconcile=true;
+        err.creditStage='insert_orphaned';
+        throw err;
+      }
+      const insertErr=new Error('El archivo no pudo vincularse al resumen. No se registró como completado.');
+      insertErr.creditStage='insert_failed';
+      throw insertErr;
+    }
+    return{filePath,document:inserted};
+  }catch(error){
+    if(!error.creditStage&&!error.creditPreviewBlocked){
+      error.creditStage=__creditUploadReachedStorage?'unknown_after_upload':'unknown_before_upload';
+    }
+    throw error;
   }
-  return{filePath,document:inserted};
 }
 
 // CORRECCIÓN 6B4.5 - Reconciliación: repara el vínculo de un archivo que ya
@@ -7176,7 +7200,27 @@ function creditReceiptErrorMessage(error){
   if(error?.creditStage==='storage')return'No se pudo guardar el archivo en el almacenamiento. No quedó nada guardado.';
   if(error?.creditStage==='insert_failed')return'El archivo no pudo vincularse al pago. No quedó nada guardado.';
   if(error?.creditStage==='insert_orphaned')return'El archivo quedó guardado pero no se pudo vincular al pago. No vuelvas a subirlo -- avisá para repararlo.';
+  if(error?.creditStage==='unknown_before_upload')return'No se pudo guardar el archivo (falló antes de llegar al almacenamiento). No quedó nada guardado.';
+  if(error?.creditStage==='unknown_after_upload')return'No se pudo confirmar el guardado del archivo después de intentar subirlo. Puede haber quedado un archivo suelto -- avisá para revisarlo.';
   return'No fue posible guardar el archivo.';
+}
+const CREDIT_RECEIPT_STAGE_CODES={
+  invalid_file:'RECEIPT_INVALID_FILE',
+  missing_context:'RECEIPT_CONTEXT',
+  storage:'RECEIPT_STORAGE',
+  insert_failed:'RECEIPT_INSERT',
+  insert_orphaned:'RECEIPT_ORPHAN',
+  unknown_before_upload:'RECEIPT_UNKNOWN_BEFORE_UPLOAD',
+  unknown_after_upload:'RECEIPT_UNKNOWN_AFTER_UPLOAD',
+};
+// CORRECCIÓN LOCAL COMPROBANTES 20260808-B - código diagnóstico seguro
+// (nunca un token/JWT/URL privada/header/SQL/stack trace) que acompaña al
+// mensaje de creditReceiptErrorMessage en la UI -- permite reconocer de un
+// vistazo, sin abrir la consola del navegador, en qué etapa exacta falló
+// un intento real. Complementa (no reemplaza) creditReceiptErrorMessage.
+function creditReceiptDiagnosticCode(error){
+  if(error?.creditPreviewBlocked)return'RECEIPT_LOCAL_PREVIEW';
+  return CREDIT_RECEIPT_STAGE_CODES[error?.creditStage]||'RECEIPT_UNKNOWN_AFTER_UPLOAD';
 }
 async function deleteCreditDocument(documentId){
   // CORRECCIÓN INTEGRACIÓN REAL 20260806 - TARJETAS: BUG REAL -- esta
@@ -11650,7 +11694,7 @@ async function confirmCreditReceiptUpload(movementId,input){
     }catch(refreshError){
       console.error('Comprobante de pago: se guardó pero falló el refresco de pantalla',refreshError);
       if(label){label.style.pointerEvents='';label.style.opacity='';}
-      if(status)status.innerHTML=`<span class="obligation-pill violet">${esc('El comprobante se guardó correctamente, pero la pantalla no se pudo actualizar sola. Recargá para verlo.')}</span>`;
+      if(status)status.innerHTML=`<span class="obligation-pill violet">${esc('El comprobante se guardó correctamente, pero la pantalla no se pudo actualizar sola. Recargá para verlo.')} <small>(Código: RECEIPT_REFRESH)</small></span>`;
     }
   }catch(error){
     // CORRECCIÓN 6B4.11 - mismo bug que en confirmCreditStatementDocUpload:
@@ -11658,8 +11702,12 @@ async function confirmCreditReceiptUpload(movementId,input){
     // error, sin ninguna forma de reintentar. Se restauran reutilizando el
     // mismo archivo pendiente y el mismo movement_id — nunca se sube dos
     // veces, nunca se pierde el archivo elegido.
+    // CORRECCIÓN LOCAL COMPROBANTES 20260808-B - el mensaje inline y el
+    // toast ahora muestran, además del texto amigable, el MISMO código
+    // diagnóstico seguro (creditReceiptDiagnosticCode) -- nunca texto
+    // técnico crudo, nunca secrets.
     if(label){label.style.pointerEvents='';label.style.opacity='';}
-    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))}</span>
+    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))} <small>(Código: ${esc(creditReceiptDiagnosticCode(error))})</small></span>
       <div style="margin-top:8px">
         <button type="button" class="btn primary small" data-credit-receipt-confirm="${movementId}">Reintentar</button>
         <button type="button" class="btn outline small" data-credit-receipt-cancel="${movementId}">Cancelar</button>
@@ -11672,7 +11720,7 @@ async function confirmCreditReceiptUpload(movementId,input){
         status.innerHTML='';
       };
     }
-    toast(creditReceiptErrorMessage(error));
+    toast(`${creditReceiptErrorMessage(error)} (Código: ${creditReceiptDiagnosticCode(error)})`);
   }finally{
     creditReceiptUploadsInFlight.delete(movementId);
   }
@@ -16364,7 +16412,7 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
       const migrationIssue=!creditDocumentsMigrationOk;
       const message=migrationIssue
         ?'El pago quedó registrado, pero todavía falta activar el almacenamiento de documentos de tarjetas.'
-        :`El pago quedó registrado, pero el comprobante no se pudo subir: ${creditReceiptErrorMessage(receiptError)}`;
+        :`El pago quedó registrado, pero el comprobante no se pudo subir: ${creditReceiptErrorMessage(receiptError)} (Código: ${creditReceiptDiagnosticCode(receiptError)})`;
       if(statusEl)statusEl.innerHTML=`<div class="notification-warning">${esc(message)}<br><small>Podés reintentar ahora o agregar el comprobante después desde el resumen. El pago no se duplica.</small></div>`;
       button.disabled=false;
       button.textContent='Reintentar comprobante';
@@ -16378,7 +16426,7 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
         if(retryError){
           button.disabled=false;
           button.textContent='Reintentar comprobante';
-          toast(creditReceiptErrorMessage(retryError));
+          toast(`${creditReceiptErrorMessage(retryError)} (Código: ${creditReceiptDiagnosticCode(retryError)})`);
         }else{
           closeModal();
           toast('Comprobante guardado correctamente.');
