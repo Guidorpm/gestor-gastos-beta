@@ -6861,13 +6861,35 @@ async function uploadCreditDocument(file,{cardId,statementId=null,movementId=nul
   // Storage, protege ese único punto sin tener que repetir la guarda en
   // cada llamador.
   assertCreditWriteAllowed();
-  if(!receiptFileIsAcceptable(file))throw new Error('Formato de archivo no admitido (solo PDF, JPG, PNG, WEBP o HEIC)');
-  if(file.size>10*1024*1024)throw new Error('El archivo supera el límite de 10 MB');
+  // CORRECCIÓN LOCAL COMPROBANTES 20260808 - cada excepción real de esta
+  // función queda marcada con error.creditStage (validación de archivo /
+  // contexto card-statement-movement / Storage / INSERT en documents /
+  // huérfano tras rollback fallido). Es puramente aditivo -- ningún mensaje
+  // ni control de flujo existente cambia; solo permite que el llamador
+  // (hoy, solo confirmCreditReceiptUpload -- ver creditReceiptErrorMessage)
+  // distinga la causa real sin exponer nunca el texto crudo de
+  // Postgres/Storage en la UI.
+  if(!receiptFileIsAcceptable(file)){
+    const err=new Error('Formato de archivo no admitido (solo PDF, JPG, PNG, WEBP o HEIC)');
+    err.creditStage='invalid_file';
+    throw err;
+  }
+  if(file.size>10*1024*1024){
+    const err=new Error('El archivo supera el límite de 10 MB');
+    err.creditStage='invalid_file';
+    throw err;
+  }
 
   // CORRECCIÓN INTEGRACIÓN REAL 20260806 - resuelve y valida el owner_id
   // real ANTES de tocar Storage -- si la tarjeta no existe o no tiene
   // owner_id, esto falla acá, nunca después de haber subido el archivo.
-  const ownerId=creditStorageOwnerId(cardId);
+  let ownerId;
+  try{
+    ownerId=creditStorageOwnerId(cardId);
+  }catch(contextError){
+    contextError.creditStage='missing_context';
+    throw contextError;
+  }
 
   // CORRECCIÓN 6B4.5.2 - Si el mismo archivo ya está vinculado a este mismo
   // resumen/comprobante, no se sube de nuevo: se devuelve la fila existente
@@ -6882,7 +6904,10 @@ async function uploadCreditDocument(file,{cardId,statementId=null,movementId=nul
   const {error:uploadError}=await sb.storage
     .from('documents')
     .upload(filePath,file,{contentType:file.type,upsert:false,cacheControl:'3600'});
-  if(uploadError)throw uploadError;
+  if(uploadError){
+    uploadError.creditStage='storage';
+    throw uploadError;
+  }
 
   // CORRECCIÓN 6B4.5 - Éxito atómico: subir el archivo a Storage no alcanza
   // para considerar la carga completa. Se exige que el insert en
@@ -6922,9 +6947,12 @@ async function uploadCreditDocument(file,{cardId,statementId=null,movementId=nul
       const err=new Error('El archivo quedó almacenado, pero necesita reparar su vínculo.');
       err.orphanedPath=filePath;
       err.needsReconcile=true;
+      err.creditStage='insert_orphaned';
       throw err;
     }
-    throw new Error('El archivo no pudo vincularse al resumen. No se registró como completado.');
+    const insertErr=new Error('El archivo no pudo vincularse al resumen. No se registró como completado.');
+    insertErr.creditStage='insert_failed';
+    throw insertErr;
   }
   return{filePath,document:inserted};
 }
@@ -7123,6 +7151,29 @@ function creditDocumentErrorMessage(error){
   // mensajes acordados; el detalle técnico completo queda solo en consola.
   console.error('Documentos de tarjetas:',error);
   return 'No fue posible guardar el archivo.';
+}
+// CORRECCIÓN LOCAL COMPROBANTES 20260808 - Antes, cualquier fallo al
+// guardar un comprobante de pago (validación de archivo, tarjeta/resumen
+// sin resolver, error real de Storage/RLS, error al vincular en
+// public.documents, o incluso un refresco de pantalla fallido DESPUÉS de
+// un guardado exitoso) mostraba siempre el mismo texto genérico "No fue
+// posible guardar el archivo.", indistinguible entre "no se guardó nada"
+// y "se guardó pero no se pudo confirmar en pantalla". Usa
+// error.creditStage (asignado en uploadCreditDocument, ver ahí) para
+// elegir, de forma segura, uno de un conjunto cerrado de mensajes --
+// nunca expone el texto técnico crudo de Postgres/Storage en la UI, ese
+// detalle sigue quedando solo en consola. Uso exclusivo de comprobantes
+// (confirmCreditReceiptUpload) -- no reemplaza ni modifica
+// creditDocumentErrorMessage, que sigue igual para resúmenes.
+function creditReceiptErrorMessage(error){
+  console.error('Comprobante de pago:',error);
+  if(error?.creditPreviewBlocked)return'Modo de prueba local: no se guarda nada real desde localhost/127.0.0.1.';
+  if(error?.creditStage==='invalid_file')return String(error.message||'Formato o tamaño de archivo no admitido.');
+  if(error?.creditStage==='missing_context')return'No se pudo determinar la tarjeta o el resumen de este pago. No se subió nada.';
+  if(error?.creditStage==='storage')return'No se pudo guardar el archivo en el almacenamiento. No quedó nada guardado.';
+  if(error?.creditStage==='insert_failed')return'El archivo no pudo vincularse al pago. No quedó nada guardado.';
+  if(error?.creditStage==='insert_orphaned')return'El archivo quedó guardado pero no se pudo vincular al pago. No vuelvas a subirlo -- avisá para repararlo.';
+  return'No fue posible guardar el archivo.';
 }
 async function deleteCreditDocument(documentId){
   // CORRECCIÓN INTEGRACIÓN REAL 20260806 - TARJETAS: BUG REAL -- esta
@@ -11561,11 +11612,21 @@ async function confirmCreditStatementDocUpload(statementId,input){
     toast(creditDocumentErrorMessage(error));
   }
 }
+// CORRECCIÓN LOCAL COMPROBANTES 20260808 - guarda mínima contra un doble
+// click mientras la subida sigue en curso: antes el botón "Guardar"
+// quedaba clickeable durante todo "Guardando…" y dos subidas
+// concurrentes del mismo comprobante no quedaban cubiertas por la
+// deduplicación por hash de findMatchingCreditDocument (esa solo detecta
+// un archivo ya guardado ANTES de empezar la subida actual, no dos
+// subidas simultáneas que arrancan juntas).
+const creditReceiptUploadsInFlight=new Set();
 async function confirmCreditReceiptUpload(movementId,input){
+  if(creditReceiptUploadsInFlight.has(movementId))return;
   const file=creditPendingReceiptFiles[movementId];
   if(!file)return;
   const movement=creditMovements.find(item=>item.id===movementId);
   if(!movement)return;
+  creditReceiptUploadsInFlight.add(movementId);
   const label=document.querySelector(`label[for="${input.id}"]`);
   const status=document.querySelector(`[data-credit-receipt-status="${movementId}"]`);
   if(label){label.style.pointerEvents='none';label.style.opacity='.6';}
@@ -11575,7 +11636,19 @@ async function confirmCreditReceiptUpload(movementId,input){
     delete creditPendingReceiptFiles[movementId];
     input.value='';
     toast(result.alreadyLoaded?'Este comprobante ya estaba cargado.':'Comprobante guardado correctamente.');
-    await refreshDashboardData();
+    // CORRECCIÓN LOCAL COMPROBANTES 20260808 - el comprobante ya quedó
+    // guardado en este punto (uploadCreditDocument ya devolvió éxito). Si
+    // el refresco posterior falla (red, etc.), antes ese error caía en el
+    // mismo catch de abajo y se informaba como si el comprobante NO se
+    // hubiera guardado -- un falso negativo. Ahora se maneja aparte, sin
+    // reintentar la subida (ya está hecha) y sin mostrar "Reintentar".
+    try{
+      await refreshDashboardData();
+    }catch(refreshError){
+      console.error('Comprobante de pago: se guardó pero falló el refresco de pantalla',refreshError);
+      if(label){label.style.pointerEvents='';label.style.opacity='';}
+      if(status)status.innerHTML=`<span class="obligation-pill violet">${esc('El comprobante se guardó correctamente, pero la pantalla no se pudo actualizar sola. Recargá para verlo.')}</span>`;
+    }
   }catch(error){
     // CORRECCIÓN 6B4.11 - mismo bug que en confirmCreditStatementDocUpload:
     // los botones "Guardar"/"Cancelar" desaparecían para siempre ante un
@@ -11583,7 +11656,7 @@ async function confirmCreditReceiptUpload(movementId,input){
     // mismo archivo pendiente y el mismo movement_id — nunca se sube dos
     // veces, nunca se pierde el archivo elegido.
     if(label){label.style.pointerEvents='';label.style.opacity='';}
-    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditDocumentErrorMessage(error))}</span>
+    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))}</span>
       <div style="margin-top:8px">
         <button type="button" class="btn primary small" data-credit-receipt-confirm="${movementId}">Reintentar</button>
         <button type="button" class="btn outline small" data-credit-receipt-cancel="${movementId}">Cancelar</button>
@@ -11596,7 +11669,9 @@ async function confirmCreditReceiptUpload(movementId,input){
         status.innerHTML='';
       };
     }
-    toast(creditDocumentErrorMessage(error));
+    toast(creditReceiptErrorMessage(error));
+  }finally{
+    creditReceiptUploadsInFlight.delete(movementId);
   }
 }
 function bindCreditDocuments(){
@@ -16286,7 +16361,7 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
       const migrationIssue=!creditDocumentsMigrationOk;
       const message=migrationIssue
         ?'El pago quedó registrado, pero todavía falta activar el almacenamiento de documentos de tarjetas.'
-        :`El pago quedó registrado, pero el comprobante no se pudo subir: ${creditDocumentErrorMessage(receiptError)}`;
+        :`El pago quedó registrado, pero el comprobante no se pudo subir: ${creditReceiptErrorMessage(receiptError)}`;
       if(statusEl)statusEl.innerHTML=`<div class="notification-warning">${esc(message)}<br><small>Podés reintentar ahora o agregar el comprobante después desde el resumen. El pago no se duplica.</small></div>`;
       button.disabled=false;
       button.textContent='Reintentar comprobante';
@@ -16300,7 +16375,7 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
         if(retryError){
           button.disabled=false;
           button.textContent='Reintentar comprobante';
-          toast(creditDocumentErrorMessage(retryError));
+          toast(creditReceiptErrorMessage(retryError));
         }else{
           closeModal();
           toast('Comprobante guardado correctamente.');
