@@ -78,10 +78,15 @@ class StorageUnknownError extends StorageError {
 function run(label, src) {
   const code = extractConst(src, 'RECEIPT_ALLOWED_MIME') + '\n' +
     extractConst(src, 'RECEIPT_ALLOWED_EXT') + '\n' +
+    extractConst(src, 'CREDIT_RECEIPT_STORAGE_MESSAGE_CATEGORIES') + '\n' +
     extractFunction(src, 'creditReceiptStorageSubcode') + '\n' +
     extractFunction(src, 'creditReceiptStorageStatusSuffix') + '\n' +
+    extractFunction(src, 'creditReceiptStorageSafeDetail') + '\n' +
+    extractFunction(src, 'creditReceiptFileSummary') + '\n' +
+    extractFunction(src, 'formatFileSize') + '\n' +
+    extractFunction(src, 'esc') + '\n' +
     extractFunction(src, 'receiptFileIsAcceptable') + '\n' +
-    `module.exports={creditReceiptStorageSubcode,creditReceiptStorageStatusSuffix,receiptFileIsAcceptable};\n`;
+    `module.exports={creditReceiptStorageSubcode,creditReceiptStorageStatusSuffix,creditReceiptStorageSafeDetail,creditReceiptFileSummary,receiptFileIsAcceptable};\n`;
   const tmpFile = path.join(__dirname, `_extracted_subcausa_${label.replace(/[^a-z0-9]/gi, '_')}.js`);
   fs.writeFileSync(tmpFile, code);
   delete require.cache[require.resolve(tmpFile)];
@@ -150,6 +155,68 @@ function run(label, src) {
   ok(`[${label}] HEIC con MIME real image/heic también pasa`, M.receiptFileIsAcceptable({ name: 'IMG_4821.HEIC', type: 'image/heic' }));
   ok(`[${label}] MIME vacío + extensión reconocida pasa (típico de Safari iOS)`, M.receiptFileIsAcceptable({ name: 'foto.jpg', type: '' }));
   ok(`[${label}] MIME application/octet-stream + extensión reconocida pasa`, M.receiptFileIsAcceptable({ name: 'foto.jpg', type: 'application/octet-stream' }));
+
+  // ------------------------------------------------------------
+  // AUDITORÍA LOCAL HTTP 400 20260808-D — creditReceiptStorageSafeDetail:
+  // el caso real (8374, HTTP 400, RECEIPT_STORAGE_UNKNOWN) es exactamente
+  // el escenario "sin código y sin mensaje reconocible" -- debe devolver
+  // null (nunca inventar un detalle), nunca el mensaje crudo.
+  // ------------------------------------------------------------
+  {
+    const withCode = new StorageApiError('Bad Request', 400, '400', 'InvalidRequest');
+    ok(`[${label}] safeDetail: error.code público se muestra tal cual`, M.creditReceiptStorageSafeDetail(withCode) === 'Storage code: InvalidRequest');
+
+    const withSuspiciousCode = new StorageApiError('x', 400, '400', 'eyJhbGciOiJIUzI1NiJ9.payload');
+    ok(`[${label}] safeDetail: un "code" con forma de JWT NUNCA se muestra como si fuera un código real`, M.creditReceiptStorageSafeDetail(withSuspiciousCode) !== `Storage code: ${withSuspiciousCode.code}`);
+
+    const withUrlCode = new StorageApiError('x', 400, '400', 'https://internal.example.com/leak');
+    ok(`[${label}] safeDetail: un "code" con URL nunca se muestra tal cual`, M.creditReceiptStorageSafeDetail(withUrlCode) !== `Storage code: ${withUrlCode.code}`);
+
+    const mimeMsg = new StorageApiError('Unsupported mime type detected', 400, '400');
+    ok(`[${label}] safeDetail: mensaje reconocido -> categoría segura (mime type)`, M.creditReceiptStorageSafeDetail(mimeMsg) === 'Detalle seguro: Tipo de archivo no admitido');
+
+    const malformedMsg = new StorageApiError('The request could not be parsed: malformed body', 400, '400');
+    ok(`[${label}] safeDetail: mensaje reconocido -> categoría segura (malformed)`, M.creditReceiptStorageSafeDetail(malformedMsg) === 'Detalle seguro: Solicitud mal formada');
+
+    const boundaryMsg = new StorageApiError('unexpected end of multipart boundary', 400, '400');
+    ok(`[${label}] safeDetail: mensaje reconocido -> categoría segura (multipart/boundary)`, M.creditReceiptStorageSafeDetail(boundaryMsg) === 'Detalle seguro: Error al procesar el archivo enviado');
+
+    const unrecognizedMsg = new StorageApiError('something completely unexpected happened internally', 400, '400');
+    ok(`[${label}] safeDetail: mensaje no reconocido -> null (nunca se inventa una categoría)`, M.creditReceiptStorageSafeDetail(unrecognizedMsg) === null);
+
+    // "Bad Request" es el texto de razón HTTP genérico (fallback real de
+    // storage-js cuando el body de la respuesta no es JSON válido, ver
+    // Vt() en el bundle) -- coincide legítimamente con el patrón
+    // "bad request" -> no es un bug del clasificador, es información
+    // real (aunque poco específica, igual de específica que el status).
+    const genericBadRequest = new StorageApiError('Bad Request', 400, '400');
+    ok(`[${label}] safeDetail: "Bad Request" (fallback real de statusText) sí coincide con la categoría genérica`, M.creditReceiptStorageSafeDetail(genericBadRequest) === 'Detalle seguro: Solicitud mal formada');
+
+    // Caso realmente sin ninguna señal aprovechable: sin code, mensaje que
+    // no coincide con ninguna de las 5 categorías conocidas -- éste es el
+    // escenario que NO debe inventar nada (posible causa real de 8374 si
+    // el mensaje real de Supabase fue distinto de los patrones cubiertos).
+    const noUsableSignal = new StorageApiError('Internal error', 400, '400');
+    ok(`[${label}] safeDetail: sin code ni mensaje reconocible -> null, no inventa nada`, M.creditReceiptStorageSafeDetail(noUsableSignal) === null);
+
+    // Nunca debe aparecer "Bearer", un JWT (prefijo eyJ) o una URL en NINGÚN
+    // resultado de safeDetail, sin importar qué contenga error.message.
+    const sensitiveMsg = new StorageApiError('failed with Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc at https://xyz.supabase.co/storage/v1/object/documents/secret', 400, '400');
+    const detail = M.creditReceiptStorageSafeDetail(sensitiveMsg);
+    ok(`[${label}] safeDetail: mensaje con Bearer/JWT/URL nunca se filtra crudo`, detail === null || !/Bearer|eyJ|https?:\/\//.test(detail));
+  }
+
+  // ------------------------------------------------------------
+  // AUDITORÍA LOCAL HTTP 400 20260808-D — creditReceiptFileSummary: nunca
+  // expone ruta local (file.name de un <input type=file> nunca la trae),
+  // siempre extensión+tamaño+MIME (o "MIME vacío").
+  // ------------------------------------------------------------
+  {
+    ok(`[${label}] fileSummary: JPEG normal`, M.creditReceiptFileSummary({ name: 'foto.jpg', size: 182 * 1024, type: 'image/jpeg' }) === 'Archivo: JPG · 182.0 KB · image/jpeg');
+    ok(`[${label}] fileSummary: HEIC con MIME vacío (caso típico iPhone)`, M.creditReceiptFileSummary({ name: 'IMG_4821.HEIC', size: 1.4 * 1024 * 1024, type: '' }) === `Archivo: HEIC · ${M.creditReceiptFileSummary({ name: 'x', size: 1.4 * 1024 * 1024, type: 'x' }).split(' · ')[1]} · MIME vacío`);
+    ok(`[${label}] fileSummary: nunca contiene "/" ni "\\\\" propios de una ruta de archivo (más allá del MIME, que sí lleva "/")`, !/[a-zA-Z]:\\|\/(Users|home|var|private)\//.test(M.creditReceiptFileSummary({ name: 'foto.jpg', size: 100, type: 'image/jpeg' })));
+    ok(`[${label}] fileSummary: PDF de resumen (mismo formato que un comprobante)`, M.creditReceiptFileSummary({ name: 'resumen.pdf', size: 500 * 1024, type: 'application/pdf' }).startsWith('Archivo: PDF ·'));
+  }
 
   fs.unlinkSync(tmpFile);
 }

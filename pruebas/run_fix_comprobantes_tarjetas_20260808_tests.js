@@ -64,6 +64,7 @@ const ENGINE_FUNCTIONS = [
   'findMatchingCreditDocument', 'uploadCreditDocument',
   'creditDocumentErrorMessage', 'creditReceiptErrorMessage', 'creditReceiptDiagnosticCode',
   'creditReceiptStorageSubcode', 'creditReceiptStorageStatusSuffix',
+  'creditReceiptStorageSafeDetail', 'creditReceiptFileSummary', 'formatFileSize',
   'confirmCreditReceiptUpload',
 ];
 
@@ -73,6 +74,7 @@ function buildEngineRuntime(src) {
   code += `let creditDocumentsMigrationOk=true;\n`;
   code += extractConst(src, 'creditReceiptUploadsInFlight') + '\n';
   code += extractConst(src, 'CREDIT_RECEIPT_STAGE_CODES') + '\n';
+  code += extractConst(src, 'CREDIT_RECEIPT_STORAGE_MESSAGE_CATEGORIES') + '\n';
   for (const n of ENGINE_FUNCTIONS) code += extractFunction(src, n) + '\n';
   code += `
 // ============================================================

@@ -7253,6 +7253,48 @@ function creditReceiptStorageSubcode(error){
 function creditReceiptStorageStatusSuffix(error){
   return Number.isFinite(Number(error?.status))?` · HTTP ${Number(error.status)}`:'';
 }
+// AUDITORÍA LOCAL HTTP 400 20260808-D - Cuando el subcódigo queda en
+// RECEIPT_STORAGE_UNKNOWN (como el intento real de 8374, HTTP 400 sin
+// coincidir con ningún patrón conocido), esto agrega UNA línea extra de
+// detalle, siempre a través de una lista cerrada de categorías seguras --
+// NUNCA el texto crudo de error.message. error.code es un identificador
+// corto y público de la propia API de Storage (ej. "InvalidRequest",
+// nunca un secreto) -- se muestra tal cual solo si tiene forma de código
+// corto (nunca si contiene una URL, "Bearer" o el prefijo típico de un
+// JWT "eyJ", lo que descartaría que sea realmente un código y no texto
+// filtrado por error). Si no hay error.code utilizable, se intenta
+// reconocer el mensaje contra categorías conocidas (mismo patrón que
+// creditDocumentErrorMessage ya usa para "row-level security"/"policy");
+// si no coincide con ninguna, no se muestra ningún detalle adicional
+// (nunca se inventa uno).
+const CREDIT_RECEIPT_STORAGE_MESSAGE_CATEGORIES=[
+  {test:/mime type/i,label:'Tipo de archivo no admitido'},
+  {test:/content-type|content type/i,label:'Tipo de contenido inválido'},
+  {test:/malformed|bad request|invalid request/i,label:'Solicitud mal formada'},
+  {test:/metadata/i,label:'Error en metadatos del archivo'},
+  {test:/boundary|multipart/i,label:'Error al procesar el archivo enviado'},
+];
+function creditReceiptStorageSafeDetail(error){
+  const code=error?.code;
+  if(code&&typeof code==='string'&&code.length<=64&&!/[.\/]{2,}|https?:|bearer|eyJ/i.test(code)){
+    return `Storage code: ${code}`;
+  }
+  const raw=String(error?.message||'');
+  const match=CREDIT_RECEIPT_STORAGE_MESSAGE_CATEGORIES.find(c=>c.test.test(raw));
+  return match?`Detalle seguro: ${match.label}`:null;
+}
+// AUDITORÍA LOCAL HTTP 400 20260808-D - metadatos seguros del archivo
+// elegido, para poder reconstruir el caso real en el próximo intento sin
+// exponer la ruta local del dispositivo (los navegadores nunca entregan
+// esa ruta en file.name -- ya viene solo con el nombre base).
+function creditReceiptFileSummary(file){
+  const name=String(file?.name||'');
+  const dot=name.lastIndexOf('.');
+  const ext=dot>-1?name.slice(dot+1).toUpperCase():'SIN EXTENSIÓN';
+  const size=formatFileSize(file?.size||0);
+  const mime=file?.type?file.type:'MIME vacío';
+  return `Archivo: ${ext} · ${size} · ${esc(mime)}`;
+}
 // CORRECCIÓN LOCAL COMPROBANTES 20260808-B - código diagnóstico seguro
 // (nunca un token/JWT/URL privada/header/SQL/stack trace) que acompaña al
 // mensaje de creditReceiptErrorMessage en la UI -- permite reconocer de un
@@ -11751,7 +11793,13 @@ async function confirmCreditReceiptUpload(movementId,input){
     // diagnóstico seguro (creditReceiptDiagnosticCode) -- nunca texto
     // técnico crudo, nunca secrets.
     if(label){label.style.pointerEvents='';label.style.opacity='';}
-    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))} <small>(Código: ${esc(creditReceiptDiagnosticCode(error))})</small></span>
+    // AUDITORÍA LOCAL HTTP 400 20260808-D - cuando el fallo fue de Storage,
+    // se agregan hasta 2 líneas extra, seguras: un detalle específico (solo
+    // si se pudo reconocer, nunca inventado) y los metadatos del archivo
+    // elegido (extensión/tamaño/MIME -- nunca la ruta local del disco).
+    const safeDetail=error?.creditStage==='storage'?creditReceiptStorageSafeDetail(error):null;
+    const fileDetailLine=error?.creditStage==='storage'?`<br><small>${esc(creditReceiptFileSummary(file))}</small>`:'';
+    if(status)status.innerHTML=`<span class="obligation-pill violet">${esc(creditReceiptErrorMessage(error))} <small>(Código: ${esc(creditReceiptDiagnosticCode(error))})</small>${safeDetail?`<br><small>${esc(safeDetail)}</small>`:''}${fileDetailLine}</span>
       <div style="margin-top:8px">
         <button type="button" class="btn primary small" data-credit-receipt-confirm="${movementId}">Reintentar</button>
         <button type="button" class="btn outline small" data-credit-receipt-cancel="${movementId}">Cancelar</button>
@@ -11764,7 +11812,7 @@ async function confirmCreditReceiptUpload(movementId,input){
         status.innerHTML='';
       };
     }
-    toast(`${creditReceiptErrorMessage(error)} (Código: ${creditReceiptDiagnosticCode(error)})`);
+    toast(`${creditReceiptErrorMessage(error)} (Código: ${creditReceiptDiagnosticCode(error)})${safeDetail?` · ${safeDetail}`:''}`);
   }finally{
     creditReceiptUploadsInFlight.delete(movementId);
   }
