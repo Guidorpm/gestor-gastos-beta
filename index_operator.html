@@ -17303,6 +17303,28 @@ function renderApp(){
   if(tab==='users'&&!isOwner())tab='services';
   saveNavigationState();
 
+  // MEJORA — CONSERVAR CONTEXTO DE NAVEGACIÓN: renderApp() reconstruye
+  // app.innerHTML/content.innerHTML por completo en cada operación normal
+  // (subir factura/comprobante, registrar pago, editar, etc., vía
+  // refreshDashboardData()) -- eso borra el scroll vertical de la página y
+  // crea un ".matrix-scroll" nuevo con scrollLeft/scrollTop en 0 (columna
+  // Enero, tope de la tabla), aunque el usuario estuviera viendo agosto y
+  // desplazado hacia abajo. Se captura el estado ANTES de reconstruir, y
+  // se restaura después de que el DOM nuevo exista. Si el mes base no
+  // cambió respecto del render anterior, se restaura el scroll exacto
+  // (misma fila/columna en la que estaba trabajando); si cambió (mes
+  // elegido explícitamente con ‹ Mes/Mes ›/clic en el resumen anual), se
+  // lleva la vista a la columna del mes nuevo en lugar de dejarla en
+  // Enero. Alcance de sesión en memoria (variables JS) -- no se persiste
+  // nada nuevo, no es información sensible.
+  const prevScrollY=window.scrollY;
+  const prevMatrixScroll=document.querySelector('.matrix-scroll');
+  const prevMatrixState=prevMatrixScroll?{
+    baseMonth:prevMatrixScroll.dataset.baseMonth,
+    left:prevMatrixScroll.scrollLeft,
+    top:prevMatrixScroll.scrollTop
+  }:null;
+
   app.innerHTML=`<div class="top"><div class="topin">
     <div class="brand">
       <div class="mark">${group.type==='company'?'E':'F'}</div>
@@ -17353,6 +17375,38 @@ function renderApp(){
     content.innerHTML=renderUsersAccess();
     bindUsersAccess();
   }
+
+  restoreNavigationScroll(prevScrollY,prevMatrixState);
+}
+// MEJORA — CONSERVAR CONTEXTO DE NAVEGACIÓN: separada de renderApp() para
+// poder llamarla también, con los mismos criterios, después de reabrir un
+// grupo con contexto guardado. requestAnimationFrame espera a que el DOM
+// recién insertado ya tenga layout (alto/ancho reales) antes de tocar
+// scrollTop/scrollLeft -- si se restaura en el mismo tick que el innerHTML,
+// el navegador todavía puede no tener las medidas finales.
+function restoreNavigationScroll(prevScrollY,prevMatrixState){
+  requestAnimationFrame(()=>{
+    window.scrollTo(0,prevScrollY);
+    const matrixScroll=document.querySelector('.matrix-scroll');
+    if(!matrixScroll)return;
+    if(prevMatrixState&&prevMatrixState.baseMonth===baseMonth){
+      matrixScroll.scrollLeft=prevMatrixState.left;
+      matrixScroll.scrollTop=prevMatrixState.top;
+    }else{
+      scrollMatrixToBaseMonth(matrixScroll);
+    }
+  });
+}
+// Lleva el ".matrix-scroll" a la columna de baseMonth (Servicio=1° columna,
+// Enero=2°, ... Diciembre=13°, Carpeta=14°) sin animación -- se usa cuando
+// no hay una posición previa que restaurar para el mismo mes (primera
+// carga de la sesión, cambio de mes deliberado, o llegada desde otra
+// pestaña/espacio).
+function scrollMatrixToBaseMonth(matrixScroll){
+  const monthNumber=Number(baseMonth.slice(5,7));
+  if(!monthNumber)return;
+  const th=matrixScroll.querySelector(`table thead tr th:nth-child(${monthNumber+1})`);
+  if(th)th.scrollIntoView({behavior:'auto',block:'nearest',inline:'nearest'});
 }
 function obligationFor(serviceId,key){return obligations.find(o=>o.service_id===serviceId&&o.period===periodDate(key))}
 function normalizeServiceName(value){
@@ -18258,7 +18312,7 @@ function renderServices(ms){
 
   <div class="matrix card">
     <div class="sub" style="padding:12px 14px 0">Desplazá abajo de izquierda a derecha para recorrer de Enero a Diciembre.</div>
-    <div class="matrix-scroll">
+    <div class="matrix-scroll" data-base-month="${baseMonth}">
     <table>
       <thead>
         <tr>
