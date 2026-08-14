@@ -10,12 +10,22 @@
 //      exacto; mes distinto -> saltar a la columna del mes nuevo; sin
 //      mes actual -> mismo default de getSavedBaseMonth());
 //   2) lee el TEXTO real de ambos archivos para confirmar que las
-//      funciones nuevas existen, son byte-idénticas entre index.html e
-//      index_operator.html, y que el resto del archivo (comparado
-//      contra el respaldo tomado antes de este cambio) no perdió ni
-//      alteró ninguna línea previa -- solo se agregaron líneas nuevas y
-//      se modificó exactamente 1 línea existente por archivo (el div
-//      .matrix-scroll, al que se le agregó data-base-month).
+//      funciones/atributos clave siguen existiendo, que la lógica es
+//      byte-idéntica entre index.html e index_operator.html (comparando
+//      el archivo ACTUAL contra sí mismo entre ambos, nunca contra un
+//      respaldo histórico -- así la prueba no se vuelve obsoleta cada
+//      vez que una mejora POSTERIOR legítima toca otras partes del
+//      archivo), y que Tarjetas no fue tocada por el buscador (mejora
+//      #2), usando el respaldo tomado inmediatamente antes de esa tarea
+//      puntual.
+//
+// REVISIÓN 2 (20260814) — se reemplazaron los CASO 10/10b originales
+// ("ninguna línea nueva respecto del respaldo de la mejora #1"), que por
+// diseño interpretaban CUALQUIER cambio posterior legítimo del archivo
+// (p.ej. la mejora #2, buscador de servicios) como una regresión falsa.
+// Los checks nuevos están focalizados en las invariantes que realmente
+// importan para esta mejora puntual -- no en "el archivo completo no
+// cambió nunca más".
 //
 // Lo que esta prueba NO puede confirmar (requiere navegador real, ver
 // "PRUEBAS MANUALES" en el reporte de entrega):
@@ -136,7 +146,7 @@ caso('CASO 7 — registro/edición normal que produce re-render -> conserva cont
   assert.strictEqual(decision.top, 120);
 });
 
-// ---------------- 8/9 — paridad titular/operador (confirmación estructural) ----------------
+// ---------------- Extracción del bloque real (index.html / index_operator.html) ----------------
 
 const ROOT = path.join(__dirname, '..');
 const indexPath = path.join(ROOT, 'index.html');
@@ -152,75 +162,90 @@ function extractBetween(text, startMarker, endMarker) {
   return text.slice(startIdx, endIdx + endMarker.length);
 }
 
-caso('CASO 8/9 — index.html e index_operator.html implementan EXACTAMENTE la misma lógica (paridad titular/operador)', () => {
-  const bloqueIndex = extractBetween(indexText, 'function renderApp(){', 'function obligationFor(');
-  const bloqueOperator = extractBetween(operatorText, 'function renderApp(){', 'function obligationFor(');
-  assert.strictEqual(bloqueIndex, bloqueOperator, 'renderApp()/restoreNavigationScroll()/scrollMatrixToBaseMonth() deben ser byte-idénticos entre ambos archivos');
+const bloqueNavegacionIndex = extractBetween(indexText, 'function renderApp(){', 'function obligationFor(');
+const bloqueNavegacionOperator = extractBetween(operatorText, 'function renderApp(){', 'function obligationFor(');
 
+// ---------------- 8 — existencia de las invariantes clave de la mejora #1 ----------------
+// Reemplaza el viejo "ninguna línea nueva respecto al respaldo histórico"
+// por chequeos puntuales de las piezas concretas que esta mejora agregó
+// -- detectan una regresión real (que alguien borre/rompa alguna de
+// estas piezas) sin depender de que el resto del archivo se congele para
+// siempre.
+
+caso('CASO 8 — existen las piezas clave (restoreNavigationScroll, scrollMatrixToBaseMonth, data-base-month) y renderApp() las usa en el orden correcto', () => {
+  assert.ok(indexText.includes('function restoreNavigationScroll(prevScrollY,prevMatrixState){'), 'debe existir restoreNavigationScroll() con esa firma en index.html');
+  assert.ok(indexText.includes('function scrollMatrixToBaseMonth(matrixScroll){'), 'debe existir scrollMatrixToBaseMonth() con esa firma en index.html');
   assert.ok(indexText.includes('data-base-month="${baseMonth}"'), 'index.html debe marcar el .matrix-scroll con data-base-month');
   assert.ok(operatorText.includes('data-base-month="${baseMonth}"'), 'index_operator.html debe marcar el .matrix-scroll con data-base-month');
+
+  // renderApp() debe: capturar scroll ANTES de reconstruir, y llamar a
+  // restoreNavigationScroll() DESPUÉS -- si alguien invirtiera el orden
+  // (o borrara alguno de los pasos), este caso debe fallar.
+  const renderAppBody = bloqueNavegacionIndex.slice(0, bloqueNavegacionIndex.indexOf('function restoreNavigationScroll('));
+  const capturaIdx = renderAppBody.indexOf('const prevScrollY=window.scrollY;');
+  const appInnerHtmlIdx = renderAppBody.indexOf('app.innerHTML=');
+  const llamadaRestoreIdx = renderAppBody.indexOf('restoreNavigationScroll(prevScrollY,prevMatrixState);');
+  assert.ok(capturaIdx !== -1, 'renderApp() debe capturar window.scrollY en prevScrollY');
+  assert.ok(appInnerHtmlIdx !== -1, 'renderApp() debe reconstruir app.innerHTML (lo que reinicia el scroll)');
+  assert.ok(llamadaRestoreIdx !== -1, 'renderApp() debe llamar a restoreNavigationScroll(prevScrollY,prevMatrixState)');
+  assert.ok(capturaIdx < appInnerHtmlIdx, 'la captura de scroll debe ocurrir ANTES de reconstruir app.innerHTML');
+  assert.ok(appInnerHtmlIdx < llamadaRestoreIdx, 'la restauración debe llamarse DESPUÉS de reconstruir el DOM');
 });
 
-// ---------------- 10 — no altera lógica de datos preexistente (confirmación estructural) ----------------
+// ---------------- 9 — paridad titular/operador (archivo actual contra archivo actual) ----------------
+// A diferencia de los viejos CASO 10/10b, esta comparación es SIEMPRE
+// entre el estado actual de ambos archivos -- nunca contra un respaldo
+// histórico -- así que sigue siendo válida sin importar cuántas mejoras
+// legítimas posteriores toquen otras partes de cada archivo, siempre que
+// index.html e index_operator.html se mantengan en paridad entre sí
+// (la regla real que importa).
 
-const BACKUP_DIR = path.join(ROOT, 'respaldos_publicacion', 'antes_conservar_contexto_navegacion_20260813_091536');
-const backupIndexPath = path.join(BACKUP_DIR, 'index.html.antes_conservar_contexto');
-const backupOperatorPath = path.join(BACKUP_DIR, 'index_operator.html.antes_conservar_contexto');
-
-function countLines(text) {
-  const map = new Map();
-  // Normaliza CRLF/LF antes de partir en líneas -- el repo usa CRLF en
-  // estos archivos, y sin normalizar cada línea quedaría con un "\r"
-  // colgando que rompería la comparación por igualdad exacta.
-  for (const line of text.replace(/\r\n/g, '\n').split('\n')) map.set(line, (map.get(line) || 0) + 1);
-  return map;
-}
-
-// Chequeo de multiconjunto de líneas (NO es un diff real, no detecta
-// reordenamiento) -- pero SÍ detecta con precisión si alguna línea
-// preexistente fue borrada o alterada: para cada línea del respaldo,
-// exige que siga apareciendo en el archivo actual la misma cantidad de
-// veces, salvo el único cambio permitido y documentado (la línea del
-// div .matrix-scroll, que gana el atributo data-base-month).
-function lineasPerdidasOAlteradas(backupText, currentText, lineasPermitidasAPerder) {
-  const backupCounts = countLines(backupText);
-  const currentCounts = countLines(currentText);
-  const problemas = [];
-  for (const [linea, cantidadRespaldo] of backupCounts) {
-    const cantidadActual = currentCounts.get(linea) || 0;
-    const faltante = cantidadRespaldo - cantidadActual;
-    if (faltante > 0) {
-      const permitido = lineasPermitidasAPerder.get(linea) || 0;
-      if (faltante > permitido) {
-        problemas.push({ linea, cantidadRespaldo, cantidadActual, faltante });
-      }
-    }
-  }
-  return problemas;
-}
-
-caso('CASO 10 — no se perdió ni alteró ninguna línea preexistente de index.html (solo el cambio documentado)', () => {
-  const backupText = fs.readFileSync(backupIndexPath, 'utf8');
-  const permitidas = new Map([['    <div class="matrix-scroll">', 1]]);
-  const problemas = lineasPerdidasOAlteradas(backupText, indexText, permitidas);
-  assert.deepStrictEqual(problemas, [], 'no debería haberse borrado/alterado ninguna línea preexistente fuera de la documentada');
+caso('CASO 9 — index.html e index_operator.html implementan EXACTAMENTE la misma lógica de navegación (paridad titular/operador)', () => {
+  assert.strictEqual(bloqueNavegacionIndex, bloqueNavegacionOperator, 'renderApp()/restoreNavigationScroll()/scrollMatrixToBaseMonth() deben ser byte-idénticos entre ambos archivos');
 });
 
-caso('CASO 10b — no se perdió ni alteró ninguna línea preexistente de index_operator.html (solo el cambio documentado)', () => {
-  const backupText = fs.readFileSync(backupOperatorPath, 'utf8');
-  const permitidas = new Map([['    <div class="matrix-scroll">', 1]]);
-  const problemas = lineasPerdidasOAlteradas(backupText, operatorText, permitidas);
-  assert.deepStrictEqual(problemas, [], 'no debería haberse borrado/alterado ninguna línea preexistente fuera de la documentada');
-});
+// ---------------- 10 — Tarjetas no fue tocada por el buscador (mejora #2) ----------------
+// Comparación FOCALIZADA contra el respaldo tomado inmediatamente antes
+// de la mejora #2 (buscador de servicios) -- no contra el respaldo
+// original de la mejora #1. Esto es intencional: lo que este caso debe
+// detectar es "¿el buscador tocó Tarjetas?", no "¿cambió algo en el
+// archivo desde hace dos mejoras?". Si en el futuro se agrega una nueva
+// mejora, este puntero de respaldo puede necesitar actualizarse de
+// nuevo -- es una limitación inherente a comparar contra una foto fija
+// en vez de contra el historial de git; se documenta acá para que quede
+// explícita, no oculta.
+const BACKUP_BUSCADOR_DIR = path.join(ROOT, 'respaldos_publicacion', 'antes_buscador_servicios_20260814_110248');
+const backupPreBuscadorIndexPath = path.join(BACKUP_BUSCADOR_DIR, 'index.html.antes_buscador');
 
-// ---------------- 11 — Tarjetas no fue tocada (confirmación estructural) ----------------
-
-caso('CASO 11 — Tarjetas (renderCreditCardsModule y su propio restore de scrollY) permanece intacta', () => {
-  const backupText = fs.readFileSync(backupIndexPath, 'utf8');
-  const bloqueBackup = extractBetween(backupText, 'function renderCreditCardsModule(', 'function bindCreditCardsModule(');
+caso('CASO 10 — Tarjetas (renderCreditCardsModule) no fue modificada por el buscador de servicios', () => {
   const bloqueActual = extractBetween(indexText, 'function renderCreditCardsModule(', 'function bindCreditCardsModule(');
-  assert.strictEqual(bloqueActual, bloqueBackup, 'renderCreditCardsModule() no debe cambiar ni una línea en esta tarea');
+
+  // Comparación focalizada contra el respaldo tomado inmediatamente antes
+  // de la mejora #2 -- detecta si el buscador tocó Tarjetas.
+  const backupText = fs.readFileSync(backupPreBuscadorIndexPath, 'utf8');
+  const bloqueBackup = extractBetween(backupText, 'function renderCreditCardsModule(', 'function bindCreditCardsModule(');
+  assert.strictEqual(bloqueActual, bloqueBackup, 'renderCreditCardsModule() no debe haber cambiado desde justo antes de la mejora del buscador');
+
+  // Chequeo complementario que NO depende de ningún archivo de respaldo
+  // -- confirma directamente sobre el archivo actual que la línea
+  // concreta que Tarjetas usa para restaurar su scroll sigue presente.
+  // Si algún día el respaldo de arriba quedara desactualizado o se
+  // perdiera, este chequeo igual sigue detectando una regresión real.
   assert.ok(bloqueActual.includes('requestAnimationFrame(()=>window.scrollTo(0,scrollY));'), 'el restore de scroll propio de Tarjetas debe seguir presente sin modificar');
+});
+
+// ---------------- 11 — el buscador de servicios (mejora #2) coexiste sin invalidar la navegación ----------------
+
+caso('CASO 11 — el buscador de servicios no interfiere con la lógica de navegación', () => {
+  assert.ok(indexText.includes('function goToServiceRow('), 'debe existir goToServiceRow() (mejora #2) conviviendo en el mismo archivo');
+  const goToServiceRowSrc = indexText.slice(indexText.indexOf('function goToServiceRow('), indexText.indexOf('function openServiceModal('));
+  assert.ok(!goToServiceRowSrc.includes('renderApp()'), 'goToServiceRow() no debe llamar a renderApp() -- si lo hiciera, podría disparar restoreNavigationScroll() con un estado inconsistente');
+  assert.ok(!goToServiceRowSrc.includes('baseMonth='), 'goToServiceRow() no debe reasignar baseMonth');
+  assert.ok(!goToServiceRowSrc.includes('.scrollLeft='), 'goToServiceRow() no debe fijar scrollLeft manualmente -- no debe pisar el mecanismo de restoreNavigationScroll()/scrollMatrixToBaseMonth()');
+  // Las dos mejoras usan atributos data-* distintos sobre la misma fila
+  // (data-service-row para el buscador, data-base-month para el
+  // .matrix-scroll) -- confirma que no colisionan en el mismo selector.
+  assert.ok(indexText.includes('<tr data-service-row="${s.id}">'), 'cada fila debe seguir marcada con data-service-row para que el buscador la pueda ubicar');
 });
 
 // ---------------- 12 — no modifica Supabase (confirmación de alcance) ----------------
