@@ -45,7 +45,19 @@ function extract(text, startMarker, endMarker) {
 
 // ---------------- Extracción del bloque real del buscador (index.html) ----------------
 
-const searchBlockSource = extract(indexText, 'function normalizeSearchText(value){', 'function openServiceModal(');
+// AJUSTE (mejora #3 — panel de prioridades): el marcador de fin original
+// era 'function openServiceModal(', la siguiente función real en el
+// archivo AL MOMENTO de escribir este test. Al agregarse el panel de
+// prioridades justo después de goToServiceRow() (y antes de
+// openServiceModal), ese marcador dejó de delimitar el bloque del
+// buscador -- pasó a incluir también el código NUEVO del panel, cuyos
+// propios comentarios mencionan "creditCards"/"Supabase" al explicar que
+// NO los toca, disparando falsos positivos en los checks de aislamiento
+// (CASO 6/7). El marcador correcto es el límite real del buscador: el
+// comentario con el que arranca la siguiente mejora, sea cual sea. Esto
+// es lo estrictamente necesario para que el test siga siendo válido; no
+// se tocó ninguna otra lógica de este archivo.
+const searchBlockSource = extract(indexText, 'function normalizeSearchText(value){', '// MEJORA — PANEL OPERATIVO POR PRIORIDADES:');
 const renderServicesSource = extract(indexText, 'function renderServices(ms){', 'function balanceData(');
 
 // ---------------- Fixtures mínimos para poder EJECUTAR el código real ----------------
@@ -152,7 +164,7 @@ caso('CASO 10 — funciona junto con la lógica de conservación de scroll (mejo
 });
 
 caso('CASO 11 — paridad exacta titular/operador', () => {
-  const searchBlockOperator = extract(operatorText, 'function normalizeSearchText(value){', 'function openServiceModal(');
+  const searchBlockOperator = extract(operatorText, 'function normalizeSearchText(value){', '// MEJORA — PANEL OPERATIVO POR PRIORIDADES:');
   assert.strictEqual(searchBlockSource, searchBlockOperator, 'el bloque completo del buscador debe ser byte-idéntico entre index.html e index_operator.html');
 
   const renderServicesOperator = extract(operatorText, 'function renderServices(ms){', 'function balanceData(');
