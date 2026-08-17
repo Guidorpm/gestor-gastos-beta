@@ -188,12 +188,27 @@ caso('CASO 14 — no modifica Supabase (mismo chequeo que CASO 7, a nivel de tod
   assert.ok(!/\.insert\(|\.update\(|\.delete\(|\.upsert\(/.test(searchBlockSource), 'el bloque del buscador no debe contener ninguna operación de escritura');
 });
 
-caso('CASO 15 — no altera cálculos de deuda/pagos (boxText/balanceFor/paymentProgress intactos)', () => {
-  const backupIndexPath = path.join(ROOT, 'respaldos_publicacion', 'antes_buscador_servicios_20260814_110248', 'index.html.antes_buscador');
-  const backupText = fs.readFileSync(backupIndexPath, 'utf8');
-  const boxBackup = extract(backupText, 'function boxClass(o)', 'function lastKnownAmount(');
-  const boxCurrent = extract(indexText, 'function boxClass(o)', 'function lastKnownAmount(');
-  assert.strictEqual(boxBackup, boxCurrent, 'boxClass/boxText no deben cambiar -- el buscador solo los REUTILIZA, nunca los modifica');
+// AJUSTE — MEJORA "SEGUNDO VENCIMIENTO + CENTAVOS + PAGOS + ALLOCATIONS"
+// (20260816): este caso comparaba boxClass/boxText byte a byte contra el
+// respaldo previo al buscador (14/08). Eso funcionó mientras nada
+// legítimo tocara boxText/boxClass después del buscador -- pero desde
+// entonces SÍ los tocaron mejoras autorizadas y ya cerradas (segundo
+// vencimiento, precisión decimal), que además tienen su propia suite
+// dedicada (run_segundo_vencimiento_pagos_tests.js) verificando ese
+// comportamiento en detalle. Comparar contra un respaldo cada vez más
+// viejo iba a seguir dando falsos positivos con cada mejora legítima
+// futura. El invariante real que le importa a ESTE archivo (que el
+// buscador reutiliza boxText/obligationFor en vez de un cálculo
+// paralelo) no depende de que boxText nunca cambie -- se verifica
+// directamente sobre serviceSearchResultHtml(), sin comparar contra
+// ningún respaldo histórico.
+caso('CASO 15 — no duplica cálculos de deuda/pagos (serviceSearchResultHtml reutiliza boxText/obligationFor reales, nunca un cálculo paralelo)', () => {
+  for (const text of [indexText, operatorText]) {
+    const fnSearchResult = extract(text, 'function serviceSearchResultHtml(s){', 'function closeServiceSearchResults(');
+    assert.ok(fnSearchResult.includes('obligationFor(s.id,baseMonth)'), 'debe usar la obligación real del mes vigente, la misma que arma la matriz');
+    assert.ok(fnSearchResult.includes('boxText(o,s)'), 'debe reutilizar boxText() real -- nunca un cálculo de estado/deuda propio');
+    assert.ok(!/dueState\(|paymentProgress\(|balanceFor\(/.test(fnSearchResult), 'no debe llamar directamente a las funciones de más bajo nivel -- boxText() ya las encapsula, evita un segundo camino de cálculo');
+  }
 });
 
 caso('CASO 16 — tolerante a acentos (normalización simple vía NFD)', () => {

@@ -84,11 +84,34 @@ const blockBoxText = extract(indexText, 'function boxText(o,service){', 'functio
 const blockReceiptsForObligation = extract(indexText, 'function receiptsForObligation(obligationId){', 'async function syncObligationStatus(');
 const lnPriorityOrder = extract(indexText, 'const PRIORITY_CATEGORY_ORDER=[', '\n');
 const blockOperational = extract(indexText, 'function operationalServiceRowHtml(s,key){', 'function renderServices(ms){');
+// AJUSTE — MEJORA "SEGUNDO VENCIMIENTO + PAGOS PARCIALES/EXCEDENTES":
+// operationalServiceRowHtml() ahora también llama a previousBalanceFor()
+// (saldo anterior, puramente informativo) -- esta extracción NO estaba en
+// el bundle original porque esa función todavía no existía cuando este
+// test se escribió. No es un cambio de comportamiento del resto de la
+// Vista Operativa: se agrega la cadena real de la que depende
+// previousBalanceFor() (balanceFor/calculateRealObligationBalance/
+// paidAmountForWithAllocations/isEffectivePending/consolidationForSource),
+// nunca una copia. Los casos de esta mejora específica tienen su propia
+// suite dedicada: pruebas/run_segundo_vencimiento_pagos_tests.js.
+// Nota: NO se incluye la función corta paidAmountFor() ni creditBalanceFor()
+// a propósito -- este archivo ya mockea paidAmountFor()/consolidationTarget()
+// como bordes documentados (ver arriba) para no depender de payments/
+// paymentAllocations/consolidations reales en el resto de los casos.
+// balanceFor() (para previousBalanceFor) llama a
+// calculateRealObligationBalance()->paidAmountForWithAllocations(), NUNCA
+// a la función corta paidAmountFor() -- así que puede incluirse sin pisar
+// ese mock.
+const blockPaidAmountForAllocations = extract(indexText, 'function paidAmountForWithAllocations(obligationId,paymentsList,allocationsList){', 'function isServiceVisibleForCurrentContext(');
+const blockBalanceOnly = extract(indexText, 'function balanceFor(obligation){', '// CORRECCIÓN 6B4.15 - Un importe corregido a la baja');
+const blockConsolidationAndPreviousBalance = extract(indexText, 'function consolidationForSource(', 'function dueState(o){');
 
 const REAL_SOURCE = [
   fnFmtDateEsc, fnToday, fnDaysUntil, fnIsOwner, lnMonths, fnMonthLabelFmtMoney,
   fnPeriodDate, fnObligationFor, blockObligationMeta, blockFmtUsdFormatUsd,
-  blockPaymentProgress, blockFreqPlanEmptyPaymentsFor, blockDueState, fnBoxClass,
+  blockPaidAmountForAllocations, blockBalanceOnly,
+  blockPaymentProgress, blockFreqPlanEmptyPaymentsFor,
+  blockConsolidationAndPreviousBalance, blockDueState, fnBoxClass,
   blockBoxText, blockReceiptsForObligation, lnPriorityOrder, blockOperational,
 ].join('\n');
 
@@ -105,13 +128,18 @@ function FixedDateFactory(fixedIso) {
   };
 }
 
-function buildSandbox({ now, obligations, services, documents, payments, members, group, session, baseMonth, consolidationTargetsById, paidById, allocationsLoadError }) {
+function buildSandbox({ now, obligations, services, documents, payments, paymentAllocations, consolidations, members, group, session, baseMonth, consolidationTargetsById, paidById, allocationsLoadError }) {
   const sandbox = {
     Date: FixedDateFactory(now || '2026-08-15T00:00:00'),
     obligations: obligations || [],
     services: services || [],
     documents: documents || [],
     payments: payments || [],
+    // Usados por balanceFor()/consolidationForSource() -- dependencias
+    // reales de previousBalanceFor(), independientes de los mocks
+    // paidAmountFor()/consolidationTarget() de abajo.
+    paymentAllocations: paymentAllocations || [],
+    consolidations: consolidations || [],
     members: members || [],
     group: group === undefined ? { id: 'g1', created_by: 'owner-uid' } : group,
     session: session === undefined ? { user: { id: 'owner-uid' } } : session,

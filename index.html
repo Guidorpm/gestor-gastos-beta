@@ -623,6 +623,37 @@ function shiftMonth(key,n){const [y,m]=key.split('-').map(Number);return monthKe
 function periodDate(key){return key+'-01'}
 function monthLabel(key){const [y,m]=key.split('-');return `${MONTHS[Number(m)-1]} ${y}`}
 function fmtMoney(v){return Number(v||0).toLocaleString('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:0})}
+// MEJORA — PRECISIÓN DECIMAL DE SERVICIOS: fmtMoney() se comparte con
+// Tarjetas en 68 lugares del archivo -- NUNCA se modifica su
+// maximumFractionDigits:0, porque cambiaría también cómo Tarjetas
+// muestra sus importes (fuera de alcance). fmtMoneyExact() es un
+// formateador EXCLUSIVO de Servicios (obligación/pago/saldo/crédito),
+// mismo patrón que ya usa fmtUsd() para USD -- siempre 2 decimales, sin
+// redondear a entero. Es solo presentación: nunca se usa el resultado
+// de este formateo como entrada de ningún cálculo (los cálculos siguen
+// operando sobre los números reales, nunca sobre el string formateado).
+function fmtMoneyExact(v){return Number(v||0).toLocaleString('es-AR',{style:'currency',currency:'ARS',minimumFractionDigits:2,maximumFractionDigits:2})}
+// MEJORA — NORMALIZACIÓN MONETARIA DE SERVICIOS: redondeo a centavos para
+// evitar arrastre de ruido binario (ej. 0.1+0.2=0.30000000000000004) en
+// sumas/restas de la cadena contable. Mismo patrón que roundMoney() ya
+// usa Tarjetas (Math.round((Number(value)||0)*100)/100) -- una técnica
+// de redondeo genérica, no lógica de negocio de Tarjetas, por eso es
+// seguro tener un equivalente propio de Servicios sin "reutilizar
+// carried_balance" ni ninguna función específica de tarjetas. NUNCA
+// redondea a entero -- siempre dos decimales, igual que numeric(14,2)
+// en Supabase.
+function roundServiceMoney(value){return Math.round((Number(value)||0)*100)/100}
+// MEJORA — EXACTITUD A CENTAVOS: fuente ÚNICA para decidir "¿es cero?"/
+// "¿es mayor/menor?" en dinero de Servicios -- convierte a un ENTERO de
+// centavos (Math.round elimina cualquier resto binario, ej.
+// 0.1+0.2=0.30000000000000004 -> 30 centavos exactos) y todas las
+// comparaciones de saldo/crédito/pago se hacen sobre ese entero, NUNCA
+// con una tolerancia como +.01/-.01/<=0.01 sobre el float crudo. Antes,
+// esas tolerancias de "medio centavo" aceptaban por error una diferencia
+// de exactamente 1 centavo como si fuera cero (saldo 0.01 se mostraba
+// como abonado, un pago 1 centavo de menos no avisaba nada) -- acá NO:
+// serviceMoneyCents(0.01)===1, nunca 0.
+function serviceMoneyCents(value){return Math.round((Number(value)||0)*100)}
 function parseMoneyField(value){
   const raw=String(value??'').trim();
   if(!raw)return 0;
@@ -1003,6 +1034,11 @@ function fmtDate(v){if(!v)return'—';return new Date(v+'T00:00:00').toLocaleDat
 function esc(v){return String(v??'').replace(/[&<>'"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[x]))}
 function today(){const d=new Date();return new Date(d.getFullYear(),d.getMonth(),d.getDate())}
 function daysUntil(v){if(!v)return null;return Math.round((new Date(v+'T00:00:00')-today())/86400000)}
+// MEJORA — SEGUNDO VENCIMIENTO: "hoy" como string 'YYYY-MM-DD', comparable
+// lexicográficamente contra due_date/paid_at (mismo formato de fecha
+// simple, sin hora) -- reutiliza today() para no introducir una segunda
+// noción de "hoy" ni desalinearse con daysUntil() por husos horarios.
+function todayDateString(){const d=today();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function rolePriority(role){
   return role==='admin'?3:role==='operator'?2:role==='viewer'?1:0;
 }
@@ -1703,7 +1739,7 @@ async function loadSpacesDashboard(){
   const [servicesResult,obligationsResult,paymentsResult,documentsResult]=await Promise.all([
     sb.from('services').select('id,group_id,name,active,is_private').in('group_id',groupIds).eq('active',true),
     sb.from('obligations').select('id,service_id,period,amount,status,due_date,services!inner(group_id,name)').in('services.group_id',groupIds),
-    sb.from('payments').select('id,obligation_id,total_amount,paid_at,voided,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
+    sb.from('payments').select('id,obligation_id,total_amount,paid_at,voided,notes,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
     sb.from('documents').select('id,group_id,obligation_id,payment_id,kind').in('group_id',groupIds)
   ]);
 
@@ -1803,7 +1839,139 @@ function paidAmountForWithAllocations(obligationId,paymentsList,allocationsList)
   const fromLegacyPayments=paymentsArr
     .filter(p=>p.obligation_id===obligationId&&p.voided!==true&&!activePaymentIdsWithAllocations.has(p.id))
     .reduce((sum,p)=>sum+Number(p.total_amount||0),0);
-  return fromAllocations+fromLegacyPayments;
+  return roundServiceMoney(fromAllocations+fromLegacyPayments);
+}
+// MEJORA — SEGUNDO VENCIMIENTO (regla real, no solo la fecha de hoy):
+// idéntica a paidAmountForWithAllocations() -- mismo criterio de
+// allocations activas/pagos legado/exclusión de anulados -- pero
+// filtrando a pagos con paid_at <= cutoffDate. Se usa EXCLUSIVAMENTE para
+// determinar si el PRIMER vencimiento quedó cubierto A TIEMPO (con pagos
+// hechos hasta esa fecha inclusive), nunca para el saldo real (que sigue
+// sumando todos los pagos, sin importar la fecha -- eso lo sigue haciendo
+// paidAmountForWithAllocations sin cambios). Las allocations no tienen
+// fecha propia: se usa la fecha del pago (paid_at) al que pertenecen,
+// igual que cualquier otro dato del pago.
+function paidAmountAsOfWithAllocations(obligationId,cutoffDate,paymentsList,allocationsList){
+  const paymentsArr=paymentsList||[];
+  const allocations=allocationsList||[];
+  const paymentsById=new Map(paymentsArr.map(p=>[p.id,p]));
+  const presentNonVoidedPaymentIds=new Set(
+    paymentsArr.filter(p=>p.voided!==true).map(p=>p.id)
+  );
+  const validAllocations=allocations.filter(a=>
+    a.is_active===true
+    && presentNonVoidedPaymentIds.has(a.payment_id)
+  );
+  const activePaymentIdsWithAllocations=new Set(validAllocations.map(a=>a.payment_id));
+  const fromAllocations=validAllocations
+    .filter(a=>a.obligation_id===obligationId)
+    .filter(a=>{
+      const p=paymentsById.get(a.payment_id);
+      return !!(p&&p.paid_at&&p.paid_at<=cutoffDate);
+    })
+    .reduce((sum,a)=>sum+Number(a.allocated_amount||0),0);
+  const fromLegacyPayments=paymentsArr
+    .filter(p=>p.obligation_id===obligationId&&p.voided!==true&&!activePaymentIdsWithAllocations.has(p.id))
+    .filter(p=>p.paid_at&&p.paid_at<=cutoffDate)
+    .reduce((sum,p)=>sum+Number(p.total_amount||0),0);
+  return roundServiceMoney(fromAllocations+fromLegacyPayments);
+}
+// MEJORA — SEGUNDO VENCIMIENTO: fuente ÚNICA del importe contable
+// aplicable de una obligación -- reutilizada por calculateRealObligationBalance()
+// y paymentProgress(), nunca una segunda copia. Regla (ver auditoría
+// completa en el reporte de esta iteración):
+//   - sin segundo vencimiento cargado -> siempre o.amount (0 cambios
+//     respecto de antes de esta mejora);
+//   - todavía no pasó el primer vencimiento -> o.amount (importe 1),
+//     sin importar si hay segundo vencimiento cargado;
+//   - ya pasó el primer vencimiento pero NO hay segundo importe cargado
+//     -> sigue siendo o.amount (el segundo vencimiento es solo una fecha
+//     de mora distinta, no cambia el importe -- PASO G);
+//   - ya pasó el primer vencimiento, hay segundo importe, Y los pagos con
+//     paid_at <= due_date YA cubrían el importe 1 completo -> la
+//     obligación quedó resuelta DENTRO del primer plazo, se mantiene en
+//     o.amount para siempre (nunca aparece una mora/recargo retroactivo
+//     sobre algo que ya se pagó a tiempo -- PASO E);
+//   - en cualquier otro caso (pasó el primer vencimiento y NO se cubrió
+//     el importe 1 a tiempo) -> pasa a exigirse el segundo importe,
+//     independientemente de los pagos hechos DESPUÉS del primer
+//     vencimiento (que igual se siguen restando del saldo normalmente,
+//     vía paidAmountForWithAllocations -- PASO F).
+// MEJORA — CIERRE DE COHERENCIA DEL SELECTOR DE VENCIMIENTO -- PERSISTENCIA
+// REAL: diagnóstico read-only (migraciones/
+// 6b10_DIAGNOSTICO_columnas_payments_solo_lectura.sql) confirmó que
+// public.payments YA tiene una columna "notes text NULL" sin ningún uso
+// hoy (0 filas reales con contenido) -- no hizo falta ninguna migración
+// (CAMINO A). Se guarda JSON estructurado y AMPLIABLE, nunca texto suelto
+// ("first"/"second" a secas): {"appliedDueStage":"first"|"second"}, igual
+// patrón que ya usa obligations.notes (obligationNoteMeta/
+// updateObligationNotes) pero más simple -- payments.notes no tiene
+// ningún texto libre de usuario que preservar, así que es JSON puro, sin
+// prefijo de línea ni mezcla con texto. La lectura es SIEMPRE tolerante:
+// notes NULL/vacío/no-JSON/JSON sin la clave esperada -> {} -> fallback
+// histórico, nunca un error visible.
+function paymentNoteMetadata(rawNotes){
+  const raw=String(rawNotes||'').trim();
+  if(!raw)return{};
+  let parsed;
+  try{parsed=JSON.parse(raw);}catch{return{};}
+  return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{};
+}
+function paymentAppliedDueStage(payment){
+  const stage=paymentNoteMetadata(payment?.notes).appliedDueStage;
+  return stage==='first'||stage==='second'?stage:null;
+}
+// Fusiona SIEMPRE sobre la metadata ya existente (nunca la reemplaza
+// entera) -- si en el futuro se guarda otra clave en payments.notes, no
+// se pierde al escribir appliedDueStage, igual criterio que
+// updateObligationNotes(). Devuelve null (no string "{}") cuando no
+// queda ninguna clave -- evita escribir un JSON vacío donde antes no
+// había notes.
+function buildPaymentNotes(rawNotes,partialMetaUpdate){
+  const merged={...paymentNoteMetadata(rawNotes),...(partialMetaUpdate||{})};
+  const json=JSON.stringify(merged);
+  return json==='{}'?null:json;
+}
+// MEJORA — CIERRE DE COHERENCIA DEL SELECTOR DE VENCIMIENTO: si algún
+// pago activo de esta obligación fue marcado explícitamente
+// appliedDueStage==='second' (elección real de quien pagó, persistida en
+// payments.notes, hecha en openPayModal()), el importe exigible pasa a
+// ser el importe 2 SIEMPRE, sin importar la fecha -- incluso ANTES del
+// primer vencimiento. Marcar "second" es una declaración explícita
+// ("esto va contra el segundo importe"), no una inferencia; ignorarla
+// después del guardado sería incoherente con lo que la persona vio y
+// confirmó al pagar. Ej.: base 100, segundo 105, elige Segundo, paga 105
+// antes del 1er vencimiento -> exigible 105, saldo 0, crédito 0 (nunca
+// crédito 5 contra el importe 1). Marcar "first" NO fuerza lo contrario:
+// un pago marcado "first" que no alcance a cubrir el importe 1 a tiempo
+// sigue escalando automáticamente al importe 2 por la regla de fecha de
+// siempre (nunca se "cancela" la mora eligiendo "first" a propósito).
+// Pagos históricos (payments.notes NULL/vacío -- todos los pagos reales
+// anteriores a esta mejora, confirmado por el diagnóstico) nunca activan
+// esta rama: paymentAppliedDueStage() devuelve null y se sigue
+// exactamente el comportamiento de fecha ya existente, sin ningún cambio.
+function obligationHasSecondStagePayment(obligationId,paymentsList){
+  return (paymentsList||[]).some(p=>
+    p.obligation_id===obligationId&&p.voided!==true&&paymentAppliedDueStage(p)==='second'
+  );
+}
+function effectiveObligationAmount(obligation,paymentsList,allocationsList){
+  if(!obligation)return 0;
+  const amount1=Number(obligation.amount||0);
+  const extra=obligationExtraFields(obligation);
+  if(extra.secondDueDate&&extra.secondAmount!=null&&obligationHasSecondStagePayment(obligation.id,paymentsList)){
+    return Number(extra.secondAmount);
+  }
+  if(!obligation.due_date)return amount1;
+  if(!extra.secondDueDate)return amount1;
+  if(todayDateString()<=obligation.due_date)return amount1;
+  if(extra.secondAmount==null)return amount1;
+  const paidByFirstDue=paidAmountAsOfWithAllocations(obligation.id,obligation.due_date,paymentsList,allocationsList);
+  // MEJORA — EXACTITUD A CENTAVOS: cubrir "casi todo" el importe 1 (a un
+  // centavo de distancia) NO cuenta como cubierto -- comparación exacta
+  // en centavos, sin la vieja tolerancia -0.01.
+  if(serviceMoneyCents(paidByFirstDue)>=serviceMoneyCents(amount1))return amount1;
+  return Number(extra.secondAmount);
 }
 // CORRECCIÓN — si la carga de imputaciones del Panel general falló
 // (spacesDashboard.paymentAllocationsLoadError), estas dos funciones NUNCA
@@ -1825,10 +1993,14 @@ function dashboardBalanceFor(obligation){
 // una fórmula paralela. paidAmountForWithAllocations ya es la única
 // fuente real de "cuánto se pagó" (pagos legado + imputaciones activas,
 // sin doble conteo, sin pagos anulados); esto solo resta ese resultado
-// del importe original, con piso en cero.
+// del importe aplicable, con piso en cero.
+// MEJORA — SEGUNDO VENCIMIENTO: el importe original ya no es siempre
+// obligation.amount -- effectiveObligationAmount() decide, con la regla
+// real auditada (ver su propio comentario), si corresponde importe 1 o
+// importe 2. roundServiceMoney() normaliza el resultado a centavos.
 function calculateRealObligationBalance(obligation,paymentsList,allocationsList){
   if(!obligation)return 0;
-  return Math.max(0,Number(obligation.amount||0)-paidAmountForWithAllocations(obligation.id,paymentsList,allocationsList));
+  return roundServiceMoney(Math.max(0,effectiveObligationAmount(obligation,paymentsList,allocationsList)-paidAmountForWithAllocations(obligation.id,paymentsList,allocationsList)));
 }
 // CORRECCIÓN ESTABILIZACIÓN 20260805 - PENDIENTES: "¿este servicio debe
 // mostrarse en el contexto actual?" -- única fuente real de autorización +
@@ -17568,7 +17740,7 @@ function balanceFor(obligation){
 // significado) y sin imputarlo nunca automáticamente a otro mes.
 function creditBalanceFor(obligation){
   if(!obligation)return 0;
-  return Math.max(0,paidAmountFor(obligation.id)-Number(obligation.amount||0));
+  return roundServiceMoney(Math.max(0,paidAmountFor(obligation.id)-effectiveObligationAmount(obligation,payments,paymentAllocations)));
 }
 // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: si no se pudieron verificar las
 // imputaciones de ESTE espacio (paymentAllocationsLoadError), paidAmountFor
@@ -17580,15 +17752,23 @@ function creditBalanceFor(obligation){
 // dato incompleto. unavailable:true es la señal explícita para esos
 // consumidores.
 function paymentProgress(obligation){
-  const amount=Number(obligation?.amount||0);
+  // MEJORA — SEGUNDO VENCIMIENTO: "amount" ya no es siempre obligation.amount
+  // -- effectiveObligationAmount() aplica la regla real (importe 1 antes
+  // del primer vencimiento o si quedó cubierto a tiempo; importe 2 si
+  // existe y no se cubrió a tiempo). obligation.amount NUNCA se
+  // sobrescribe -- esto solo decide qué importe usar para el cálculo.
+  const amount=effectiveObligationAmount(obligation,payments,paymentAllocations);
   if(paymentAllocationsLoadError){
     return{amount,paid:null,balance:null,creditBalance:null,fullyPaid:false,partial:false,unavailable:true};
   }
   const paid=paidAmountFor(obligation?.id);
-  const signedBalance=amount-paid;
+  const signedBalance=roundServiceMoney(amount-paid);
   const balance=Math.max(0,signedBalance);
   const creditBalance=Math.max(0,-signedBalance);
-  return{amount,paid,balance,creditBalance,fullyPaid:amount>0&&balance<=0.01,partial:paid>0&&balance>0.01,unavailable:false};
+  // MEJORA — EXACTITUD A CENTAVOS: saldo 0.01 NUNCA es "abonado" -- se
+  // compara en centavos enteros, sin la vieja tolerancia <=0.01/>0.01
+  // que trataba un centavo real de diferencia como si fuera cero.
+  return{amount,paid,balance,creditBalance,fullyPaid:amount>0&&serviceMoneyCents(balance)<=0,partial:paid>0&&serviceMoneyCents(balance)>0,unavailable:false};
 }
 // CORRECCIÓN 6B4.15 - Metadata técnica de obligations (anulación, historial
 // de ediciones, moneda/proveedor/n° de factura sin columna real en el
@@ -17640,8 +17820,12 @@ function obligationExtraFields(o){
 function obligationCurrency(o){
   return obligationExtraFields(o).currency==='USD'?'USD':'ARS';
 }
+// MEJORA — PRECISIÓN DECIMAL DE SERVICIOS: usa fmtMoneyExact() (2
+// decimales siempre) en vez de fmtMoney() (0 decimales) -- fmtMoney()
+// sigue intacto para Tarjetas, que no usa formatObligationAmount() en
+// absoluto (es una función exclusiva de obligations).
 function formatObligationAmount(o,value){
-  return obligationCurrency(o)==='USD'?formatUSD(value):fmtMoney(value);
+  return obligationCurrency(o)==='USD'?formatUSD(value):fmtMoneyExact(value);
 }
 function displayNameForUserId(userId){
   if(!userId)return '—';
@@ -17777,7 +17961,7 @@ function servicePriorityNotifications(){
 
     // Regla 4: pago parcial -- el mensaje SIEMPRE informa el saldo
     // pendiente, nunca vuelve a reclamar el importe total.
-    const amountText=progress.partial?`saldo pendiente ${fmtMoney(progress.balance)} (de ${fmtMoney(progress.amount)})`:fmtMoney(progress.balance);
+    const amountText=progress.partial?`saldo pendiente ${fmtMoneyExact(progress.balance)} (de ${fmtMoneyExact(progress.amount)})`:fmtMoneyExact(progress.balance);
 
     // Regla 2: vencimientos graduales 3/2/1/0 y vencido, mientras siga
     // impago o parcialmente impago -- mismo criterio que tarjetas.
@@ -17844,13 +18028,146 @@ function netNewAmount(obligation){
 }
 function isEffectivePending(obligation){
   return !!obligation
-    && balanceFor(obligation)>0.01
+    && serviceMoneyCents(balanceFor(obligation))>0
     && obligation.status!=='cancelled'
     && !consolidationForSource(obligation.id);
 }
 function inclusionDescription(obligation){
   const target=consolidationTarget(obligation.id);
   return target?`Incluida en ${monthLabel(target.period.slice(0,7))}`:'';
+}
+// MEJORA — CONTINUIDAD DE SALDO: suma el saldo pendiente de obligaciones
+// ANTERIORES del mismo servicio (período < el mes actual) que siguen
+// pendientes -- reutiliza balanceFor()/isEffectivePending() sin ningún
+// cálculo nuevo. Puramente informativo: no crea, modifica ni consolida
+// ninguna obligación -- cada registro de origen sigue siendo la fuente
+// real y trazable de esa deuda (nunca se fusiona en un número sin
+// historial). Una obligación ya consolidada en otra factura (
+// consolidationForSource) queda excluida por isEffectivePending(), igual
+// que en el resto de la app, para no contarla dos veces.
+function previousBalanceFor(serviceId,key){
+  const currentPeriod=periodDate(key);
+  const prior=obligations
+    .filter(o=>o.service_id===serviceId && o.period<currentPeriod && isEffectivePending(o))
+    .sort((a,b)=>a.period.localeCompare(b.period));
+  const total=prior.reduce((sum,o)=>sum+balanceFor(o),0);
+  return{total,obligations:prior};
+}
+// MEJORA — APLICACIÓN DE SALDO A FAVOR (payment_allocations real, ya
+// auditado: authenticated tiene INSERT/UPDATE, RLS exige
+// has_access_to_payment + has_access_to_obligation + created_by=auth.uid(),
+// constraint UNIQUE(payment_id,obligation_id) WHERE is_active, trigger
+// valida que la suma de allocations activas nunca supere payment_total).
+//
+// Crédito disponible de UN pago QUE YA TIENE allocations activas = lo que
+// todavía no está repartido. Solo válido para ese caso -- para un pago
+// legacy sin ninguna allocation todavía, "disponible" NO es simplemente
+// total_amount (ver availableServiceCredits(), que reserva primero lo que
+// hace falta para la obligación original antes de considerar el resto
+// disponible).
+function creditAvailableForPayment(payment,allocationsList){
+  const allocs=(allocationsList||[]).filter(a=>a.is_active===true&&a.payment_id===payment.id);
+  const allocated=allocs.reduce((sum,a)=>sum+Number(a.allocated_amount||0),0);
+  return roundServiceMoney(Math.max(0,Number(payment.total_amount||0)-allocated));
+}
+// Créditos disponibles de un SERVICIO -- nunca cruza a otro servicio
+// (PASO R): el origen real de un pago es su obligation_id legacy, fijado
+// al crearlo y jamás modificado después, que siempre pertenece al mismo
+// service_id que esa obligación.
+//
+// CORRECCIÓN — para un pago SIN allocations todavía, no se puede tratar
+// su total_amount completo como "disponible": una parte (hasta el
+// importe efectivo de su propia obligación) sigue perteneciéndole a esa
+// obligación. Se recorren los pagos legacy de cada obligación en orden
+// cronológico, reservando ACUMULATIVAMENTE lo que haga falta para cubrir
+// el importe efectivo antes de considerar el resto de cada pago como
+// disponible -- así, si dos pagos juntos sobrepagan una misma
+// obligación, el excedente total nunca se cuenta dos veces (uno por
+// cada pago) por igual monto.
+function availableServiceCredits(serviceId){
+  const serviceObligationIds=new Set(obligations.filter(o=>o.service_id===serviceId).map(o=>o.id));
+  const relevantPayments=payments
+    .filter(p=>p.voided!==true&&serviceObligationIds.has(p.obligation_id))
+    .sort((a,b)=>String(a.paid_at||'').localeCompare(String(b.paid_at||'')));
+
+  const reservedSoFarByObligation=new Map();
+  const results=[];
+  for(const p of relevantPayments){
+    const hasAnyAllocation=paymentAllocations.some(a=>a.is_active===true&&a.payment_id===p.id);
+    if(hasAnyAllocation){
+      const available=creditAvailableForPayment(p,paymentAllocations);
+      if(serviceMoneyCents(available)>0)results.push({payment:p,available});
+      continue;
+    }
+    const obligation=obligations.find(o=>o.id===p.obligation_id);
+    if(!obligation)continue;
+    const need=effectiveObligationAmount(obligation,payments,paymentAllocations);
+    const alreadyReserved=reservedSoFarByObligation.get(obligation.id)||0;
+    const stillNeeded=Math.max(0,need-alreadyReserved);
+    const reserveFromThis=roundServiceMoney(Math.min(Number(p.total_amount||0),stillNeeded));
+    reservedSoFarByObligation.set(obligation.id,roundServiceMoney(alreadyReserved+reserveFromThis));
+    const available=roundServiceMoney(Number(p.total_amount||0)-reserveFromThis);
+    if(serviceMoneyCents(available)>0)results.push({payment:p,available});
+  }
+  return results;
+}
+// Aplica `amountToApply` del crédito de `sourcePayment` (originado en
+// `sourceObligation`) a `targetObligation` -- SIEMPRE dentro del mismo
+// servicio (verificado por el llamador, ver openApplyCreditModal). Nunca
+// crea un pago nuevo ni una obligación nueva: solo reparte, con
+// allocations, un pago que YA existe.
+//
+// PASO L — primera conversión: si `sourcePayment` todavía no tiene
+// NINGUNA allocation activa, hay que crear en una ÚNICA operación de
+// INSERT multi-fila (atómica: un solo INSERT con varias filas es un solo
+// comando SQL en Postgres, o se aplica entero o falla entero -- no hay
+// forma de que quede solo una de las dos filas) tanto la allocation que
+// cubre la obligación ORIGINAL como la que aplica el excedente al
+// destino. Insertar solo la del destino dejaría a `sourcePayment` con
+// una allocation activa pero SIN ninguna que cubra su obligación
+// original -- paidAmountForWithAllocations() dejaría de contar esa parte
+// por completo (el pago "desaparecería" de la obligación original, ver
+// auditoría de esta iteración).
+//
+// PASO M — aplicaciones posteriores: si `sourcePayment` YA tiene
+// allocations (no es la primera vez), nunca se recrea la del origen.
+// Si ya existe una allocation activa hacia `targetObligation` (mismo
+// par payment_id+obligation_id, respetando el índice único), se ACTUALIZA
+// sumando el nuevo importe en vez de intentar un segundo INSERT (que
+// violaría la UNIQUE(payment_id,obligation_id) WHERE is_active).
+//
+// `sourceAvailable` es EXACTAMENTE el mismo valor que ya calculó
+// availableServiceCredits() para este pago (el llamador lo recibe de ahí
+// y lo pasa acá tal cual) -- nunca se recalcula de forma independiente,
+// para que la reserva de la obligación original sea siempre consistente
+// con lo que el usuario vio como "disponible" antes de confirmar (evita
+// que, con varios pagos legacy sobre la misma obligación, dos cálculos
+// distintos del "importe reservado" terminen sumando de más).
+async function applyServiceCreditToObligation(sourcePayment,sourceObligation,sourceAvailable,targetObligation,amountToApply){
+  const hasAnyAllocation=paymentAllocations.some(a=>a.is_active===true&&a.payment_id===sourcePayment.id);
+  const targetExisting=paymentAllocations.find(a=>a.is_active===true&&a.payment_id===sourcePayment.id&&a.obligation_id===targetObligation.id);
+
+  if(!hasAnyAllocation){
+    const alreadyCoveredOriginal=roundServiceMoney(Math.max(0,Number(sourcePayment.total_amount||0)-sourceAvailable));
+    const rows=[
+      {payment_id:sourcePayment.id,obligation_id:sourceObligation.id,allocated_amount:alreadyCoveredOriginal,currency:obligationCurrency(sourceObligation),created_by:session.user.id},
+      {payment_id:sourcePayment.id,obligation_id:targetObligation.id,allocated_amount:amountToApply,currency:obligationCurrency(targetObligation),created_by:session.user.id}
+    ];
+    const{error}=await sb.from('payment_allocations').insert(rows);
+    if(error)throw error;
+  }else if(targetExisting){
+    const newAmount=roundServiceMoney(Number(targetExisting.allocated_amount||0)+amountToApply);
+    const{error}=await sb.from('payment_allocations').update({allocated_amount:newAmount}).eq('id',targetExisting.id);
+    if(error)throw error;
+  }else{
+    const{error}=await sb.from('payment_allocations').insert({
+      payment_id:sourcePayment.id,obligation_id:targetObligation.id,allocated_amount:amountToApply,currency:obligationCurrency(targetObligation),created_by:session.user.id
+    });
+    if(error)throw error;
+  }
+
+  await syncObligationStatus(sourceObligation.id);
+  await syncObligationStatus(targetObligation.id);
 }
 function dueState(o){
   if(!o)return{cls:'missing',label:'Sin datos'};
@@ -17879,7 +18196,32 @@ function dueState(o){
   const d=daysUntil(o.due_date);
   if(d===null)return{cls:'missing',label:'Falta vencimiento'};
   const prefix=progress.partial?'Saldo parcial · ':'';
-  if(d<0)return{cls:'overdue',label:`${prefix}Vencido hace ${Math.abs(d)} día${Math.abs(d)===1?'':'s'}`};
+  // MEJORA — SEGUNDO VENCIMIENTO: el importe real ya está resuelto por
+  // paymentProgress()/effectiveObligationAmount() ANTES de llegar acá
+  // (progress.balance/progress.fullyPaid ya reflejan importe 2 cuando
+  // corresponde, y si una obligación quedó cubierta a tiempo con el
+  // importe 1, progress.fullyPaid ya es true y dueState() devolvió
+  // 'Abonado' más arriba, sin llegar nunca a este bloque -- por eso NO
+  // puede aparecer acá una mora falsa sobre algo ya pagado a tiempo).
+  // Este bloque solo decide la banda VISUAL: si hay un segundo
+  // vencimiento cargado y ya pasó el primero, la fecha de referencia
+  // para "vencido de verdad" pasa a ser la segunda, no la primera --
+  // igual que una factura de servicios real (Edesur/Metrogas/etc). Sin
+  // segundo vencimiento cargado, el comportamiento es IDÉNTICO al de
+  // antes de esta mejora.
+  if(d<0){
+    const second=obligationExtraFields(o).secondDueDate;
+    if(second){
+      const d2=daysUntil(second);
+      if(d2===null||d2<0){
+        const daysLate=d2===null?Math.abs(d):Math.abs(d2);
+        return{cls:'overdue',label:`${prefix}Vencido hace ${daysLate} día${daysLate===1?'':'s'}`};
+      }
+      if(d2===0)return{cls:'urgent',label:`${prefix}Segundo vencimiento hoy`};
+      return{cls:'warning',label:`${prefix}Segundo vencimiento en ${d2} día${d2===1?'':'s'}`};
+    }
+    return{cls:'overdue',label:`${prefix}Vencido hace ${Math.abs(d)} día${Math.abs(d)===1?'':'s'}`};
+  }
   if(d===0)return{cls:'urgent',label:`${prefix}Vence hoy`};
   if(d<=2)return{cls:'urgent',label:`${prefix}Faltan ${d} días`};
   if(d<=5)return{cls:'warning',label:`${prefix}Faltan ${d} días`};
@@ -17903,10 +18245,15 @@ function boxText(o,service){
   // se muestra el estado "No disponible" (de dueState) junto con el importe
   // ORIGINAL (dato real, no derivado del estado de pago).
   if(progress.unavailable)return[dueState(o).label,formatObligationAmount(o,o.amount)];
-  if(o.status==='paid')return['Abonado',formatObligationAmount(o,o.amount)];
-  if(progress.fullyPaid)return['Abonado',formatObligationAmount(o,progress.paid||o.amount)];
+  // MEJORA — SEGUNDO VENCIMIENTO: el importe mostrado pasa a ser
+  // progress.amount (importe EFECTIVO, ya resuelto por
+  // effectiveObligationAmount()) en vez de o.amount directo -- así el
+  // texto de "importe" siempre coincide con el importe que realmente se
+  // está exigiendo, no siempre el importe 1 documental original.
+  if(o.status==='paid')return['Abonado',formatObligationAmount(o,progress.amount)];
+  if(progress.fullyPaid)return['Abonado',formatObligationAmount(o,progress.paid||progress.amount)];
   if(progress.partial)return[`Parcial · saldo ${formatObligationAmount(o,progress.balance)}`,`Pagado ${formatObligationAmount(o,progress.paid)} de ${formatObligationAmount(o,progress.amount)}`];
-  return[dueState(o).label,formatObligationAmount(o,o.amount)];
+  return[dueState(o).label,formatObligationAmount(o,progress.amount)];
 }
 function lastKnownAmount(serviceId,beforeKey){
   const limit=periodDate(beforeKey);
@@ -17997,7 +18344,7 @@ function monthQuickSummary(key){
 function renderAnnualOverview(){
   const year=baseMonth.slice(0,4);
   const months=Array.from({length:12},(_,index)=>`${year}-${String(index+1).padStart(2,'0')}`);
-  const annualFmt=(n)=>paymentAllocationsLoadError?'No disponible':fmtMoney(n);
+  const annualFmt=(n)=>paymentAllocationsLoadError?'No disponible':fmtMoneyExact(n);
   const annualCount=(n)=>paymentAllocationsLoadError?'—':n;
   return `<div class="annual-overview card">
     <div class="annual-overview-head">
@@ -18017,7 +18364,7 @@ function renderAnnualOverview(){
             <span>${monthLabel(key).replace(` de ${year}`,'')}</span>
             <small>${data.count} cargado${data.count===1?'':'s'}</small>
           </div>
-          <div class="annual-total">${fmtMoney(data.total)}</div>
+          <div class="annual-total">${fmtMoneyExact(data.total)}</div>
           <div class="annual-paid">Pagado ${annualFmt(data.paid)} · Pendiente ${annualFmt(data.pending)}</div>
           <div class="annual-mini">
             <span><small>Facturas</small><strong>${data.withInvoice}</strong></span>
@@ -18304,6 +18651,10 @@ function operationalServiceRowHtml(s,key){
   const receiptCount=o
     ? receiptsForObligation(o.id).length
     : 0;
+  // MEJORA — CONTINUIDAD DE SALDO: previousBalanceFor() es puramente
+  // informativo (mismo dato que ya muestra el detalle de la obligación) --
+  // no participa del cálculo de boxClass()/boxText() de este mes.
+  const prevBalance=previousBalanceFor(s.id,key);
   return `<div class="operational-row ${boxClass(o)}" data-service-row="${s.id}">
     <div class="operational-row-info" data-cell="${s.id}|${key}">
       <div class="operational-row-main">
@@ -18314,6 +18665,7 @@ function operationalServiceRowHtml(s,key){
         <div class="status">${t[0]}</div>
         <div class="amount">${t[1]}</div>
         ${o?.due_date?`<div class="date">Vence ${fmtDate(o.due_date)}</div>`:''}
+        ${serviceMoneyCents(prevBalance.total)>0?`<div class="date">Saldo anterior: ${fmtMoneyExact(prevBalance.total)}</div>`:''}
       </div>
       ${o?`<div class="doc-indicators">
         <span class="doc-pill ${invoiceCount?'ok':'bad'}">Factura ${invoiceCount?'✓':'—'}</span>
@@ -18381,7 +18733,7 @@ function renderServices(ms){
   // dependen de balanceFor/paidAmountFor se muestra como un número --
   // mostrarlos igual sería exactamente "renderizar una deuda como si no
   // existieran imputaciones", el bug que este hotfix corrige.
-  const fmtPending=(n)=>paymentAllocationsLoadError?'No disponible':fmtMoney(n);
+  const fmtPending=(n)=>paymentAllocationsLoadError?'No disponible':fmtMoneyExact(n);
   // MEJORA — PANEL OPERATIVO POR PRIORIDADES: se calcula acá, junto con
   // el resto de los agregados del mes, sobre `services`/`obligations` ya
   // autorizados -- ver computeServicePriorityCategories() más abajo.
@@ -18426,7 +18778,7 @@ function renderServices(ms){
     </div>
     <div class="stat card">
       <span>Total cargado de ${monthLabel(baseMonth)}</span>
-      <strong>${fmtMoney(currentTotals.total)}</strong>
+      <strong>${fmtMoneyExact(currentTotals.total)}</strong>
       <small class="mini">Pagado ${fmtPending(currentTotals.paid)} · Pendiente ${fmtPending(currentTotals.pending)}</small>
       <small class="hint">Este número mira solo el mes que estás viendo.</small>
     </div>
@@ -18668,25 +19020,35 @@ function renderReports(){
       <p>Generado el ${generatedAt} · ${esc(group.type==='company'?'Empresa':'Grupo familiar')}</p>
     </div>
 
+    <!-- MEJORA — PRECISIÓN DECIMAL DE SERVICIOS: todo este informe (grid de
+    indicadores, evolución mensual, situación inmediata) usa fmtMoneyExact()
+    en vez de fmtMoney() -- mismos números que ya calculaba, solo deja de
+    ocultar los centavos reales al imprimir/exportar a PDF. Todos los datos
+    de esta función (reportMonthData/reportCategoryData/reportServiceData/
+    balanceData/forecastMonth/pendingObligations) salen exclusivamente de
+    obligations/payments/services/members -- CERO datos de Tarjetas en
+    renderReports(). El panel MIXTO Servicios+Tarjetas del titular
+    (renderOwnerDashboard(), fuera de esta función) sigue usando fmtMoney()
+    sin cambios, intencionalmente no tocado por esta mejora. -->
     <div class="report-grid">
       <div class="report-card card">
         <span>Total cargado de ${monthLabel(baseMonth)}</span>
-        <strong>${fmtMoney(current.total)}</strong>
-        <small>Pagado ${fmtMoney(current.paid)} · Pendiente ${fmtMoney(current.pending)}</small>
+        <strong>${fmtMoneyExact(current.total)}</strong>
+        <small>Pagado ${fmtMoneyExact(current.paid)} · Pendiente ${fmtMoneyExact(current.pending)}</small>
       </div>
       <div class="report-card card">
         <span>Pendiente acumulado de todos los meses</span>
-        <strong>${fmtMoney(pendingTotalAmount)}</strong>
-        <small>Anteriores ${fmtMoney(previousPendingAmount)} · ${monthLabel(baseMonth)} ${fmtMoney(currentPendingAmount)} · Futuros ${fmtMoney(futurePendingAmount)}</small>
+        <strong>${fmtMoneyExact(pendingTotalAmount)}</strong>
+        <small>Anteriores ${fmtMoneyExact(previousPendingAmount)} · ${monthLabel(baseMonth)} ${fmtMoneyExact(currentPendingAmount)} · Futuros ${fmtMoneyExact(futurePendingAmount)}</small>
       </div>
       <div class="report-card card">
         <span>Facturas ya vencidas</span>
-        <strong>${fmtMoney(overdueAmount)}</strong>
+        <strong>${fmtMoneyExact(overdueAmount)}</strong>
         <small>Corresponde solo a deudas pendientes cuyo vencimiento ya pasó.</small>
       </div>
       <div class="report-card card">
         <span>Proyección próximos 6 meses</span>
-        <strong>${fmtMoney(forecastTotal)}</strong>
+        <strong>${fmtMoneyExact(forecastTotal)}</strong>
         <small>Estimación de gastos futuros según servicios mensuales y planes ya configurados.</small>
       </div>
     </div>
@@ -18696,11 +19058,11 @@ function renderReports(){
     <div class="report-columns">
       <div class="report-panel card">
         <h2>Evolución mensual</h2>
-        <p>Importes cargados durante los últimos seis meses. Promedio: <strong>${fmtMoney(average)}</strong>.</p>
+        <p>Importes cargados durante los últimos seis meses. Promedio: <strong>${fmtMoneyExact(average)}</strong>.</p>
         ${sixMonths.map(m=>`<div class="report-row">
           <div class="report-label">${monthLabel(m.key)}</div>
           <div class="report-track"><div class="report-fill" style="width:${Math.max(3,m.total/maxMonth*100)}%"></div></div>
-          <div class="report-value">${fmtMoney(m.total)}</div>
+          <div class="report-value">${fmtMoneyExact(m.total)}</div>
         </div>`).join('')}
       </div>
 
@@ -18723,15 +19085,15 @@ function renderReports(){
         <p>Vencimientos próximos, deuda y compensación entre administradores.</p>
         <table class="report-table">
           <tr><th>Métrica</th><th>Resultado</th></tr>
-          <tr><td>Vencimientos próximos 30 días</td><td><strong>${next30.length}</strong> · ${fmtMoney(next30.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
-          <tr><td>Facturas vencidas</td><td><strong>${overdue.length}</strong> · ${fmtMoney(overdue.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
-          <tr><td>Pagado en ${monthLabel(baseMonth)}</td><td>${fmtMoney(current.paid)}</td></tr>
-          <tr><td>Pendiente del mes</td><td>${fmtMoney(current.pending)}</td></tr>
+          <tr><td>Vencimientos próximos 30 días</td><td><strong>${next30.length}</strong> · ${fmtMoneyExact(next30.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
+          <tr><td>Facturas vencidas</td><td><strong>${overdue.length}</strong> · ${fmtMoneyExact(overdue.reduce((s,o)=>s+Number(o.amount||0),0))}</td></tr>
+          <tr><td>Pagado en ${monthLabel(baseMonth)}</td><td>${fmtMoneyExact(current.paid)}</td></tr>
+          <tr><td>Pendiente del mes</td><td>${fmtMoneyExact(current.pending)}</td></tr>
         </table>
         <div style="margin-top:14px">
           ${rows.map(r=>`<div class="forecast-share">
             <span>${esc(r.m.display_name)}</span>
-            <strong class="${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</strong>
+            <strong class="${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoneyExact(r.balance)}</strong>
           </div>`).join('')||'<div class="forecast-detail">Sin administradores con porcentaje asignado.</div>'}
         </div>
       </div>
@@ -19540,7 +19902,7 @@ function openObligation(serviceId,key){
       item.service_id===serviceId
       && item.period<periodDate(key)
       && item.status!=='cancelled'
-      && balanceFor(item)>0.01
+      && serviceMoneyCents(balanceFor(item))>0
       && (
         !consolidationForSource(item.id)
         || currentSourceIds.includes(item.id)
@@ -19588,7 +19950,7 @@ function openObligation(serviceId,key){
         ${!progress.unavailable&&progress.creditBalance>0.01?`<div class="item"><span>Saldo a favor</span><strong>${formatObligationAmount(o,progress.creditBalance)}</strong></div>`:''}
       </div>
       ${!progress.unavailable&&progress.creditBalance>0.01?`<div class="notice" style="border-color:#a8d4f5;background:#e7f5ff">
-        <strong>Hay un saldo a favor de ${fmtMoney(progress.creditBalance)}.</strong>
+        <strong>Hay un saldo a favor de ${fmtMoneyExact(progress.creditBalance)}.</strong>
         Se pagó más de lo que figura como importe de este mes. Los pagos no se recortan ni se borran — requiere revisión manual antes de imputarlo a otro mes.
       </div>`:''}
     `:''}
@@ -19611,6 +19973,26 @@ function openObligation(serviceId,key){
         <input id="odue" type="date" value="${o?.due_date||''}" ${!editableNow?'disabled':''}>
       </div>
     </div>
+
+    <div class="category-help" style="margin:14px 0 -2px;font-weight:600;text-transform:none">Segundo vencimiento <span style="font-weight:400">(opcional)</span></div>
+    <div class="grid2">
+      <div class="field">
+        <label>Importe</label>
+        <input
+          id="osecondAmount"
+          data-money-input
+          class="money-input"
+          value="${extraFields.secondAmount!=null?formatMoneyField(extraFields.secondAmount):''}"
+          placeholder="Dejar vacío si es el mismo importe"
+          ${!editableNow?'disabled':''}
+        >
+      </div>
+      <div class="field">
+        <label>Fecha</label>
+        <input id="osecondDue" type="date" value="${extraFields.secondDueDate||''}" ${!editableNow?'disabled':''}>
+      </div>
+    </div>
+    <div class="category-help" style="margin:-6px 0 10px">Si la factura tiene un segundo vencimiento, cargalo acá (podés hacerlo desde la primera vez que cargás el mes, no hace falta esperar a guardar). Es informativo: no cambia el saldo pendiente ni el importe exigible hasta que vos mismo actualices el importe de la factura arriba.</div>
 
     ${o?`
     <div class="grid2">
@@ -19640,6 +20022,28 @@ function openObligation(serviceId,key){
       </div>
     </div>
     <div class="category-help" style="margin:-6px 0 10px">Moneda/proveedor/número de factura no tienen columna propia en el esquema actual — se guardan como metadata dentro de la nota, nunca mezclados con tu texto libre.</div>
+    ${(()=>{
+      const prevBalance=previousBalanceFor(serviceId,key);
+      if(serviceMoneyCents(prevBalance.total)<=0)return'';
+      return `<div class="notice" style="border-color:#efaf6e;background:#fff7ec">
+        <strong>Saldo anterior pendiente: ${formatObligationAmount(o,prevBalance.total)}</strong>
+        <div style="margin-top:4px;font-size:12px">
+          ${prevBalance.obligations.map(item=>`<div>${monthLabel(item.period.slice(0,7))}: ${formatObligationAmount(item,balanceFor(item))}</div>`).join('')}
+        </div>
+        <div style="margin-top:4px;font-size:12px">No está incluido en el importe de esta factura -- son registros anteriores todavía pendientes, cada uno con su propio detalle.</div>
+      </div>`;
+    })()}
+    ${(()=>{
+      if(voided||sourceLink||progress.unavailable||serviceMoneyCents(progress.balance)<=0)return'';
+      const credits=availableServiceCredits(serviceId);
+      if(!credits.length)return'';
+      const totalCredit=roundServiceMoney(credits.reduce((sum,c)=>sum+c.available,0));
+      return `<div class="notice" style="border-color:#84c9a6;background:#eafaf1">
+        <strong>Saldo a favor disponible en este servicio: ${fmtMoneyExact(totalCredit)}</strong>
+        <div style="margin-top:4px;font-size:12px">Proviene de pagos anteriores de este mismo servicio con excedente todavía sin aplicar. Nunca se aplica a otro servicio.</div>
+        <button type="button" class="btn soft small" id="applyServiceCredit" style="margin-top:8px">Aplicar saldo a favor</button>
+      </div>`;
+    })()}
     `:''}
 
     ${paymentAllocationsLoadError&&!sourceLink&&!voided?`
@@ -19678,9 +20082,9 @@ function openObligation(serviceId,key){
               >
               <span>
                 <strong>${monthLabel(item.period.slice(0,7))}</strong><br>
-                <small>Vencía ${fmtDate(item.due_date)} · saldo ${fmtMoney(balanceFor(item))}</small>
+                <small>Vencía ${fmtDate(item.due_date)} · saldo ${fmtMoneyExact(balanceFor(item))}</small>
               </span>
-              <strong>${fmtMoney(item.amount)}</strong>
+              <strong>${fmtMoneyExact(item.amount)}</strong>
             </label>
           `).join('')}
 
@@ -19789,7 +20193,7 @@ function openObligation(serviceId,key){
       ${editableNow?`
         <button class="btn soft" id="saveObligation">Guardar cambios</button>
         <button class="btn primary" id="addInvoiceButton">Agregar factura</button>
-        ${o&&!sourceLink&&!progress.unavailable&&progress.balance>0.01?'<button class="btn primary" id="markPaid">Registrar pago</button>':''}
+        ${o&&!sourceLink&&!progress.unavailable&&serviceMoneyCents(progress.balance)>0?'<button class="btn primary" id="markPaid">Registrar pago</button>':''}
       `:''}
     </div>`);
 
@@ -19843,9 +20247,9 @@ function openObligation(serviceId,key){
 
     if(summary){
       summary.innerHTML=mode==='consolidated'
-        ? `Saldos anteriores incluidos: <strong>${fmtMoney(includedTotal)}</strong><br>
-           Total exigible de esta factura: <strong>${fmtMoney(invoiceTotal)}</strong><br>
-           Importe nuevo estimado del período: <strong>${fmtMoney(newPeriodAmount)}</strong>`
+        ? `Saldos anteriores incluidos: <strong>${fmtMoneyExact(includedTotal)}</strong><br>
+           Total exigible de esta factura: <strong>${fmtMoneyExact(invoiceTotal)}</strong><br>
+           Importe nuevo estimado del período: <strong>${fmtMoneyExact(newPeriodAmount)}</strong>`
         : `Esta factura se sumará completa a las deudas anteriores.`;
     }
   };
@@ -19863,6 +20267,12 @@ function openObligation(serviceId,key){
   if(document.getElementById('annulMonthData')){
     document.getElementById('annulMonthData').onclick=()=>{
       annulObligationMonth(o.id,serviceId,key);
+    };
+  }
+
+  if(document.getElementById('applyServiceCredit')){
+    document.getElementById('applyServiceCredit').onclick=()=>{
+      openApplyCreditModal(serviceId,o);
     };
   }
 
@@ -19927,13 +20337,30 @@ function openObligation(serviceId,key){
       if(collision)throw new Error('Ya existe un registro para ese período en este servicio. Abrilo directamente para editarlo en vez de mover este.');
     }
 
+    // MEJORA — SEGUNDO VENCIMIENTO: mismo patrón que moneda/proveedor/número
+    // de factura -- sin columna real, metadata dentro de notes. Ambos campos
+    // opcionales; si no hay fecha de segundo vencimiento, se ignora
+    // cualquier importe cargado (no tiene sentido un importe sin fecha).
+    const secondDueValue=document.getElementById('osecondDue')?.value||'';
+    const secondAmountRaw=document.getElementById('osecondAmount')?.value||'';
+    const secondAmountValue=secondDueValue&&secondAmountRaw?parseMoneyField(secondAmountRaw):null;
+
+    if(secondDueValue&&secondDueValue<dueValue){
+      throw new Error('El segundo vencimiento no puede ser anterior al primer vencimiento');
+    }
+    if(secondAmountValue!=null&&secondAmountValue<=0){
+      throw new Error('El importe con segundo vencimiento debe ser mayor a cero');
+    }
+
     const previousFreeText=o?obligationUserNotes(o.notes):'';
     const newFreeText=document.getElementById('onotes').value;
     const previousExtra=o?obligationExtraFields(o):{};
     const newExtra={
       currency:document.getElementById('ocurrency')?.value||previousExtra.currency||'ARS',
       provider:(document.getElementById('oprovider')?.value||'').trim(),
-      invoiceNumber:(document.getElementById('oinvoicenumber')?.value||'').trim()
+      invoiceNumber:(document.getElementById('oinvoicenumber')?.value||'').trim(),
+      secondDueDate:secondDueValue||null,
+      secondAmount:secondAmountValue
     };
 
     // CORRECCIÓN 6B4.15 - Historial de auditoría: solo se anexa cuando se
@@ -19942,12 +20369,14 @@ function openObligation(serviceId,key){
     const metaUpdate={extraFields:newExtra};
     if(o){
       const changedFields={};
-      if(Number(o.amount||0)!==amountValue)changedFields.importe={before:fmtMoney(o.amount||0),after:fmtMoney(amountValue)};
+      if(Number(o.amount||0)!==amountValue)changedFields.importe={before:fmtMoneyExact(o.amount||0),after:fmtMoneyExact(amountValue)};
       if((o.due_date||'')!==dueValue)changedFields.vencimiento={before:o.due_date||'—',after:dueValue};
       if(targetPeriodKey!==key)changedFields.periodo={before:monthLabel(key),after:monthLabel(targetPeriodKey)};
       if((previousExtra.currency||'ARS')!==newExtra.currency)changedFields.moneda={before:previousExtra.currency||'ARS',after:newExtra.currency};
       if((previousExtra.provider||'')!==newExtra.provider)changedFields.proveedor={before:previousExtra.provider||'—',after:newExtra.provider||'—'};
       if((previousExtra.invoiceNumber||'')!==newExtra.invoiceNumber)changedFields.numeroFactura={before:previousExtra.invoiceNumber||'—',after:newExtra.invoiceNumber||'—'};
+      if((previousExtra.secondDueDate||null)!==newExtra.secondDueDate)changedFields.segundoVencimiento={before:previousExtra.secondDueDate||'—',after:newExtra.secondDueDate||'—'};
+      if((previousExtra.secondAmount??null)!==newExtra.secondAmount)changedFields.segundoImporte={before:previousExtra.secondAmount!=null?fmtMoneyExact(previousExtra.secondAmount):'—',after:newExtra.secondAmount!=null?fmtMoneyExact(newExtra.secondAmount):'—'};
       if(previousFreeText!==newFreeText)changedFields.notas={before:previousFreeText||'—',after:newFreeText||'—'};
       if(Object.keys(changedFields).length){
         const history=obligationEditHistory(o);
@@ -20074,7 +20503,7 @@ function openObligation(serviceId,key){
     }
   };
 
-  if(o&&!sourceLink&&progress.balance>0.01){
+  if(o&&!sourceLink&&serviceMoneyCents(progress.balance)>0){
     document.getElementById('markPaid').onclick=()=>openPayModal(o);
   }
 }
@@ -20158,6 +20587,77 @@ async function deleteObligationMonth(obligationId,serviceId,key){
   }
 }
 
+// MEJORA — APLICACIÓN DE SALDO A FAVOR: acción explícita (PASO Q, "no
+// autoaplicar a ciegas") -- muestra crédito disponible, obligación
+// destino e importe a aplicar, y pide confirmación antes de escribir
+// nada. El importe nunca puede superar min(crédito disponible, saldo de
+// la obligación destino) -- reforzado tanto en el valor por defecto del
+// campo como en la validación al confirmar.
+function openApplyCreditModal(serviceId,targetObligation){
+  const credits=availableServiceCredits(serviceId);
+  if(!credits.length)return toast('No hay saldo a favor disponible en este servicio');
+  const targetBalance=balanceFor(targetObligation);
+  const totalCredit=roundServiceMoney(credits.reduce((sum,c)=>sum+c.available,0));
+  const maxApplicable=roundServiceMoney(Math.min(totalCredit,targetBalance));
+  if(maxApplicable<=0)return toast('Esta obligación no tiene saldo pendiente para aplicar crédito');
+
+  modal(`<h2>Aplicar saldo a favor</h2>
+    <div class="sub">El crédito proviene de pagos anteriores de este mismo servicio con excedente sin aplicar. Nunca se aplica a otro servicio.</div>
+
+    <div class="payment-summary">
+      <div class="item"><span>Crédito disponible</span><strong>${fmtMoneyExact(totalCredit)}</strong></div>
+      <div class="item"><span>Saldo de esta obligación</span><strong>${fmtMoneyExact(targetBalance)}</strong></div>
+    </div>
+
+    <div class="field">
+      <label>Importe a aplicar</label>
+      <input id="creditApplyAmount" data-money-input class="money-input" value="${formatMoneyField(maxApplicable)}">
+      <div class="category-help">Máximo: ${fmtMoneyExact(maxApplicable)}</div>
+    </div>
+
+    <div class="modalactions">
+      <button type="button" class="btn outline" data-close>Cancelar</button>
+      <button type="button" class="btn primary" id="confirmApplyCredit">Aplicar</button>
+    </div>`);
+
+  bindMoneyInputs();
+
+  document.getElementById('confirmApplyCredit').onclick=async()=>{
+    const amountRequested=parseMoneyField(document.getElementById('creditApplyAmount').value);
+    if(amountRequested<=0)return toast('Ingresá un importe a aplicar');
+    if(serviceMoneyCents(amountRequested)>serviceMoneyCents(maxApplicable))return toast('El importe no puede superar el crédito disponible ni el saldo de la obligación');
+
+    const seguro=confirm(`Se aplicará ${fmtMoneyExact(amountRequested)} de saldo a favor a esta obligación.\n\n¿Confirmás?`);
+    if(!seguro)return;
+
+    const button=document.getElementById('confirmApplyCredit');
+    button.disabled=true;
+    button.textContent='Aplicando…';
+
+    try{
+      let remaining=amountRequested;
+      for(const credit of credits){
+        if(serviceMoneyCents(remaining)<=0)break;
+        const take=roundServiceMoney(Math.min(remaining,credit.available));
+        if(serviceMoneyCents(take)<=0)continue;
+        const sourceObligation=obligations.find(item=>item.id===credit.payment.obligation_id);
+        if(!sourceObligation)continue;
+        await applyServiceCreditToObligation(credit.payment,sourceObligation,credit.available,targetObligation,take);
+        remaining=roundServiceMoney(remaining-take);
+      }
+      closeModal();
+      await refreshDashboardData();
+      toast('Saldo a favor aplicado');
+      openObligation(serviceId,targetObligation.period.slice(0,7));
+    }catch(err){
+      console.error('Error aplicando saldo a favor:',err);
+      button.disabled=false;
+      button.textContent='Aplicar';
+      toast(err?.message||'No se pudo aplicar el saldo a favor');
+    }
+  };
+}
+
 function openPayModal(o){
   // CORRECCIÓN — HOTFIX PAYMENT_ALLOCATIONS: registrar un pago requiere
   // saber el saldo REAL -- si no se pudieron verificar las imputaciones de
@@ -20170,7 +20670,7 @@ function openPayModal(o){
   }
   const progress=paymentProgress(o);
 
-  if(progress.balance<=0.01){
+  if(serviceMoneyCents(progress.balance)<=0){
     const last=paymentFor(o.id);
     toast('Esta factura ya está abonada');
     if(last)return openPaymentDetail(last.id);
@@ -20189,16 +20689,58 @@ function openPayModal(o){
     left-=value;
   });
 
+  // MEJORA — SELECTOR DE VENCIMIENTO: cuando la obligación tiene un
+  // segundo vencimiento cargado, quien registra el pago elige
+  // explícitamente a qué importe lo está aplicando (nunca se infiere en
+  // silencio solo por la fecha). Esto es SOLO intención/contexto de este
+  // pago -- no reemplaza a effectiveObligationAmount()/paymentProgress(),
+  // que siguen siendo la única fuente de verdad automática del saldo
+  // real (o.amount/secondAmount/due_date jamás se tocan acá). Cuando no
+  // hay segundo vencimiento, stageAmount===baseAmount===progress.amount,
+  // así que selectedDueAmount==progress.balance y el comportamiento
+  // anterior a este selector queda intacto sin ninguna rama nueva.
+  const extraDue=obligationExtraFields(o);
+  const hasSecondDue=!!extraDue.secondDueDate;
+  const baseAmount=Number(o.amount||0);
+  const secondTotalAmount=hasSecondDue&&extraDue.secondAmount!=null&&Number(extraDue.secondAmount)>0
+    ? Number(extraDue.secondAmount)
+    : baseAmount;
+  const surchargeAmount=roundServiceMoney(Math.max(0,secondTotalAmount-baseAmount));
+  const suggestedDueStage=(!hasSecondDue||todayDateString()<=o.due_date)?'first':'second';
+
   modal(`<h2>Registrar pago</h2>
     <div class="sub">
       Podés registrar un pago parcial o cancelar el saldo completo de esta factura.
     </div>
 
     <div class="payment-summary">
-      <div class="item"><span>Total factura</span><strong>${fmtMoney(progress.amount)}</strong></div>
-      <div class="item"><span>Pagado</span><strong>${fmtMoney(progress.paid)}</strong></div>
-      <div class="item"><span>Saldo a pagar</span><strong>${fmtMoney(progress.balance)}</strong></div>
+      <div class="item"><span>Total factura</span><strong>${fmtMoneyExact(progress.amount)}</strong></div>
+      <div class="item"><span>Pagado</span><strong>${fmtMoneyExact(progress.paid)}</strong></div>
+      <div class="item"><span>Saldo a pagar</span><strong>${fmtMoneyExact(progress.balance)}</strong></div>
     </div>
+
+    ${hasSecondDue?`
+    <div class="consolidation-box">
+      <strong>Aplicar pago a:</strong>
+      <div class="consolidation-options">
+        <label class="consolidation-option">
+          <input type="radio" name="dueStage" value="first" ${suggestedDueStage==='first'?'checked':''}>
+          <span>
+            <strong>Primer vencimiento</strong><br>
+            <small>${fmtMoneyExact(baseAmount)}</small>
+          </span>
+        </label>
+        <label class="consolidation-option">
+          <input type="radio" name="dueStage" value="second" ${suggestedDueStage==='second'?'checked':''}>
+          <span>
+            <strong>Segundo vencimiento</strong><br>
+            <small>${fmtMoneyExact(secondTotalAmount)}${surchargeAmount>0?` · incluye recargo de ${fmtMoneyExact(surchargeAmount)}`:''}</small>
+          </span>
+        </label>
+      </div>
+      ${suggestedDueStage==='second'&&surchargeAmount>0?`<div class="notice" style="margin-top:8px">El primer vencimiento ya pasó. El segundo importe cargado es ${fmtMoneyExact(secondTotalAmount)}. Si registrás ${fmtMoneyExact(baseAmount)} quedará una diferencia pendiente de ${fmtMoneyExact(surchargeAmount)}.</div>`:''}
+    </div>
+    `:''}
 
     <div class="grid2">
       <div class="field">
@@ -20278,8 +20820,47 @@ function openPayModal(o){
     const total=parseMoneyField(document.getElementById('paidTotal').value);
 
     if(total<=0)return toast('Ingresá el total pagado');
-    if(total>progress.balance+.01)return toast('El pago no puede superar el saldo pendiente');
-    if(Math.abs(sum-total)>.01)return toast('Los aportes deben sumar el total pagado');
+    // MEJORA — EXACTITUD A CENTAVOS: comparación en centavos enteros, sin
+    // la vieja tolerancia +.01 -- una diferencia real de 1 centavo entre
+    // los aportes y el total ya no se acepta como "suman lo mismo".
+    if(serviceMoneyCents(sum)!==serviceMoneyCents(total))return toast('Los aportes deben sumar el total pagado');
+
+    // MEJORA — PAGOS PARCIALES/EXCEDENTES: antes, un pago mayor al saldo
+    // pendiente quedaba BLOQUEADO por completo (no se podía cargar ni con
+    // aviso). progress.creditBalance ya existía como cálculo (paymentProgress())
+    // y hasta se mostraba en el detalle de la obligación -- pero nunca se
+    // podía generar desde acá. Ahora se permite, avisando ANTES de guardar,
+    // en vez de recortar el importe ingresado (nunca se transforma un pago
+    // real en algo distinto de lo que la persona realmente pagó). Un pago
+    // menor ya funcionaba (paymentProgress().partial), pero tampoco avisaba
+    // el resultado antes de confirmar -- ahora lo hace en los dos sentidos.
+    // MEJORA — EXACTITUD A CENTAVOS: diffCents en centavos enteros -- antes,
+    // la tolerancia diff<-.01/diff>.01 dejaba pasar SIN aviso un pago
+    // exactamente 1 centavo de menos o de más (-0.01 no es estrictamente
+    // menor que -0.01). Ahora un centavo de diferencia real SIEMPRE avisa.
+    // MEJORA — SELECTOR DE VENCIMIENTO: el aviso menor/mayor se compara
+    // contra selectedDueAmount (el importe del vencimiento elegido para
+    // ESTE pago), no contra progress.balance -- progress.balance sigue
+    // siendo el saldo real automático (se usa para el toast final y para
+    // decidir si la factura queda abonada), pero para avisar "te falta" o
+    // "sobra" hay que comparar contra lo que la persona dijo que estaba
+    // pagando. Ej.: base 100, segundo 105, elige segundo, paga 120 ->
+    // saldo a favor 15 (120-105), nunca 20 (120-100). Sin segundo
+    // vencimiento, selectedDueAmount==progress.balance siempre.
+    const dueStageChecked=hasSecondDue?document.querySelector('input[name="dueStage"]:checked'):null;
+    const dueStage=dueStageChecked?dueStageChecked.value:'first';
+    const stageAmount=dueStage==='second'?secondTotalAmount:baseAmount;
+    const selectedDueAmount=roundServiceMoney(Math.max(0,stageAmount-progress.paid));
+    const stageLabel=dueStage==='second'?'Segundo vencimiento':'Primer vencimiento';
+    const diffCents=serviceMoneyCents(total)-serviceMoneyCents(selectedDueAmount);
+    const diff=roundServiceMoney(total-selectedDueAmount);
+    if(diffCents<0){
+      const seguro=confirm(`${hasSecondDue?`Aplicar a: ${stageLabel}\n`:''}Importe correspondiente: ${fmtMoneyExact(selectedDueAmount)}\nPago ingresado: ${fmtMoneyExact(total)}\nQuedará un saldo pendiente de ${fmtMoneyExact(selectedDueAmount-total)}.\n\n¿Confirmás este pago parcial?`);
+      if(!seguro)return;
+    }else if(diffCents>0){
+      const seguro=confirm(`${hasSecondDue?`Aplicar a: ${stageLabel}\n`:''}Importe correspondiente: ${fmtMoneyExact(selectedDueAmount)}\nPago ingresado: ${fmtMoneyExact(total)}\nEl importe ingresado supera el importe correspondiente en ${fmtMoneyExact(diff)}.\nSe generará un saldo a favor.\n\n¿Confirmás este pago?`);
+      if(!seguro)return;
+    }
 
     const saveButton=document.getElementById('savePay');
     const original=saveButton.textContent;
@@ -20298,13 +20879,21 @@ function openPayModal(o){
     let awaitingReceiptRetry=false;
 
     try{
+      // MEJORA — CIERRE DE COHERENCIA DEL SELECTOR DE VENCIMIENTO: se
+      // persiste appliedDueStage SIEMPRE para los pagos nuevos de este
+      // flujo -- incluso sin segundo vencimiento (queda 'first', el
+      // mismo valor que ya usa dueStage como default) -- una sola regla
+      // coherente, sin casos especiales, que mejora trazabilidad y evita
+      // ambigüedad futura. rawNotes es null (pago nuevo, sin notes
+      // previas) así que buildPaymentNotes no tiene nada que fusionar.
       const {data:payment,error}=await sb
         .from('payments')
         .insert({
           obligation_id:o.id,
           paid_at:document.getElementById('paidDate').value,
           total_amount:total,
-          created_by:session.user.id
+          created_by:session.user.id,
+          notes:buildPaymentNotes(null,{appliedDueStage:dueStage})
         })
         .select()
         .single();
@@ -20360,7 +20949,7 @@ function openPayModal(o){
         return;
       }
       closeModal();
-      toast(total>=progress.balance-.01?'Factura abonada':'Pago parcial registrado');
+      toast(serviceMoneyCents(total)>=serviceMoneyCents(progress.balance)?'Factura abonada':'Pago parcial registrado');
     }catch(err){
       console.error('Error registrando pago:',err);
 
@@ -20438,7 +21027,7 @@ function openFolder(serviceId){
         <div class="folderhead">
           <div>
             <strong>${monthLabel(o.period.slice(0,7))}</strong>
-            <div>${fmtMoney(o.amount)} · vence ${fmtDate(o.due_date)}</div>
+            <div>${fmtMoneyExact(progress.amount)} · vence ${fmtDate(o.due_date)}</div>
           </div>
           <span>
             ${sourceLink&&target
@@ -20456,9 +21045,9 @@ function openFolder(serviceId){
         </div>
 
         <div class="payment-summary">
-          <div class="item"><span>Total</span><strong>${fmtMoney(progress.amount)}</strong></div>
-          <div class="item"><span>Pagado</span><strong>${progress.unavailable?'No disponible':fmtMoney(progress.paid)}</strong></div>
-          <div class="item"><span>Saldo</span><strong>${progress.unavailable?'No disponible':fmtMoney(progress.balance)}</strong></div>
+          <div class="item"><span>Total</span><strong>${fmtMoneyExact(progress.amount)}</strong></div>
+          <div class="item"><span>Pagado</span><strong>${progress.unavailable?'No disponible':fmtMoneyExact(progress.paid)}</strong></div>
+          <div class="item"><span>Saldo</span><strong>${progress.unavailable?'No disponible':fmtMoneyExact(progress.balance)}</strong></div>
         </div>
         ${progress.unavailable?`<div class="notice" style="border:2px solid #c0392b;background:#fdecea;color:#7a1f1f;padding:10px;border-radius:8px;margin-top:8px">
           No se pudieron verificar las imputaciones de pagos de este espacio -- solo se conservan visibles el importe original y los documentos.
@@ -20467,8 +21056,8 @@ function openFolder(serviceId){
         ${!progress.unavailable&&includedSources.length?`
           <div class="notice" style="margin-top:10px">
             Esta factura incluye ${includedSources.length} deuda${includedSources.length===1?'':'s'} anterior${includedSources.length===1?'':'es'}
-            por ${fmtMoney(includedTotal)}.
-            Importe nuevo estimado del período: ${fmtMoney(netNewAmount(o))}.
+            por ${fmtMoneyExact(includedTotal)}.
+            Importe nuevo estimado del período: ${fmtMoneyExact(netNewAmount(o))}.
           </div>`:''}
 
         ${sourceLink&&target?`
@@ -20581,6 +21170,7 @@ function openPaymentDetail(id){
 
   const o=obligations.find(x=>x.id===p.obligation_id);
   const s=services.find(x=>x.id===o?.service_id);
+  const progress=o?paymentProgress(o):null;
   const cs=contributions.filter(x=>x.payment_id===id);
   const invoices=o
     ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')
@@ -20591,8 +21181,8 @@ function openPaymentDetail(id){
     <div class="sub">${o?monthLabel(o.period.slice(0,7)):'Pago'}</div>
 
     <div class="notice">
-      Este pago: ${fmtDate(p.paid_at)} · ${fmtMoney(p.total_amount)}
-      ${o?`<br>Total factura: ${fmtMoney(o.amount)} · Pagado acumulado: ${paymentAllocationsLoadError?'No disponible':fmtMoney(paidAmountFor(o.id))} · Saldo: ${paymentAllocationsLoadError?'No disponible':fmtMoney(balanceFor(o))}`:''}
+      Este pago: ${fmtDate(p.paid_at)} · ${fmtMoneyExact(p.total_amount)}
+      ${o?`<br>Total factura: ${fmtMoneyExact(progress.amount)} · Pagado acumulado: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(paidAmountFor(o.id))} · Saldo: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(balanceFor(o))}`:''}
       ${paymentAllocationsLoadError?'<br><small style="color:#7a1f1f">No se pudieron verificar las imputaciones de pagos de este espacio.</small>':''}
       <!-- CORRECCIÓN 6B4.11.1 - Sección 5 del pedido: "created_by" es solo
       trazabilidad de quién lo registró (nunca define propiedad -- el pago
@@ -20744,7 +21334,7 @@ async function annulPayment(paymentId){
 
   const confirmed=confirm(
     `¿Anular este pago de ${service?.name||'este servicio'} correspondiente a ${monthLabel(obligation.period.slice(0,7))}?\n\n`+
-    `Se eliminará este pago por ${fmtMoney(payment.total_amount)}, sus aportes registrados y ${receipts.length} comprobante${receipts.length===1?'':'s'}.\n`+
+    `Se eliminará este pago por ${fmtMoneyExact(payment.total_amount)}, sus aportes registrados y ${receipts.length} comprobante${receipts.length===1?'':'s'}.\n`+
     `La factura conservará los demás pagos parciales, si los hubiera.\n\n`+
     `Esta acción no se puede deshacer.`
   );

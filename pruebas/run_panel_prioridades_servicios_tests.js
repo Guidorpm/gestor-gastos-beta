@@ -61,16 +61,43 @@ function extract(text, startMarker, endMarker) {
 // ---------------- Extracción de las funciones reales (index.html) ----------------
 
 const fnToday = extract(indexText, 'function today(){', 'function daysUntil(');
-const fnDaysUntil = extract(indexText, 'function daysUntil(v){', 'function rolePriority(');
+const fnDaysUntil = extract(indexText, 'function daysUntil(v){', 'function todayDateString(');
+const fnTodayDateString = extract(indexText, 'function todayDateString(){', 'function rolePriority(');
 const fnDueState = extract(indexText, 'function dueState(o){', 'function boxClass(o)');
 const fnPaymentProgress = extract(indexText, 'function paymentProgress(obligation){', '// CORRECCIÓN 6B4.15 - Metadata técnica');
+// AJUSTE — MEJORA "SEGUNDO VENCIMIENTO + CENTAVOS + PAGOS + ALLOCATIONS"
+// (20260816): paymentProgress()/dueState() ahora dependen de
+// effectiveObligationAmount() (el importe EFECTIVO -- importe 1 o 2
+// según corresponda), que a su vez depende de paidAmountAsOfWithAllocations()
+// -- ninguna de las dos existía cuando este test se escribió. Ningún
+// fixture de este archivo carga extraFields.secondDueDate, así que
+// effectiveObligationAmount() siempre toma el retorno temprano (importe
+// 1 = obligation.amount, comportamiento IDÉNTICO al de antes de esta
+// mejora) -- se agrega la función real igual, para no depender de que
+// nunca cambie esa rama sin que el test lo note.
+const fnRoundServiceMoney = extract(indexText, 'function roundServiceMoney(value){', '\n');
+// AJUSTE — MEJORA "EXACTITUD A CENTAVOS" (20260816): paymentProgress()
+// ahora también depende de serviceMoneyCents() para fullyPaid/partial.
+const fnServiceMoneyCents = extract(indexText, 'function serviceMoneyCents(value){', '\n');
+const fnPaidAmountAsOf = extract(indexText, 'function paidAmountAsOfWithAllocations(', 'function effectiveObligationAmount(');
+const fnEffectiveObligationAmount = extract(indexText, 'function effectiveObligationAmount(', '// CORRECCIÓN — si la carga de imputaciones del Panel general falló');
 const fnPlanMonthNumbersAndMonthApplies = extract(indexText, 'function planMonthNumbers(service){', 'function servicePlanDescription(');
 const fnPeriodDate = 'function periodDate(key){return key+\'-01\'}\n';
 const fnObligationFor = 'function obligationFor(serviceId,key){return obligations.find(o=>o.service_id===serviceId&&o.period===periodDate(key))}\n';
 const fnIsVoided = 'function isObligationVoided(o){return o?.status===\'cancelled\';}\n';
 const panelSource = extract(indexText, 'const DUE_SOON_DAYS=7;', 'function togglePriorityPanelList(');
+// AJUSTE — MEJORA "SEGUNDO VENCIMIENTO + PAGOS PARCIALES/EXCEDENTES":
+// dueState() ahora también llama a obligationExtraFields() (para el
+// segundo vencimiento informativo, ver pruebas/run_segundo_vencimiento_pagos_tests.js)
+// -- esta extracción no estaba en el bundle original porque esa
+// dependencia todavía no existía cuando este test se escribió. No cambia
+// la clasificación de prioridades en sí (DUE_SOON_DAYS/servicePriorityCategory
+// siguen sin tocar), solo agrega la función real de la que ahora depende
+// dueState() para no quedar con una referencia indefinida.
+const blockObligationMeta = extract(indexText, 'const OBLIGATION_META_PREFIX=', 'function obligationUserNotes(');
+const fnObligationExtraFields = extract(indexText, 'function obligationExtraFields(', 'function obligationCurrency(');
 
-const REAL_SOURCE = [fnToday, fnDaysUntil, fnPaymentProgress, fnDueState, fnPlanMonthNumbersAndMonthApplies, fnPeriodDate, fnObligationFor, fnIsVoided, panelSource].join('\n');
+const REAL_SOURCE = [fnToday, fnDaysUntil, fnTodayDateString, fnRoundServiceMoney, fnServiceMoneyCents, fnPaidAmountAsOf, fnEffectiveObligationAmount, fnPaymentProgress, fnDueState, fnPlanMonthNumbersAndMonthApplies, fnPeriodDate, fnObligationFor, fnIsVoided, blockObligationMeta, fnObligationExtraFields, panelSource].join('\n');
 
 // ---------------- Sandbox: Date fijo + mocks mínimos y documentados ----------------
 
@@ -90,6 +117,13 @@ function buildSandbox({ now, obligations, consolidationTargetsById, paidById, al
     Date: FixedDateFactory(now),
     obligations,
     services,
+    // MOCK documentado: ningún fixture de este archivo carga
+    // extraFields.secondDueDate, así que effectiveObligationAmount()
+    // nunca llega a usar estos arrays de verdad (toma el retorno
+    // temprano = obligation.amount) -- se proveen vacíos solo para que
+    // la referencia bare no sea un ReferenceError.
+    payments: [],
+    paymentAllocations: [],
     paymentAllocationsLoadError: !!allocationsLoadError,
     // MOCK documentado (ver aviso al inicio del archivo): en producción
     // depende de `consolidations` -- acá, una tabla fija id->target.
