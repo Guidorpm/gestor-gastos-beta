@@ -1740,7 +1740,7 @@ async function loadSpacesDashboard(){
     sb.from('services').select('id,group_id,name,active,is_private').in('group_id',groupIds).eq('active',true),
     sb.from('obligations').select('id,service_id,period,amount,status,due_date,services!inner(group_id,name)').in('services.group_id',groupIds),
     sb.from('payments').select('id,obligation_id,total_amount,paid_at,voided,notes,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
-    sb.from('documents').select('id,group_id,obligation_id,payment_id,kind').in('group_id',groupIds)
+    sb.from('documents').select('id,group_id,obligation_id,payment_id,kind,voided').in('group_id',groupIds)
   ]);
 
   const error=[servicesResult,obligationsResult,paymentsResult,documentsResult].find(result=>result.error)?.error;
@@ -2071,14 +2071,18 @@ function dashboardMetricsForGroup(groupId){
   const paid=financialDataUnavailable?null:obligationsForGroup.reduce((sum,item)=>sum+dashboardPaidFor(item.id),0);
   const pending=financialDataUnavailable?null:obligationsForGroup.reduce((sum,item)=>sum+dashboardBalanceFor(item),0);
   const unpaid=financialDataUnavailable?null:obligationsForGroup.filter(item=>dashboardBalanceFor(item)>0.01).length;
+  // MEJORA — ANULACIÓN NO DESTRUCTIVA: un documento anulado no cuenta
+  // como factura/comprobante cargado en las métricas del Panel general.
   const invoices=spacesDashboard.documents.filter(item=>
     item.group_id===groupId
     && item.kind==='invoice'
+    && item.voided!==true
     && obligationsForGroup.some(obligation=>obligation.id===item.obligation_id)
   ).length;
   const receipts=spacesDashboard.documents.filter(item=>
     item.group_id===groupId
     && item.kind==='receipt'
+    && item.voided!==true
     && paymentIds.has(item.payment_id)
   ).length;
   const activeServices=spacesDashboard.services.filter(item=>item.group_id===groupId).length;
@@ -17944,7 +17948,9 @@ function servicePriorityNotifications(){
 
     // Regla 5a: la factura no depende del estado de pago -- se mantiene
     // aunque las imputaciones no estén verificadas.
-    const hasInvoice=documents.some(d=>d.obligation_id===o.id&&d.kind==='invoice');
+    // MEJORA — ANULACIÓN NO DESTRUCTIVA: un documento anulado nunca
+    // satisface "hay factura" -- ver isVoidedServiceDocument().
+    const hasInvoice=documents.some(d=>d.obligation_id===o.id&&d.kind==='invoice'&&!isVoidedServiceDocument(d));
     if(!hasInvoice){
       push(5,service.id,currentPeriodKey,'missing_invoice',`${service.name}: falta la factura de ${monthLabel(currentPeriodKey)}.`);
     }
@@ -17975,7 +17981,7 @@ function servicePriorityNotifications(){
     // Regla 5b: comprobante faltante -- depende de progress.paid, por eso
     // se evalúa después del corte de arriba.
     if(progress.paid>0){
-      const hasReceipt=receiptsForObligation(o.id).length>0;
+      const hasReceipt=activeServiceDocuments(receiptsForObligation(o.id)).length>0;
       if(!hasReceipt){
         push(5,service.id,currentPeriodKey,'missing_receipt',`${service.name}: hay un pago registrado en ${monthLabel(currentPeriodKey)} sin comprobante cargado.`);
       }
@@ -18315,11 +18321,14 @@ function monthQuickSummary(key){
     && o.status!=='cancelled'
   );
   const totals=monthTotals(key);
+  // MEJORA — ANULACIÓN NO DESTRUCTIVA: un documento anulado nunca cuenta
+  // como factura/comprobante cargado, ver isVoidedServiceDocument()/
+  // activeServiceDocuments().
   const withInvoice=rows.filter(o=>
-    documents.some(d=>d.obligation_id===o.id&&d.kind==='invoice')
+    documents.some(d=>d.obligation_id===o.id&&d.kind==='invoice'&&!isVoidedServiceDocument(d))
   ).length;
   const withReceipt=rows.filter(o=>
-    receiptsForObligation(o.id).length>0
+    activeServiceDocuments(receiptsForObligation(o.id)).length>0
   ).length;
   const unpaid=rows.filter(isEffectivePending).length;
   const missing=services.filter(service=>
@@ -18390,7 +18399,49 @@ async function openStoredDocument(filePath){
   if(error)return toast(error.message);
   window.open(data.signedUrl,'_blank','noopener');
 }
+// MEJORA — ANULACIÓN NO DESTRUCTIVA DE DOCUMENTOS (mejora #6, FASE 2):
+// helpers EXCLUSIVOS de Servicios. Tarjetas nunca usa voided/void_reason/
+// voided_by/voided_at -- sus propios documentos (statement/card_receipt)
+// nunca pueden anularse por este mecanismo (ver isNormalServiceDocument,
+// que exige kind invoice/receipt Y card_id/statement_id/movement_id
+// nulos -- exactamente el criterio real ya auditado en Supabase). Las
+// columnas nuevas existen físicamente en la tabla compartida documents
+// (con DEFAULT false para todo lo histórico, incluido Tarjetas), pero
+// esta lógica de cliente nunca las interpreta fuera de Servicios.
+function isVoidedServiceDocument(doc){
+  return !!doc&&doc.voided===true;
+}
+function isNormalServiceDocument(doc){
+  return !!doc
+    &&(doc.kind==='invoice'||doc.kind==='receipt')
+    &&doc.card_id==null&&doc.statement_id==null&&doc.movement_id==null;
+}
+// Único criterio de "documento vigente" para Servicios de acá en
+// adelante -- un documento anulado nunca debe contar como factura/
+// comprobante cargado (paneles/indicadores/reportes), aunque siga
+// existiendo y siga visible en el detalle/historial.
+function activeServiceDocuments(list){
+  return (list||[]).filter(d=>!isVoidedServiceDocument(d));
+}
 function documentCard(document,label,allowDelete=false){
+  if(isVoidedServiceDocument(document)){
+    return `<div class="document-card document-card-voided">
+      <div class="document-card-body">
+        <div class="document-card-name" title="${esc(document.original_name||label)}">
+          <span class="void-badge">COMPROBANTE ANULADO</span><br>
+          ${esc(document.original_name||label)}
+        </div>
+        <div class="document-card-voided-meta">
+          <div>Motivo: ${esc(document.void_reason||'—')}</div>
+          <div>Anulado por: ${esc(displayNameForUserId(document.voided_by))}</div>
+          <div>Fecha: ${document.voided_at?esc(fmtDate(String(document.voided_at).slice(0,10))):'—'}</div>
+        </div>
+        <div class="document-card-actions">
+          <button type="button" class="btn soft small" data-open-document="${document.id}">Ver archivo original</button>
+        </div>
+      </div>
+    </div>`;
+  }
   return `<div class="document-card">
     <div class="document-thumb" data-document-preview="${document.id}" title="Abrir ${esc(label.toLowerCase())}">
       <div class="document-placeholder">Cargando vista previa…</div>
@@ -18401,7 +18452,9 @@ function documentCard(document,label,allowDelete=false){
       </div>
       <div class="document-card-actions">
         <button type="button" class="btn soft small" data-open-document="${document.id}">Ver</button>
-        ${allowDelete?`<button type="button" class="btn danger small" data-delete-document="${document.id}">Quitar</button>`:''}
+        ${allowDelete&&isNormalServiceDocument(document)
+          ?`<button type="button" class="btn soft small" data-void-document="${document.id}">Anular comprobante</button>`
+          :allowDelete?`<button type="button" class="btn danger small" data-delete-document="${document.id}">Quitar</button>`:''}
       </div>
     </div>
   </div>`;
@@ -18456,7 +18509,79 @@ function bindDocumentCards({onDelete}={}){
     button.onclick=()=>deleteStoredDocument(button.dataset.deleteDocument,onDelete);
   });
 
+  document.querySelectorAll('[data-void-document]').forEach(button=>{
+    button.onclick=()=>openVoidServiceDocumentModal(button.dataset.voidDocument,onDelete);
+  });
+
   loadDocumentPreviews();
+}
+// MEJORA — ANULACIÓN NO DESTRUCTIVA DE DOCUMENTOS (mejora #6, FASE 2):
+// reemplaza a "Quitar" (deleteStoredDocument -- DELETE real de la fila +
+// remove() físico del archivo, sin motivo ni trazabilidad) para
+// documentos normales de Servicios (invoice/receipt, sin vínculo a
+// Tarjetas). Nunca borra la fila ni el archivo -- un solo UPDATE con
+// voided=true + void_reason. voided_by/voided_at los completa la base
+// (ver migración migraciones/6b12_PROPUESTA_ANULACION_DOCUMENTOS_
+// NO_EJECUTAR_20260817.sql, NO ejecutada todavía) -- el cliente nunca
+// los envía.
+function openVoidServiceDocumentModal(documentId,onDelete){
+  if(!canEdit())return toast('No tenés permiso para anular comprobantes');
+
+  const documentData=documents.find(item=>item.id===documentId);
+  if(!documentData)return toast('No se encontró el documento');
+  if(!isNormalServiceDocument(documentData))return toast('Este documento no puede anularse desde acá');
+  if(isVoidedServiceDocument(documentData))return toast('Este comprobante ya está anulado');
+
+  const documentLabel=documentData.kind==='receipt'?'comprobante de pago':'factura';
+
+  modal(`<h2>Anular ${esc(documentLabel)}</h2>
+    <div class="sub">
+      Esto no eliminará el archivo ni la obligación. El comprobante quedará marcado como anulado en el historial.
+    </div>
+
+    <div class="field">
+      <label>Documento</label>
+      <div class="document-card-name">${esc(documentData.original_name||documentLabel)}</div>
+    </div>
+
+    <div class="field">
+      <label>Motivo de anulación *</label>
+      <textarea id="voidDocumentReason" maxlength="500" placeholder="Ej: se cargó el PDF equivocado"></textarea>
+    </div>
+
+    <div class="modalactions">
+      <button type="button" class="btn outline" data-close>Cancelar</button>
+      <button type="button" class="btn danger" id="confirmVoidDocument">Anular comprobante</button>
+    </div>`);
+
+  document.getElementById('confirmVoidDocument').onclick=async()=>{
+    const reason=(document.getElementById('voidDocumentReason').value||'').trim();
+    if(!reason)return toast('El motivo de anulación es obligatorio');
+    if(reason.length>500)return toast('El motivo no puede superar 500 caracteres');
+
+    const button=document.getElementById('confirmVoidDocument');
+    button.disabled=true;
+    button.textContent='Anulando…';
+
+    try{
+      const {error}=await sb
+        .from('documents')
+        .update({voided:true,void_reason:reason})
+        .eq('id',documentId);
+
+      if(error)throw error;
+
+      await refreshDashboardData();
+      closeModal();
+      toast('Comprobante anulado');
+      if(typeof onDelete==='function')onDelete();
+    }catch(err){
+      console.error('Error anulando comprobante:',err);
+      toast(err?.message||'No se pudo anular el comprobante');
+      button.disabled=false;
+      button.textContent='Anular comprobante';
+    }
+  };
 }
 function renderLocalFilePreview(input,container,label='Archivo seleccionado'){
   if(!container)return;
@@ -18571,7 +18696,14 @@ async function deleteStoredDocument(documentId,onDelete){
 // hash SHA-256 antes de decir "ya está cargado" — nunca se usa solo el
 // nombre del archivo como evidencia.
 async function findMatchingServiceDocument({obligationId=null,paymentId=null,kind,file}){
-  const candidates=documents.filter(item=>item.kind===kind&&(paymentId!=null
+  // MEJORA — ANULACIÓN NO DESTRUCTIVA DE DOCUMENTOS (mejora #6, FASE 2):
+  // un documento ANULADO nunca cuenta como "ya cargado" -- si no, subir
+  // el archivo correcto después de anular el equivocado quedaría
+  // bloqueado por el propio antiduplicado, devolviendo el documento
+  // histórico anulado en vez de crear la fila nueva real. Solo se
+  // excluyen los anulados de la detección; un documento vigente sigue
+  // bloqueando un duplicado exacto como siempre.
+  const candidates=documents.filter(item=>item.kind===kind&&item.voided!==true&&(paymentId!=null
     ?item.payment_id===paymentId
     :(item.obligation_id===obligationId&&item.payment_id==null)));
   const sameShape=candidates.filter(doc=>
@@ -18645,11 +18777,13 @@ async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
 function operationalServiceRowHtml(s,key){
   const o=obligationFor(s.id,key);
   const t=boxText(o,s);
+  // MEJORA — ANULACIÓN NO DESTRUCTIVA: los doc-pills solo cuentan
+  // documentos vigentes (no anulados).
   const invoiceCount=o
-    ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice').length
+    ? activeServiceDocuments(documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')).length
     : 0;
   const receiptCount=o
-    ? receiptsForObligation(o.id).length
+    ? activeServiceDocuments(receiptsForObligation(o.id)).length
     : 0;
   // MEJORA — CONTINUIDAD DE SALDO: previousBalanceFor() es puramente
   // informativo (mismo dato que ya muestra el detalle de la obligación) --
@@ -18837,11 +18971,13 @@ function renderServices(ms){
               }
 
               const t=boxText(o,s);
+              // MEJORA — ANULACIÓN NO DESTRUCTIVA: los doc-pills de la
+              // matriz solo cuentan documentos vigentes (no anulados).
               const invoiceCount=o
-                ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice').length
+                ? activeServiceDocuments(documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')).length
                 : 0;
               const receiptCount=o
-                ? receiptsForObligation(o.id).length
+                ? activeServiceDocuments(receiptsForObligation(o.id)).length
                 : 0;
 
               return `<td>
@@ -20105,7 +20241,7 @@ function openObligation(serviceId,key){
     <div class="document-group">
       <h3>Facturas del servicio</h3>
       <p>${existingInvoices.length
-        ? 'Podés abrirlas en tamaño completo o quitar una cargada por error.'
+        ? 'Podés abrirlas en tamaño completo o anular una cargada por error.'
         : 'Todavía no hay una factura adjunta.'}</p>
 
       ${existingInvoices.length?`

@@ -135,24 +135,38 @@ caso('CASO 9 — una allocation inactiva sigue sin contar en la suma (AND is_act
 
 caso('CASO 10 — Tarjetas no se toca (ni en la migración ni en el resto del repo por esta mejora)', () => {
   assert.ok(!/creditCard|credit_card|carried_balance|\bstatement|\bmovement|conciliaci/i.test(sql), 'la migración no debe referenciar nada de Tarjetas');
-  // NOTA: NO se compara contra `git show HEAD:index.html` -- el working
-  // tree local conserva a propósito WIP histórico de Tarjetas/FASE1 sin
-  // commitear (regla de todo el proyecto: "conservar Tarjetas/FASE1
-  // exactamente como está"), así que SIEMPRE difiere de HEAD aunque esta
-  // mejora no haya tocado nada. Lo que sí prueba que esta mejora
-  // (puramente backend/SQL) no tocó el frontend es que el working tree
-  // sigue teniendo el MISMO SHA-256 que ya tenía antes de empezar --
-  // confirmado tanto antes como después de la publicación anterior
-  // (respaldos_publicacion/antes_publicar_bloque_contable_servicios_
-  // 20260817_072140/sha256_antes.txt), y ese valor nunca cambió durante
-  // esta tarea (no hubo ningún Edit/Write sobre estos dos archivos).
-  const referenceShaPath = path.join(ROOT, 'respaldos_publicacion', 'antes_publicar_bloque_contable_servicios_20260817_072140', 'sha256_antes.txt');
-  assert.ok(fs.existsSync(referenceShaPath), 'debe existir el respaldo de referencia previo, con el SHA-256 conocido del working tree');
-  const referenceSha = fs.readFileSync(referenceShaPath, 'utf8');
-  const currentIndexSha = execSync(`sha256sum index.html`, { cwd: ROOT }).toString().split(' ')[0];
-  const currentOperatorSha = execSync(`sha256sum index_operator.html`, { cwd: ROOT }).toString().split(' ')[0];
-  assert.ok(referenceSha.includes(currentIndexSha), 'index.html debe seguir teniendo el mismo SHA-256 que antes de esta mejora -- ningún cambio de frontend');
-  assert.ok(referenceSha.includes(currentOperatorSha), 'index_operator.html debe seguir teniendo el mismo SHA-256 que antes de esta mejora -- ningún cambio de frontend');
+  // AJUSTE (mejora #6, 20260817): esta aserción originalmente comparaba
+  // el SHA-256 de TODO index.html/index_operator.html contra un
+  // respaldo fijo, asumiendo que el frontend nunca volvería a cambiar --
+  // esa asunción dejó de ser válida en cuanto una mejora POSTERIOR y
+  // legítima (mejora #6, anulación no destructiva de documentos) tocó
+  // el frontend de verdad. La garantía real que le importa a ESTA
+  // mejora (puramente backend/SQL, nunca tocó Tarjetas) no depende de
+  // que el archivo entero se congele para siempre -- se verifica
+  // directamente comparando las funciones CORE de Tarjetas contra el
+  // mismo respaldo de siempre, el mismo criterio que ya usan las demás
+  // suites de esta sesión.
+  const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_publicar_bloque_contable_servicios_20260817_072140', 'index.html.antes_publicar_bloque_contable');
+  const beforeOperatorPath = path.join(ROOT, 'respaldos_publicacion', 'antes_publicar_bloque_contable_servicios_20260817_072140', 'index_operator.html.antes_publicar_bloque_contable');
+  assert.ok(fs.existsSync(beforePath) && fs.existsSync(beforeOperatorPath), 'debe existir el respaldo de referencia previo');
+  const before = fs.readFileSync(beforePath, 'utf8');
+  const beforeOperator = fs.readFileSync(beforeOperatorPath, 'utf8');
+  const extractLocal = (text, start, end) => {
+    const i = text.indexOf(start);
+    assert.ok(i !== -1, `no se encontró "${start}"`);
+    const j = text.indexOf(end, i);
+    assert.ok(j !== -1, `no se encontró "${end}"`);
+    return text.slice(i, j);
+  };
+  for (const [now, ref, label] of [[indexText, before, 'index.html'], [operatorText, beforeOperator, 'index_operator.html']]) {
+    for (const fnName of ['renderCreditCardsModule', 'bindCreditCardsModule', 'roundMoney']) {
+      assert.strictEqual(
+        extractLocal(now, `function ${fnName}(`, '\nfunction '),
+        extractLocal(ref, `function ${fnName}(`, '\nfunction '),
+        `${fnName}() en ${label} debe seguir byte-idéntica`
+      );
+    }
+  }
 });
 
 caso('CASO 11 — RLS no se toca (sin POLICY/GRANT/REVOKE en ningún archivo de esta mejora)', () => {

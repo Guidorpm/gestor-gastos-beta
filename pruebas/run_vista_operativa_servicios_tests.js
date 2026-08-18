@@ -105,11 +105,20 @@ const blockOperational = extract(indexText, 'function operationalServiceRowHtml(
 const blockPaidAmountForAllocations = extract(indexText, 'function paidAmountForWithAllocations(obligationId,paymentsList,allocationsList){', 'function isServiceVisibleForCurrentContext(');
 const blockBalanceOnly = extract(indexText, 'function balanceFor(obligation){', '// CORRECCIÓN 6B4.15 - Un importe corregido a la baja');
 const blockConsolidationAndPreviousBalance = extract(indexText, 'function consolidationForSource(', 'function dueState(o){');
+// AJUSTE — MEJORA "ANULACIÓN NO DESTRUCTIVA DE DOCUMENTOS" (mejora #6,
+// FASE 2, 20260817): operationalServiceRowHtml() ahora también llama a
+// activeServiceDocuments() (que internamente usa isVoidedServiceDocument())
+// para no contar un documento anulado como "factura/comprobante cargado"
+// en los doc-pills -- esta extracción no estaba en el bundle original
+// porque esas funciones todavía no existían cuando este test se escribió.
+// Se detiene justo antes de documentCard() a propósito -- este archivo no
+// necesita renderizar tarjetas de documento, solo los dos helpers puros.
+const blockDocumentVoidHelpers = extract(indexText, 'function isVoidedServiceDocument(doc){', 'function documentCard(document,label,allowDelete=false){');
 
 const REAL_SOURCE = [
   fnFmtDateEsc, fnToday, fnDaysUntil, fnIsOwner, lnMonths, fnMonthLabelFmtMoney,
   fnPeriodDate, fnObligationFor, blockObligationMeta, blockFmtUsdFormatUsd,
-  blockPaidAmountForAllocations, blockBalanceOnly,
+  blockPaidAmountForAllocations, blockBalanceOnly, blockDocumentVoidHelpers,
   blockPaymentProgress, blockFreqPlanEmptyPaymentsFor,
   blockConsolidationAndPreviousBalance, blockDueState, fnBoxClass,
   blockBoxText, blockReceiptsForObligation, lnPriorityOrder, blockOperational,
