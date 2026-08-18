@@ -21370,9 +21370,12 @@ function openPaymentDetail(id){
       `:''}
     </div>
 
+    <div id="paymentCorrectionsHistory"></div>
+
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
       <button class="btn soft" id="openFolderBtn">Abrir carpeta</button>
+      ${isOwner()?'<button class="btn soft" id="correctHistoricalPaymentBtn">Corregir pago histórico</button>':''}
       ${canEdit()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
     </div>`);
 
@@ -21388,9 +21391,21 @@ function openPaymentDetail(id){
 
   document.getElementById('openFolderBtn').onclick=()=>openFolder(s.id);
 
+  if(document.getElementById('correctHistoricalPaymentBtn')){
+    document.getElementById('correctHistoricalPaymentBtn').onclick=()=>openCorrectHistoricalPaymentModal(id);
+  }
+
   if(document.getElementById('annulPaymentBtn')){
     document.getElementById('annulPaymentBtn').onclick=()=>annulPayment(id);
   }
+
+  // MEJORA #7 -- historial de correcciones: se carga de forma asíncrona
+  // DESPUÉS de abrir el modal (mismo patrón que loadDocumentPreviews()),
+  // nunca bloquea la apertura del detalle. Solo se intenta si el usuario
+  // es titular -- la policy de payment_corrections es SELECT titular-only,
+  // así que para cualquier otro rol la consulta no traería filas de todos
+  // modos.
+  if(isOwner())loadPaymentCorrectionsHistory(id);
 }
 // CORRECCIÓN 6B4.11 - Esta función se llamaba desde "Cargar comprobante"/
 // "Agregar otro comprobante" en el detalle de un pago, pero nunca estaba
@@ -21517,6 +21532,242 @@ async function annulPayment(paymentId){
       document.getElementById('annulPaymentBtn').textContent='Anular pago';
     }
   }
+}
+
+// MEJORA #7 -- CORRECCIÓN TRAZABLE DE PAGOS HISTÓRICOS (FASE 2, LOCAL,
+// NO EJECUTAR MIGRACIÓN). Herramienta titular-only para corregir un pago
+// que quedó registrado con un importe incorrecto por una limitación
+// antigua del sistema (caso real: Edesur agosto 2026, comprobante de
+// Mercado Pago por $49.907,71 registrado como $49.733,00 + un pago
+// auxiliar de $0,69). Toda la lógica de negocio (validaciones,
+// atomicidad, trazabilidad) vive en el RPC
+// public.correct_historical_payment() -- propuesto en
+// migraciones/6b13_PROPUESTA_CORRECCION_PAGOS_HISTORICOS_NO_EJECUTAR_20260818.sql,
+// NO ejecutado todavía. Este bloque de frontend NUNCA decide por su
+// cuenta: solo arma los parámetros y muestra el resultado/error que
+// devuelva el RPC. isOwner() acá es solo UX (ocultar/mostrar el botón) --
+// la verificación real de titularidad ocurre server-side dentro del RPC,
+// nunca se confía solamente en este chequeo de cliente.
+
+// Candidatos "seguros" de pago auxiliar para anular dentro de una
+// corrección: misma obligación, distinto payment_id, vigente, sin
+// allocations activas, sin documentos asociados, con sus contributions
+// consistentes (exactamente una, que suma exacto al total_amount). Es
+// SOLO informativo para la UI -- el RPC vuelve a validar todo esto por su
+// cuenta antes de anular nada.
+function historicalCorrectionAuxiliaryCandidates(obligationId,excludePaymentId){
+  return payments.filter(p=>{
+    if(p.obligation_id!==obligationId||p.id===excludePaymentId||p.voided===true)return false;
+    if(paymentAllocations.some(a=>a.payment_id===p.id&&a.is_active))return false;
+    if(documents.some(d=>d.payment_id===p.id))return false;
+    const pcs=contributions.filter(c=>c.payment_id===p.id);
+    if(pcs.length!==1)return false;
+    const sum=pcs.reduce((acc,c)=>acc+Number(c.amount||0),0);
+    return roundServiceMoney(sum)===roundServiceMoney(Number(p.total_amount||0));
+  });
+}
+
+// Historial de correcciones -- carga asíncrona (mismo patrón que
+// loadDocumentPreviews()), nunca bloquea la apertura del detalle de pago.
+// La policy de payment_corrections es SELECT titular-only -- para
+// cualquier otro rol esta consulta simplemente no trae filas (RLS real,
+// no un chequeo de cliente).
+async function loadPaymentCorrectionsHistory(paymentId){
+  const container=document.getElementById('paymentCorrectionsHistory');
+  if(!container)return;
+
+  const {data,error}=await sb
+    .from('payment_corrections')
+    .select('id,previous_total_amount,new_total_amount,previous_applied_due_stage,new_applied_due_stage,previous_second_due_amount,new_second_due_amount,previous_second_due_date,new_second_due_date,related_voided_payment_id,reason,corrected_by,corrected_at')
+    .eq('payment_id',paymentId)
+    .order('corrected_at',{ascending:false});
+
+  if(error||!data||!data.length){
+    if(error)console.warn('No se pudo cargar el historial de correcciones:',error.message);
+    return;
+  }
+
+  container.innerHTML=`<div class="document-group">
+    <h3>Historial de correcciones</h3>
+    ${data.map(entry=>`
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:4px;border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
+        <div><strong>${esc(fmtDate(entry.corrected_at))}</strong> · ${esc(displayNameForUserId(entry.corrected_by))}</div>
+        <div>Importe: ${esc(fmtMoneyExact(entry.previous_total_amount))} → ${esc(fmtMoneyExact(entry.new_total_amount))}</div>
+        ${entry.previous_applied_due_stage!==entry.new_applied_due_stage?`<div>Vencimiento aplicado: ${esc(entry.previous_applied_due_stage||'—')} → ${esc(entry.new_applied_due_stage||'—')}</div>`:''}
+        ${entry.new_second_due_amount!=null?`<div>Segundo vencimiento: ${entry.previous_second_due_amount!=null?esc(fmtMoneyExact(entry.previous_second_due_amount)):'—'} → ${esc(fmtMoneyExact(entry.new_second_due_amount))}${entry.new_second_due_date?` (fecha ${esc(fmtDate(entry.new_second_due_date))})`:''}</div>`:''}
+        ${entry.related_voided_payment_id?`<div>Pago auxiliar anulado como parte de esta corrección.</div>`:''}
+        <div>Motivo: ${esc(entry.reason)}</div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+function openCorrectHistoricalPaymentModal(paymentId){
+  if(!isOwner())return toast('Solo el titular puede corregir un pago histórico');
+
+  const payment=payments.find(item=>item.id===paymentId);
+  if(!payment)return toast('No se encontró el pago');
+  if(payment.voided===true)return toast('Este pago ya está anulado');
+
+  const obligation=obligations.find(item=>item.id===payment.obligation_id);
+  if(!obligation)return toast('No se encontró la obligación del pago');
+
+  const activeAllocations=paymentAllocations.filter(a=>a.payment_id===paymentId&&a.is_active);
+  if(activeAllocations.length){
+    return toast('Este pago tiene asignaciones (crédito aplicado a otra obligación) -- no se puede corregir en esta versión');
+  }
+
+  const pcs=contributions.filter(c=>c.payment_id===paymentId);
+  if(pcs.length!==1){
+    return toast('Solo se pueden corregir pagos con exactamente un aporte registrado -- no se puede corregir en esta versión');
+  }
+  if(roundServiceMoney(Number(pcs[0].amount||0))!==roundServiceMoney(Number(payment.total_amount||0))){
+    return toast('El aporte registrado no coincide con el importe del pago -- inconsistencia previa, no se puede corregir en esta versión');
+  }
+
+  const extra=obligationExtraFields(obligation);
+  const auxiliaryCandidates=historicalCorrectionAuxiliaryCandidates(obligation.id,paymentId);
+
+  modal(`<h2>Corregir pago histórico</h2>
+    <div class="sub">${esc(services.find(s=>s.id===obligation.service_id)?.name||'Servicio')} · ${esc(monthLabel(obligation.period.slice(0,7)))}</div>
+
+    <div class="notice">
+      Usá esta opción únicamente para corregir un pago que quedó registrado con datos incorrectos. La corrección quedará guardada en el historial y no se borrará el comprobante original.
+    </div>
+
+    <div class="field">
+      <label>Importe registrado actualmente</label>
+      <div class="document-card-name">${esc(fmtMoneyExact(payment.total_amount))}</div>
+    </div>
+
+    <div class="field">
+      <label>Importe correcto *</label>
+      <input id="correctTotalAmount" class="money-input" value="${esc(formatMoneyField(payment.total_amount))}">
+    </div>
+
+    <div class="field">
+      <label>Motivo de corrección *</label>
+      <textarea id="correctReason" maxlength="500" placeholder="Ej: el comprobante real de Mercado Pago muestra un importe distinto al cargado"></textarea>
+    </div>
+
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-weight:600">
+        <input type="checkbox" id="correctIsSecondDue" style="width:auto">
+        Corresponde a segundo vencimiento / importe actualizado
+      </label>
+    </div>
+
+    <div id="correctSecondDueFields" class="hidden">
+      <div class="field">
+        <label>Segundo vencimiento actual</label>
+        <div class="document-card-name">${extra.secondAmount!=null?esc(fmtMoneyExact(extra.secondAmount)):'No hay segundo vencimiento cargado'}${extra.secondDueDate?` (fecha ${esc(fmtDate(extra.secondDueDate))})`:''}</div>
+      </div>
+      <div class="field">
+        <label>Segundo importe correcto *</label>
+        <input id="correctSecondAmount" class="money-input" value="${extra.secondAmount!=null?esc(formatMoneyField(extra.secondAmount)):''}">
+      </div>
+      <div class="field">
+        <label>Fecha de segundo vencimiento *</label>
+        <input id="correctSecondDueDate" type="date" value="${extra.secondDueDate||''}">
+      </div>
+    </div>
+
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-weight:600">
+        <input type="checkbox" id="correctHasAuxiliary" style="width:auto" ${auxiliaryCandidates.length?'':'disabled'}>
+        ¿Se creó otro pago para compensar este error?
+      </label>
+      ${!auxiliaryCandidates.length?'<div style="font-size:12px;color:var(--muted);margin-top:4px">No hay otros pagos vigentes de esta obligación que cumplan las condiciones para anularse automáticamente.</div>':''}
+    </div>
+
+    <div id="correctAuxiliaryFields" class="hidden">
+      <div class="notice">El pago seleccionado no se eliminará. Quedará marcado como anulado y conservará su historial.</div>
+      ${auxiliaryCandidates.map(p=>`
+        <label class="row" style="cursor:pointer">
+          <span>
+            <input type="radio" name="correctAuxiliaryPaymentId" value="${p.id}" style="width:auto;margin-right:8px">
+            ${esc(fmtDate(p.paid_at))} · ${esc(fmtMoneyExact(p.total_amount))} · ${esc(paymentCreatedByLabel(p)||'—')}
+          </span>
+        </label>
+      `).join('')}
+      <div class="field">
+        <label>Motivo de anulación del pago auxiliar *</label>
+        <textarea id="correctAuxiliaryReason" maxlength="500" placeholder="Ej: pago creado en su momento para compensar la limitación anterior"></textarea>
+      </div>
+    </div>
+
+    <div class="modalactions">
+      <button type="button" class="btn outline" data-close>Cancelar</button>
+      <button type="button" class="btn primary" id="confirmCorrectHistoricalPayment">Guardar corrección</button>
+    </div>`,true);
+
+  const secondDueCheckbox=document.getElementById('correctIsSecondDue');
+  const secondDueFields=document.getElementById('correctSecondDueFields');
+  secondDueCheckbox.onchange=()=>secondDueFields.classList.toggle('hidden',!secondDueCheckbox.checked);
+
+  const auxiliaryCheckbox=document.getElementById('correctHasAuxiliary');
+  const auxiliaryFields=document.getElementById('correctAuxiliaryFields');
+  auxiliaryCheckbox.onchange=()=>auxiliaryFields.classList.toggle('hidden',!auxiliaryCheckbox.checked);
+
+  document.getElementById('confirmCorrectHistoricalPayment').onclick=async()=>{
+    const newTotalAmount=roundServiceMoney(parseMoneyField(document.getElementById('correctTotalAmount').value));
+    const reason=(document.getElementById('correctReason').value||'').trim();
+
+    if(newTotalAmount<=0)return toast('El importe corregido debe ser mayor a cero');
+    if(newTotalAmount===roundServiceMoney(Number(payment.total_amount||0)))return toast('El importe corregido debe ser distinto del importe actual');
+    if(!reason)return toast('La corrección requiere un motivo');
+    if(reason.length>500)return toast('El motivo no puede superar 500 caracteres');
+
+    const wantsSecondDue=secondDueCheckbox.checked;
+    let secondDueAmount=null;
+    let secondDueDate=null;
+    if(wantsSecondDue){
+      secondDueAmount=roundServiceMoney(parseMoneyField(document.getElementById('correctSecondAmount').value));
+      secondDueDate=document.getElementById('correctSecondDueDate').value||null;
+      if(secondDueAmount<=0)return toast('El importe de segundo vencimiento debe ser mayor a cero');
+      if(!secondDueDate)return toast('La fecha de segundo vencimiento es obligatoria');
+    }
+
+    const wantsAuxiliary=auxiliaryCheckbox.checked&&!auxiliaryCheckbox.disabled;
+    let auxiliaryPaymentId=null;
+    let auxiliaryReason=null;
+    if(wantsAuxiliary){
+      const selected=document.querySelector('input[name="correctAuxiliaryPaymentId"]:checked');
+      if(!selected)return toast('Elegí cuál pago auxiliar anular');
+      auxiliaryPaymentId=selected.value;
+      auxiliaryReason=(document.getElementById('correctAuxiliaryReason').value||'').trim();
+      if(!auxiliaryReason)return toast('La anulación del pago auxiliar requiere su propio motivo');
+    }
+
+    const button=document.getElementById('confirmCorrectHistoricalPayment');
+    button.disabled=true;
+    button.textContent='Guardando…';
+
+    try{
+      const {error}=await sb.rpc('correct_historical_payment',{
+        p_payment_id:paymentId,
+        p_new_total_amount:newTotalAmount,
+        p_reason:reason,
+        p_applied_due_stage:wantsSecondDue?'second':null,
+        p_second_due_date:secondDueDate,
+        p_second_due_amount:secondDueAmount,
+        p_void_auxiliary_payment_id:auxiliaryPaymentId,
+        p_void_auxiliary_reason:auxiliaryReason
+      });
+
+      if(error)throw error;
+
+      closeModal();
+      await refreshDashboardData();
+      toast('Pago corregido');
+      openPaymentDetail(paymentId);
+    }catch(err){
+      console.error('Error corrigiendo el pago:',err);
+      toast(err?.message||'No se pudo corregir el pago');
+      button.disabled=false;
+      button.textContent='Guardar corrección';
+    }
+  };
 }
 
 function permissionSummary(member){

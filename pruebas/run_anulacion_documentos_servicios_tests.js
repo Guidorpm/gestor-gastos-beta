@@ -546,13 +546,22 @@ caso('CASO 40 — Tarjetas permanece byte-idéntica en funciones core tras esta 
 });
 
 caso('CASO 41b — annulPayment() es byte-idéntica al backup previo (no se tocó)', () => {
+  // AJUSTE (mejora #7, 20260818): el marcador de fin original
+  // ('\nfunction permissionSummary(') asumía que nada se insertaría entre
+  // annulPayment() y permissionSummary() -- esa asunción dejó de ser
+  // válida en cuanto una mejora POSTERIOR y legítima (mejora #7,
+  // corrección trazable de pagos históricos) agregó funciones nuevas
+  // justo ahí (openCorrectHistoricalPaymentModal y helpers), sin tocar
+  // annulPayment() en absoluto. Se usa el comentario real que abre ese
+  // bloque nuevo como marcador de fin en el archivo ACTUAL -- el backup
+  // previo (que no tiene ese bloque) sigue usando el marcador original.
   for (const f of ['index.html', 'index_operator.html']) {
     const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_implementar_anulacion_documentos_20260817_102821', `${f}.antes_implementar_anulacion_documentos`);
     const before = fs.readFileSync(beforePath, 'utf8');
     const now = f === 'index.html' ? indexText : operatorText;
     assert.strictEqual(
-      extract(now, 'async function annulPayment(paymentId){', '\nfunction permissionSummary('),
-      extract(before, 'async function annulPayment(paymentId){', '\nfunction permissionSummary('),
+      extract(now, 'async function annulPayment(paymentId){', '// MEJORA #7 -- CORRECCIÓN TRAZABLE'),
+      extract(before, 'async function annulPayment(paymentId){', 'function permissionSummary('),
       `annulPayment() en ${f} debe seguir byte-idéntica`
     );
   }
