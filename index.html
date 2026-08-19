@@ -18720,20 +18720,52 @@ async function findMatchingServiceDocument({obligationId=null,paymentId=null,kin
   }
   return null;
 }
+// MEJORA #8 -- UPLOAD ROBUSTO MOBILE/iPHONE: mismo bug real ya
+// diagnosticado y resuelto para Tarjetas (card_receipt, corrección
+// 20260809 "CAUSA RAÍZ 20260809 - RECEIPT_STORAGE/InvalidRequest -- No
+// content provided", ver uploadCreditDocument()) -- pasar el File/Blob
+// directo a sb.storage.upload() hace que storage-js arme un FormData
+// (body.append('', file)); en iOS/Safari esa parte puede llegar VACÍA a
+// Storage aunque file.size>0, sin importar el formato (no es un problema
+// de HEIC -- confirmado real con una foto Y una captura de pantalla,
+// ambas fallando igual). Leer los bytes con file.arrayBuffer() ANTES de
+// llamar a upload() fuerza a storage-js a su rama binaria directa (un
+// ArrayBuffer no es instanceof Blob/FormData), que sí respeta el
+// content-type explícito y nunca depende de cómo el navegador serialice
+// el FormData. Se lee LO ANTES POSIBLE dentro de esta función (antes del
+// detector de duplicados, que también es async) para no depender de un
+// File que en iOS puede volverse no legible después de más awaits. NO
+// se convierte ni recomprime nada -- los bytes subidos son exactamente
+// los bytes seleccionados.
+async function snapshotFileBytesForUpload(file){
+  if(!file)throw new Error('No pudimos leer el archivo seleccionado. Volvé a elegirlo.');
+  let bytes;
+  try{
+    bytes=await file.arrayBuffer();
+  }catch(readError){
+    throw new Error('No pudimos leer el archivo seleccionado. Volvé a elegirlo.');
+  }
+  if(!bytes||bytes.byteLength===0){
+    throw new Error('No pudimos leer el archivo seleccionado. Volvé a elegirlo.');
+  }
+  return bytes;
+}
 async function uploadDoc(file,serviceId,obligationId,paymentId,kind){
   if(!receiptFileIsAcceptable(file))throw new Error('Formato de archivo no admitido (solo PDF, JPG, PNG, WEBP o HEIC)');
   if(file.size>10*1024*1024)throw new Error('El archivo supera el límite de 10 MB');
+
+  const fileBytes=await snapshotFileBytesForUpload(file);
 
   const duplicate=await findMatchingServiceDocument({obligationId,paymentId,kind,file});
   if(duplicate)return{filePath:duplicate.file_path,document:duplicate,alreadyLoaded:true};
 
   const safe=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
   const filePath=`${group.id}/${serviceId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${safe}`;
-  const contentType=file.type||'application/octet-stream';
+  const contentType=file.type&&String(file.type).trim()?file.type:'application/octet-stream';
 
   const {error:uploadError}=await sb.storage
     .from('documents')
-    .upload(filePath,file,{
+    .upload(filePath,fileBytes,{
       contentType,
       upsert:false,
       cacheControl:'3600'
