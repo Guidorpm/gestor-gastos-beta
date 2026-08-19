@@ -435,10 +435,20 @@ caso('CASO 31 — no hay conversión ni recompresión de imagen (sin canvas/toBl
   assert.ok(!/canvas|toBlob|drawImage|OffscreenCanvas|createImageBitmap/i.test(newBlock), 'no debe transformar el archivo original de ninguna forma');
 });
 
-caso('CASO 32 — esta mejora no crea ni modifica ningún archivo .sql (no toca Supabase) -- sin migración 6b14 ni ningún .sql nombrado para mejora #8/upload/mobile', () => {
+caso('CASO 32 — esta mejora no crea ni modifica ningún archivo .sql (no toca Supabase) -- sin ningún .sql nombrado para mejora #8/upload/mobile', () => {
+  // AJUSTE — el "^6b14" original era solo un número reservado a modo de
+  // resguardo en la fecha de #8 (20260818), sin ningún significado
+  // permanente -- mejora #10 (posterior, autorizada explícitamente por
+  // Guido) legítimamente reclamó ese mismo número para su propio
+  // diagnóstico SOLO LECTURA
+  // (6b14_DIAGNOSTICO_BAJA_REACTIVACION_SERVICIOS_SOLO_LECTURA_20260819.sql),
+  // que nada tiene que ver con #8. El chequeo real de esta prueba es que
+  // NO exista SQL identificable como perteneciente a #8 -- se ajusta el
+  // patrón para verificar eso, no un número de secuencia que nunca fue
+  // una regla fija.
   const migracionesDir = path.join(ROOT, 'migraciones');
   const sqlFiles = fs.readdirSync(migracionesDir).filter(f => f.endsWith('.sql'));
-  const relatedToMejora8 = sqlFiles.filter(f => /^6b14|mejora.?8|upload.?mobile|no.?content.?provided/i.test(f));
+  const relatedToMejora8 = sqlFiles.filter(f => /mejora.?8|upload.?mobile|no.?content.?provided/i.test(f));
   assert.deepStrictEqual(relatedToMejora8, [], `no debe existir ningún .sql nuevo para esta mejora, se encontraron: ${relatedToMejora8.join(', ')}`);
 });
 

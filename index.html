@@ -97,6 +97,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .missing{background:#fafcfa}.paid{background:#e7f5ff;border-color:#a8d4f5}.voided{background:#f1f3f2;border-color:#c9cdd1;color:#5d6670}
 .included{background:#f0ebff;border-color:#c8b7f2}.included .status{color:#6941a5}
 .pending-amount{background:#fff7ec;border-color:#efaf6e}.pending-amount .status{color:#8a5b00}
+.inactive-service-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#f1f3f2;color:#5d6670;font-size:10px;font-weight:900;vertical-align:middle}.inactive-service-row{opacity:.68}.inactive-service-row:hover{opacity:1}.inactive-services-heading{margin:18px 0 8px;font-size:13px;font-weight:850;color:var(--muted);text-transform:uppercase}
 .consolidation-box{border:1px solid var(--line);border-radius:14px;padding:14px;margin:14px 0;background:#faf9ff}
 .consolidation-options{display:grid;gap:8px;margin-top:10px}
 .consolidation-option{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px;background:#fff;cursor:pointer}
@@ -17375,7 +17376,13 @@ async function openGroup(id){
 async function reloadGroup(){
   const [m,s,o,p,c,d,g]=await Promise.all([
     sb.from('memberships').select('*').eq('group_id',group.id).eq('active',true).order('created_at'),
-    sb.from('services').select('*').eq('group_id',group.id).eq('active',true).order('name'),
+    // MEJORA #10 -- BAJA NO DESTRUCTIVA: ya NO filtra active=true acá --
+    // un servicio dado de baja debe seguir cargando (con todo su
+    // historial de obligations/payments/documents intacto) para no
+    // "ocultar el pasado". La separación activo/dado de baja se decide
+    // 100% en la capa de presentación (renderServices/operational list),
+    // nunca en esta consulta.
+    sb.from('services').select('*').eq('group_id',group.id).order('name'),
     sb.from('obligations').select('*,services!inner(group_id)').eq('services.group_id',group.id),
     sb.from('payments').select('*,obligations!inner(service_id,services!inner(group_id))').eq('obligations.services.group_id',group.id),
     sb.from('payment_contributions').select('*,payments!inner(obligation_id,obligations!inner(service_id,services!inner(group_id)))').eq('payments.obligations.services.group_id',group.id),
@@ -18301,6 +18308,12 @@ function forecastMonth(key){
       if(isEffectivePending(obligation))confirmed+=Number(obligation.amount||0);
       return;
     }
+    // MEJORA #10 -- BAJA NO DESTRUCTIVA: un servicio dado de baja no debe
+    // generar gastos nuevos futuros -- ni siquiera estimados. Si ya
+    // existe una obligación real (rama de arriba), se sigue contando
+    // normalmente aunque el servicio esté inactivo (es historia real, no
+    // una proyección nueva).
+    if(service.active===false)return;
     if(service.frequency==='one_time'||!monthAppliesToService(service,key))return;
     const previous=lastKnownAmount(service.id,key);
     if(previous)estimated+=Number(previous);else missing++;
@@ -18357,7 +18370,8 @@ function monthQuickSummary(key){
   ).length;
   const unpaid=rows.filter(isEffectivePending).length;
   const missing=services.filter(service=>
-    service.frequency!=='one_time'
+    service.active!==false
+    && service.frequency!=='one_time'
     && monthAppliesToService(service,key)
     && !obligationFor(service.id,key)
   ).length;
@@ -18846,10 +18860,10 @@ function operationalServiceRowHtml(s,key){
   // informativo (mismo dato que ya muestra el detalle de la obligación) --
   // no participa del cálculo de boxClass()/boxText() de este mes.
   const prevBalance=previousBalanceFor(s.id,key);
-  return `<div class="operational-row ${boxClass(o)}" data-service-row="${s.id}">
+  return `<div class="operational-row ${boxClass(o)}${s.active===false?' inactive-service-row':''}" data-service-row="${s.id}">
     <div class="operational-row-info" data-cell="${s.id}|${key}">
       <div class="operational-row-main">
-        <div class="operational-row-name">${esc(s.name)}${isOwner()&&s.is_private?'<span class="private-service-badge">PRIVADO</span>':''}</div>
+        <div class="operational-row-name">${esc(s.name)}${isOwner()&&s.is_private?'<span class="private-service-badge">PRIVADO</span>':''}${s.active===false?'<span class="inactive-service-badge">DADO DE BAJA</span>':''}</div>
         <div class="operational-row-meta">${esc(s.category)} · ${frequencyLabel(s)}${serviceStartLabel(s)}</div>
       </div>
       <div class="operational-row-status">
@@ -18878,19 +18892,87 @@ function operationalServiceRowHtml(s,key){
 // corresponden a este período según monthAppliesToService) tampoco
 // aparecen acá -- no es una omisión nueva, es la misma decisión ya
 // tomada por esa función real, reutilizada tal cual.
-function operationalServicesListHtml(buckets){
+function operationalServicesListHtml(buckets,inactiveServices){
   const ordered=PRIORITY_CATEGORY_ORDER.flatMap(key=>
     [...buckets[key]].sort((a,b)=>a.name.localeCompare(b.name,'es'))
   );
+  const inactiveOrdered=[...(inactiveServices||[])].sort((a,b)=>a.name.localeCompare(b.name,'es'));
   return `<div class="operational-list">
     ${ordered.length
       ? ordered.map(s=>operationalServiceRowHtml(s,baseMonth)).join('')
       : '<div class="operational-empty">Todavía no hay servicios para este mes.</div>'}
   </div>
-  <div class="operational-switch"><button class="btn outline small" id="showMatrixView">Ver matriz anual ›</button></div>`;
+  <div class="operational-switch"><button class="btn outline small" id="showMatrixView">Ver matriz anual ›</button></div>
+  ${inactiveOrdered.length?`
+    <div class="inactive-services-heading">Servicios dados de baja</div>
+    <div class="operational-list">
+      ${inactiveOrdered.map(s=>operationalServiceRowHtml(s,baseMonth)).join('')}
+    </div>`:''}`;
 }
 
+// MEJORA #10 -- BAJA NO DESTRUCTIVA: fila de matriz extraída a función
+// propia para reutilizarla tal cual entre la tabla de servicios activos y
+// la sección "Servicios dados de baja" -- ambas deben mostrar exactamente
+// el mismo estado real por mes (boxText/boxClass/documentos/consolidación),
+// nunca una versión simplificada o paralela para los inactivos.
+function matrixServiceRowHtml(s,ms){
+  return `<tr data-service-row="${s.id}"${s.active===false?' class="inactive-service-row"':''}>
+    <td class="service-cell">
+      <div class="service-name">${esc(s.name)}${isOwner()&&s.is_private?'<span class="private-service-badge">PRIVADO</span>':''}${s.active===false?'<span class="inactive-service-badge">DADO DE BAJA</span>':''}</div>
+      <div class="service-meta">${esc(s.category)} · ${frequencyLabel(s)}${serviceStartLabel(s)}</div>
+      ${s.frequency==='plan'?`<div class="service-meta">${esc(servicePlanDescription(s))}</div>`:''}
+    </td>
+
+    ${ms.map(m=>{
+      const applies=monthAppliesToService(s,m);
+      const o=obligationFor(s.id,m);
+
+      if(s.frequency==='plan'&&!applies&&!o){
+        return `<td>
+          <div class="monthbox not-applicable">
+            <div class="status">No corresponde</div>
+            <div class="date">Fuera del plan</div>
+          </div>
+        </td>`;
+      }
+
+      const t=boxText(o,s);
+      // MEJORA — ANULACIÓN NO DESTRUCTIVA: los doc-pills de la
+      // matriz solo cuentan documentos vigentes (no anulados).
+      const invoiceCount=o
+        ? activeServiceDocuments(documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')).length
+        : 0;
+      const receiptCount=o
+        ? activeServiceDocuments(receiptsForObligation(o.id)).length
+        : 0;
+
+      return `<td>
+        <div class="monthbox ${boxClass(o)}" data-cell="${s.id}|${m}">
+          <div class="status">${t[0]}</div>
+          <div class="amount">${t[1]}</div>
+          ${o?.due_date?`<div class="date">Vence ${fmtDate(o.due_date)}</div>`:''}
+          ${o?`<div class="doc-indicators">
+            <span class="doc-pill ${invoiceCount?'ok':'bad'}">Factura ${invoiceCount?'✓':'—'}</span>
+            <span class="doc-pill ${receiptCount?'ok':'bad'}">Comprobante ${receiptCount?'✓':'—'}</span>
+          </div>`:''}
+          ${consolidationsForTarget(o?.id).length
+            ? `<div class="date">Incluye ${consolidationsForTarget(o.id).length} deuda${consolidationsForTarget(o.id).length===1?'':'s'} anterior${consolidationsForTarget(o.id).length===1?'':'es'}</div>`
+            : ''}
+        </div>
+      </td>`;
+    }).join('')}
+
+    <td><button class="btn soft small" data-folder="${s.id}">Abrir</button></td>
+  </tr>`;
+}
 function renderServices(ms){
+  // MEJORA #10 -- BAJA NO DESTRUCTIVA: `services` ya incluye activos e
+  // inactivos (reloadGroup ya no filtra active=true). La separación
+  // visual (activos arriba, dados de baja siempre al final, nunca
+  // mezclados) se decide acá, una sola vez, y se reutiliza tanto en la
+  // matriz como en la Vista Operativa.
+  const activeServices=services.filter(s=>s.active!==false);
+  const inactiveServices=services.filter(s=>s.active===false);
   const pending=pendingObligations();
   const over=pending.filter(o=>daysUntil(o.due_date)<0);
   const previousDebts=carriedDebts();
@@ -18915,7 +18997,8 @@ function renderServices(ms){
   const pendingTotalAmount=pending.reduce((a,o)=>a+balanceFor(o),0);
   const overdueAmount=over.reduce((a,o)=>a+balanceFor(o),0);
   const missing=services.filter(s=>
-    s.frequency!=='one_time'
+    s.active!==false
+    && s.frequency!=='one_time'
     && monthAppliesToService(s,baseMonth)
     && !obligationFor(s.id,baseMonth)
   ).length;
@@ -19006,57 +19089,14 @@ function renderServices(ms){
       </thead>
 
       <tbody>
-        ${services.map(s=>`
-          <tr data-service-row="${s.id}">
-            <td class="service-cell">
-              <div class="service-name">${esc(s.name)}${isOwner()&&s.is_private?'<span class="private-service-badge">PRIVADO</span>':''}</div>
-              <div class="service-meta">${esc(s.category)} · ${frequencyLabel(s)}${serviceStartLabel(s)}</div>
-              ${s.frequency==='plan'?`<div class="service-meta">${esc(servicePlanDescription(s))}</div>`:''}
-            </td>
-
-            ${ms.map(m=>{
-              const applies=monthAppliesToService(s,m);
-              const o=obligationFor(s.id,m);
-
-              if(s.frequency==='plan'&&!applies&&!o){
-                return `<td>
-                  <div class="monthbox not-applicable">
-                    <div class="status">No corresponde</div>
-                    <div class="date">Fuera del plan</div>
-                  </div>
-                </td>`;
-              }
-
-              const t=boxText(o,s);
-              // MEJORA — ANULACIÓN NO DESTRUCTIVA: los doc-pills de la
-              // matriz solo cuentan documentos vigentes (no anulados).
-              const invoiceCount=o
-                ? activeServiceDocuments(documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')).length
-                : 0;
-              const receiptCount=o
-                ? activeServiceDocuments(receiptsForObligation(o.id)).length
-                : 0;
-
-              return `<td>
-                <div class="monthbox ${boxClass(o)}" data-cell="${s.id}|${m}">
-                  <div class="status">${t[0]}</div>
-                  <div class="amount">${t[1]}</div>
-                  ${o?.due_date?`<div class="date">Vence ${fmtDate(o.due_date)}</div>`:''}
-                  ${o?`<div class="doc-indicators">
-                    <span class="doc-pill ${invoiceCount?'ok':'bad'}">Factura ${invoiceCount?'✓':'—'}</span>
-                    <span class="doc-pill ${receiptCount?'ok':'bad'}">Comprobante ${receiptCount?'✓':'—'}</span>
-                  </div>`:''}
-                  ${consolidationsForTarget(o?.id).length
-                    ? `<div class="date">Incluye ${consolidationsForTarget(o.id).length} deuda${consolidationsForTarget(o.id).length===1?'':'s'} anterior${consolidationsForTarget(o.id).length===1?'':'es'}</div>`
-                    : ''}
-                </div>
-              </td>`;
-            }).join('')}
-
-            <td><button class="btn soft small" data-folder="${s.id}">Abrir</button></td>
-          </tr>
-        `).join('')||'<tr><td colspan="5">Todavía no hay servicios.</td></tr>'}
+        ${activeServices.map(s=>matrixServiceRowHtml(s,ms)).join('')||'<tr><td colspan="5">Todavía no hay servicios.</td></tr>'}
       </tbody>
+
+      ${inactiveServices.length?`
+      <tbody>
+        <tr><td colspan="${ms.length+2}" class="inactive-services-heading">Servicios dados de baja</td></tr>
+        ${inactiveServices.map(s=>matrixServiceRowHtml(s,ms)).join('')}
+      </tbody>`:''}
 
       <tfoot>
         <tr class="monthly-total-row">
@@ -19077,7 +19117,7 @@ function renderServices(ms){
     </table>
     </div>
   </div>
-  `:operationalServicesListHtml(priorityBuckets)}
+  `:operationalServicesListHtml(priorityBuckets,inactiveServices)}
 
   ${paymentAllocationsLoadError?`
     <div class="debt-panel card">
@@ -19647,7 +19687,7 @@ function serviceSearchResultHtml(s){
   const o=obligationFor(s.id,baseMonth);
   const status=boxText(o,s)[0];
   return `<div class="service-search-result" data-search-result="${s.id}">
-    <div class="service-search-result-name">${esc(s.name)}${isOwner()&&s.is_private?' <span class="private-service-badge">PRIVADO</span>':''}</div>
+    <div class="service-search-result-name">${esc(s.name)}${isOwner()&&s.is_private?' <span class="private-service-badge">PRIVADO</span>':''}${s.active===false?' <span class="inactive-service-badge">DADO DE BAJA</span>':''}</div>
     <div class="service-search-result-meta">${esc(s.category)} · ${esc(status)}</div>
   </div>`;
 }
@@ -19753,6 +19793,14 @@ function servicePriorityCategory(s,key){
   // monthAppliesToService() decide si el mes corresponde según
   // frequency/plan_start_month/plan_end_month/plan_months.
   if(s.frequency==='one_time')return null;
+  // MEJORA #10 -- BAJA NO DESTRUCTIVA: un servicio dado de baja sin
+  // obligación este mes NUNCA es "sin_datos" -- eso significaría pedir
+  // que se cargue un período nuevo para un servicio inactivo, exactamente
+  // lo que #10 prohíbe. Si el servicio SÍ tiene una obligación real este
+  // mes (rama `if(o){...}` de arriba, histórica o de antes de la baja),
+  // esta condición nunca se alcanza -- su categoría real (vencidos/
+  // pendientes/etc.) se preserva sin cambios.
+  if(s.active===false)return null;
   if(!monthAppliesToService(s,key))return null;
   return'sin_datos';
 }
@@ -19798,7 +19846,7 @@ function priorityListItemHtml(s){
   const t=boxText(o,s);
   return `<div class="priority-list-item" data-priority-item="${s.id}">
     <div>
-      <div class="service-search-result-name">${esc(s.name)}${isOwner()&&s.is_private?' <span class="private-service-badge">PRIVADO</span>':''}</div>
+      <div class="service-search-result-name">${esc(s.name)}${isOwner()&&s.is_private?' <span class="private-service-badge">PRIVADO</span>':''}${s.active===false?' <span class="inactive-service-badge">DADO DE BAJA</span>':''}</div>
       <div class="service-search-result-meta">${esc(t[0])}${o?.due_date?` · Vence ${esc(fmtDate(o.due_date))}`:''}</div>
     </div>
     <div>${esc(t[1]||'')}</div>
@@ -20078,7 +20126,17 @@ function openObligation(serviceId,key){
   const voidInfo=o?obligationVoidInfo(o):null;
   const editHistory=o?obligationEditHistory(o):[];
   const extraFields=o?obligationExtraFields(o):{};
-  const editableNow=canEdit()&&!voided;
+  // MEJORA #10 -- BAJA NO DESTRUCTIVA: un servicio dado de baja no debe
+  // generar NUEVOS períodos mientras esté inactivo -- pero esto NUNCA
+  // afecta a un registro que YA existe (o truthy): esos siguen 100%
+  // editables (corregir importe, resolver un pendiente #9, agregar
+  // segundo vencimiento, etc.), porque la baja afecta operación futura,
+  // no reescribe historia. Reutiliza editableNow, el mismo gate que ya
+  // deshabilita todos los campos y el botón Guardar (ver más abajo
+  // "if(!editableNow)return;") -- sin agregar un segundo camino de
+  // validación en saveMonthData.
+  const isNewForInactiveService=!o&&s&&s.active===false;
+  const editableNow=canEdit()&&!voided&&!isNewForInactiveService;
   const paymentRows=o?paymentsFor(o.id):[];
   const progress=o?paymentProgress(o):{amount:0,paid:0,balance:0,creditBalance:0,fullyPaid:false,partial:false};
   const sourceLink=o?consolidationForSource(o.id):null;
@@ -20157,6 +20215,12 @@ function openObligation(serviceId,key){
       <div class="notice" style="border-color:#c9cdd1;background:#f1f3f2">
         <strong>Anulado por ${esc(displayNameForUserId(voidInfo?.voidedBy))}${voidInfo?.voidedAt?` · ${esc(fmtDate(voidInfo.voidedAt.slice(0,10)))}`:''}</strong><br>
         Motivo: ${esc(voidInfo?.voidReason||'Sin motivo registrado')}
+      </div>`:''}
+
+    ${isNewForInactiveService?`
+      <div class="notice" style="border-color:#c9cdd1;background:#f1f3f2">
+        <strong>Este servicio está dado de baja.</strong>
+        No se pueden cargar períodos nuevos mientras esté inactivo. Reactivalo desde la carpeta del servicio para continuar cargando.
       </div>`:''}
 
     ${sourceLink?`
@@ -21327,11 +21391,16 @@ function openFolder(serviceId){
     .filter(x=>x.service_id===serviceId)
     .sort((a,b)=>b.period.localeCompare(a.period));
 
-  modal(`<h2>Carpeta · ${esc(s.name)}</h2>
+  modal(`<h2>Carpeta · ${esc(s.name)}${s.active===false?' <span class="inactive-service-badge">DADO DE BAJA</span>':''}</h2>
     <div class="sub">
       ${frequencyLabel(s)}${s.frequency==='plan'?' · '+esc(servicePlanDescription(s)):''}
       · Facturas, deudas, pagos parciales y comprobantes.
     </div>
+
+    ${s.active===false?`
+      <div class="notice">
+        Este servicio está dado de baja. No se pueden cargar períodos nuevos mientras esté inactivo, pero conservás acceso completo a su historial (facturas, pagos, comprobantes y notas). Podés reactivarlo cuando quieras.
+      </div>`:''}
 
     ${os.map(o=>{
       const paymentRows=paymentsFor(o.id);
@@ -21424,7 +21493,9 @@ function openFolder(serviceId){
       ${canEdit()?`
         <button class="btn primary" id="addInvoiceMonthBtn">+ Agregar factura de otro mes</button>
         <button class="btn soft" id="editServiceBtn">Editar servicio</button>
-        <button class="btn danger" id="deleteServiceBtn">Eliminar servicio</button>
+        ${s.active===false
+          ? `<button class="btn primary" id="reactivateServiceBtn">Reactivar servicio</button>`
+          : `<button class="btn outline" id="dropServiceBtn">Dar de baja servicio</button>`}
       `:''}
       <button class="btn outline" data-close>Cerrar</button>
     </div>`,true);
@@ -21443,45 +21514,58 @@ function openFolder(serviceId){
   if(canEdit()){
     document.getElementById('addInvoiceMonthBtn').onclick=()=>openInvoiceMonthPicker(serviceId);
     document.getElementById('editServiceBtn').onclick=()=>openServiceModal(serviceId);
-    document.getElementById('deleteServiceBtn').onclick=()=>deleteService(serviceId);
+    const dropBtn=document.getElementById('dropServiceBtn');
+    if(dropBtn)dropBtn.onclick=()=>dropService(serviceId);
+    const reactivateBtn=document.getElementById('reactivateServiceBtn');
+    if(reactivateBtn)reactivateBtn.onclick=()=>reactivateService(serviceId);
   }
 }
 
-async function deleteService(serviceId){
+// MEJORA #10 -- BAJA NO DESTRUCTIVA Y REACTIVACIÓN DE SERVICIOS: reemplaza
+// por completo al viejo deleteService() (DELETE real de services, que
+// arrastraba Storage/obligations/payments/documents por FK y no se podía
+// deshacer). "Dar de baja" NUNCA borra nada -- solo cambia
+// services.active a false sobre la MISMA fila (mismo service_id,
+// obligaciones/pagos/documentos/notas/importes pendientes/consolidaciones/
+// segundo vencimiento intactos). No usa OBLIGATION_META ni ningún sistema
+// de metadata nuevo: se auditó el modelo real de `services` y esa tabla no
+// tiene hoy ningún campo de trazabilidad (notes/editHistory) -- no se
+// inventa uno para esta mejora (ver reporte de entrega).
+async function dropService(serviceId){
   const service=services.find(s=>s.id===serviceId);
   if(!service)return;
 
-  const serviceObligations=obligations.filter(o=>o.service_id===serviceId);
-  const obligationIds=serviceObligations.map(o=>o.id);
-  const servicePayments=payments.filter(p=>obligationIds.includes(p.obligation_id));
-  const paymentIds=servicePayments.map(p=>p.id);
-  const serviceDocs=documents.filter(d=>
-    obligationIds.includes(d.obligation_id)
-    || paymentIds.includes(d.payment_id)
-  );
-
-  const warning=serviceObligations.length
-    ? `¿Eliminar "${service.name}"? Se borrarán también ${serviceObligations.length} movimiento(s), pagos, facturas y comprobantes. Esta acción no se puede deshacer.`
-    : `¿Eliminar "${service.name}"? Esta acción no se puede deshacer.`;
-
+  const warning=`¿Dar de baja "${service.name}"?\n\nEste servicio dejará de aparecer entre los servicios activos. No se borrarán obligaciones, facturas, pagos ni documentos. Podrás reactivarlo cuando quieras.`;
   if(!confirm(warning))return;
 
   try{
-    const paths=serviceDocs.map(d=>d.file_path).filter(Boolean);
-    if(paths.length){
-      const {error:storageError}=await sb.storage.from('documents').remove(paths);
-      if(storageError)throw storageError;
-    }
-
-    const {error}=await sb.from('services').delete().eq('id',serviceId);
+    const {error}=await sb.from('services').update({active:false}).eq('id',serviceId);
     if(error)throw error;
 
     closeModal();
     await refreshDashboardData();
-    toast('Servicio eliminado');
+    toast('Servicio dado de baja');
   }catch(err){
-    console.error('Error eliminando servicio:',err);
-    toast(err?.message||'No se pudo eliminar el servicio');
+    console.error('Error dando de baja el servicio:',err);
+    toast(err?.message||'No se pudo dar de baja el servicio');
+  }
+}
+async function reactivateService(serviceId){
+  const service=services.find(s=>s.id===serviceId);
+  if(!service)return;
+
+  if(!confirm(`¿Reactivar "${service.name}"? Volverá a aparecer entre los servicios activos.`))return;
+
+  try{
+    const {error}=await sb.from('services').update({active:true}).eq('id',serviceId);
+    if(error)throw error;
+
+    closeModal();
+    await refreshDashboardData();
+    toast('Servicio reactivado');
+  }catch(err){
+    console.error('Error reactivando el servicio:',err);
+    toast(err?.message||'No se pudo reactivar el servicio');
   }
 }
 function openPaymentDetail(id){

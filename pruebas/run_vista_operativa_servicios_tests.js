@@ -197,9 +197,9 @@ caso('CASO 1 — Vista Operativa es la vista por defecto en renderServices()', (
 
 caso('CASO 2 — renderServices() alterna entre operationalServicesListHtml y la matriz según servicesView', () => {
   for (const text of [indexText, operatorText]) {
-    const block = extract(text, "${servicesView==='matrix'?`", 'operationalServicesListHtml(priorityBuckets)}') + 'operationalServicesListHtml(priorityBuckets)}';
+    const block = extract(text, "${servicesView==='matrix'?`", 'operationalServicesListHtml(priorityBuckets,inactiveServices)}') + 'operationalServicesListHtml(priorityBuckets,inactiveServices)}';
     assert.ok(block.includes('class="matrix card"'), 'la rama "matrix" debe seguir renderizando la matriz anual completa');
-    assert.ok(block.trim().endsWith('`:operationalServicesListHtml(priorityBuckets)}'), 'la rama por defecto debe ser la Vista Operativa, reusando priorityBuckets ya calculado');
+    assert.ok(block.trim().endsWith('`:operationalServicesListHtml(priorityBuckets,inactiveServices)}'), 'la rama por defecto debe ser la Vista Operativa, reusando priorityBuckets ya calculado');
   }
 });
 
@@ -442,8 +442,8 @@ caso('CASO 30 — operationalServiceRowHtml/operationalServicesListHtml son byte
 });
 
 caso('CASO 31 — el wrap condicional matrix/operational en renderServices() y el wiring del toggle son byte-idénticos entre ambos archivos', () => {
-  const wrapA = extract(indexText, "${servicesView==='matrix'?`", 'operationalServicesListHtml(priorityBuckets)}') + 'operationalServicesListHtml(priorityBuckets)}';
-  const wrapB = extract(operatorText, "${servicesView==='matrix'?`", 'operationalServicesListHtml(priorityBuckets)}') + 'operationalServicesListHtml(priorityBuckets)}';
+  const wrapA = extract(indexText, "${servicesView==='matrix'?`", 'operationalServicesListHtml(priorityBuckets,inactiveServices)}') + 'operationalServicesListHtml(priorityBuckets,inactiveServices)}';
+  const wrapB = extract(operatorText, "${servicesView==='matrix'?`", 'operationalServicesListHtml(priorityBuckets,inactiveServices)}') + 'operationalServicesListHtml(priorityBuckets,inactiveServices)}';
   assert.strictEqual(wrapA, wrapB);
 
   const wireA = extract(indexText, 'VISTA OPERATIVA DE SERVICIOS: alterna', 'BUSCADOR RÁPIDO DE SERVICIOS: opera exclusivamente');

@@ -131,7 +131,13 @@ caso('CASO 5 — los resultados provienen de la colección de servicios ya autor
   // usa renderServices() para construir la matriz -- no una copia ni una
   // fuente nueva.
   assert.ok(/services\s*\n?\s*\.filter/.test(searchBlockSource), 'searchServicesByName debe filtrar directamente sobre `services`');
-  assert.ok(renderServicesSource.includes('${services.map(s=>`'), 'renderServices() arma la matriz iterando el mismo `services`');
+  // AJUSTE — MEJORA #10 (baja no destructiva de servicios): la fila de la
+  // matriz se extrajo a matrixServiceRowHtml() para reutilizarla tal cual
+  // entre "activos" y "dados de baja" -- renderServices() ahora itera
+  // `activeServices` (un filter de `services`, nunca una fuente nueva) y
+  // delega el HTML de cada fila a esa función real.
+  assert.ok(renderServicesSource.includes('${activeServices.map(s=>matrixServiceRowHtml(s,ms))'), 'renderServices() arma la matriz iterando activeServices (filtrado de `services`, no una fuente nueva)');
+  assert.ok(renderServicesSource.includes('const activeServices=services.filter('), 'activeServices debe derivar directamente de `services`, la misma colección ya autorizada');
 });
 
 caso('CASO 6 — el buscador no busca Tarjetas', () => {
@@ -147,7 +153,11 @@ caso('CASO 7 — no agrega consultas Supabase nuevas para resolver resultados', 
 });
 
 caso('CASO 8 — clic en un resultado identifica la fila real correcta', () => {
-  assert.ok(renderServicesSource.includes('<tr data-service-row="${s.id}">'), 'cada fila de la matriz debe estar marcada con data-service-row');
+  // AJUSTE — MEJORA #10: el <tr> real vive en matrixServiceRowHtml() (ver
+  // CASO 5), no ya inline dentro de renderServices() -- se verifica sobre
+  // el archivo completo, mismo criterio de fondo (la fila sigue marcada
+  // con data-service-row="${s.id}").
+  assert.ok(indexText.includes('<tr data-service-row="${s.id}"'), 'cada fila de la matriz debe estar marcada con data-service-row');
   assert.ok(searchBlockSource.includes('[data-service-row="${serviceId}"]'), 'goToServiceRow debe buscar la fila por ese mismo atributo');
 });
 

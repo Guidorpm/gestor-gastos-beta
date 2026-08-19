@@ -245,7 +245,11 @@ caso('CASO 11 — el buscador de servicios no interfiere con la lógica de naveg
   // Las dos mejoras usan atributos data-* distintos sobre la misma fila
   // (data-service-row para el buscador, data-base-month para el
   // .matrix-scroll) -- confirma que no colisionan en el mismo selector.
-  assert.ok(indexText.includes('<tr data-service-row="${s.id}">'), 'cada fila debe seguir marcada con data-service-row para que el buscador la pueda ubicar');
+  // AJUSTE — MEJORA #10 (baja no destructiva de servicios): la fila ahora
+  // agrega una clase condicional para servicios dados de baja
+  // (${s.active===false?...}) antes de cerrar el tag -- se verifica el
+  // atributo en sí, no el cierre exacto del <tr>, que ya no es fijo.
+  assert.ok(indexText.includes('<tr data-service-row="${s.id}"'), 'cada fila debe seguir marcada con data-service-row para que el buscador la pueda ubicar');
 });
 
 // ---------------- 12 — no modifica Supabase (confirmación de alcance) ----------------
