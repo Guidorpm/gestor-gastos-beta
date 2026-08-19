@@ -1486,10 +1486,14 @@ function runObligationSecondFieldsSnippet(text, { o, dueValue, secondDueValue, s
   };
   const sandbox = buildSandbox({});
   const fn = new Function(
-    'document', 'o', 'dueValue', 'parseMoneyField', 'obligationUserNotes', 'obligationExtraFields', 'updateObligationNotes',
+    'document', 'o', 'dueValue', 'parseMoneyField', 'obligationUserNotes', 'obligationExtraFields', 'updateObligationNotes', 'amountPendingChecked',
     block + '\nreturn { secondDueValue, secondAmountValue, newExtra, notesValue };'
   );
-  return fn(documentMock, o, dueValue, sandbox.parseMoneyField, sandbox.obligationUserNotes, sandbox.obligationExtraFields, sandbox.updateObligationNotes);
+  // amountPendingChecked=false: en la app real esta variable ya está en
+  // scope (declarada antes en saveMonthData, ver MEJORA #9); acá se
+  // provee explícitamente porque este snippet se extrae de forma aislada
+  // y esta suite no ejercita el flujo de "importe pendiente".
+  return fn(documentMock, o, dueValue, sandbox.parseMoneyField, sandbox.obligationUserNotes, sandbox.obligationExtraFields, sandbox.updateObligationNotes, false);
 }
 
 caso('CASO 106 — ALTA INICIAL: osecondAmount/osecondDue existen en el modal SIN estar atrapados dentro de ${o?...} (el bug reportado)', () => {
@@ -1597,13 +1601,20 @@ caso('CASO 113 — Tarjetas permanece byte-idéntica tras la corrección del alt
       extract(before, 'function fmtMoney(v){', '\n'),
       `fmtMoney en ${f} debe seguir byte-idéntica`
     );
-    // saveMonthData() no debía necesitar NINGÚN cambio (ya era compartida
-    // entre alta y edición) -- se confirma byte a byte contra el backup.
-    assert.strictEqual(
-      extract(now, 'async function saveMonthData(', "const saveButton=document.getElementById('saveObligation')"),
-      extract(before, 'async function saveMonthData(', "const saveButton=document.getElementById('saveObligation')"),
-      `saveMonthData() en ${f} no debía cambiar -- el bug era solo de plantilla`
-    );
+    // saveMonthData() no necesitaba NINGÚN cambio para ESE bug puntual
+    // (ya era compartida entre alta y edición) -- eso se confirmó en su
+    // momento byte a byte contra el backup de esa fecha. Desde entonces,
+    // MEJORA #9 (importes pendientes) extendió legítimamente
+    // saveMonthData() -- función compartida por diseño -- por lo que ya
+    // no puede exigirse identidad byte a byte contra ese backup viejo
+    // para siempre. Lo que sí debe seguir intacto es el comportamiento
+    // real de segundo vencimiento dentro de esa misma función, cubierto
+    // en profundidad por CASO 1-112 de esta misma suite (que siguen
+    // pasando) y por las funciones secondDueDate/secondAmount presentes
+    // sin alterar su lógica.
+    const nowSaveBlock = extract(now, 'async function saveMonthData(', "const saveButton=document.getElementById('saveObligation')");
+    assert.ok(nowSaveBlock.includes('secondDueDate:secondDueValue||null'), `saveMonthData() en ${f} debe seguir guardando secondDueDate igual que antes`);
+    assert.ok(nowSaveBlock.includes('secondAmount:secondAmountValue'), `saveMonthData() en ${f} debe seguir guardando secondAmount igual que antes`);
   }
 });
 

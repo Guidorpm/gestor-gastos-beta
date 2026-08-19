@@ -175,7 +175,11 @@ function ob(id, serviceId, overrides = {}) {
   return { id, service_id: serviceId, period: '2026-08-01', amount: 1000, status: 'active', due_date: null, ...overrides };
 }
 function buckets(partial) {
-  return { vencidos: [], proximos: [], sin_datos: [], pendientes: [], abonados: [], ...partial };
+  // importes_pendientes: bucket agregado por MEJORA #9 (importes
+  // pendientes) a PRIORITY_CATEGORY_ORDER; operationalServicesListHtml()
+  // itera ese mismo orden real, así que el fixture debe reflejar la
+  // misma forma que ya arma la app real (ver computeServicePriorityCategories).
+  return { vencidos: [], proximos: [], sin_datos: [], importes_pendientes: [], pendientes: [], abonados: [], ...partial };
 }
 
 const casos = [];

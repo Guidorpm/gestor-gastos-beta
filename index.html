@@ -96,6 +96,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .monthbox{border:1px solid var(--line);border-radius:13px;padding:10px;min-height:82px;cursor:pointer;background:white}.monthbox:hover{border-color:var(--brand)}.monthbox .status{font-size:12px;font-weight:850}.monthbox .amount{font-weight:850;margin-top:7px}.monthbox .date{font-size:11px;color:var(--muted);margin-top:3px}
 .missing{background:#fafcfa}.paid{background:#e7f5ff;border-color:#a8d4f5}.voided{background:#f1f3f2;border-color:#c9cdd1;color:#5d6670}
 .included{background:#f0ebff;border-color:#c8b7f2}.included .status{color:#6941a5}
+.pending-amount{background:#fff7ec;border-color:#efaf6e}.pending-amount .status{color:#8a5b00}
 .consolidation-box{border:1px solid var(--line);border-radius:14px;padding:14px;margin:14px 0;background:#faf9ff}
 .consolidation-options{display:grid;gap:8px;margin-top:10px}
 .consolidation-option{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px;background:#fff;cursor:pointer}
@@ -17828,7 +17829,16 @@ function obligationCurrency(o){
 // decimales siempre) en vez de fmtMoney() (0 decimales) -- fmtMoney()
 // sigue intacto para Tarjetas, que no usa formatObligationAmount() en
 // absoluto (es una función exclusiva de obligations).
+// MEJORA #9 -- IMPORTES PENDIENTES: si todavía no se conoce el importe de
+// esta obligación (extraFields.amountPending===true), NUNCA mostrar una
+// cifra -- ni "$0,00" ni el importe efectivo -- porque el 0 guardado en
+// la columna real es solo un valor técnico (la DB exige NOT NULL), no un
+// importe real. Centralizado acá porque formatObligationAmount() es el
+// único punto de salida de dinero a texto para obligations en todo el
+// archivo -- corrige dueState()/boxText()/el resumen del modal/etc. de
+// una sola vez, sin tener que tocar cada llamador.
 function formatObligationAmount(o,value){
+  if(obligationExtraFields(o).amountPending===true)return 'Importe pendiente';
   return obligationCurrency(o)==='USD'?formatUSD(value):fmtMoneyExact(value);
 }
 function displayNameForUserId(userId){
@@ -18185,6 +18195,16 @@ function dueState(o){
   }
   const target=consolidationTarget(o.id);
   if(target)return{cls:'included',label:`Incluida en ${monthLabel(target.period.slice(0,7))}`};
+  // MEJORA #9 -- IMPORTES PENDIENTES: todavía no se conoce el importe de
+  // este período (checkbox "Importe pendiente" activo al cargar/editar).
+  // Se resuelve ANTES de calcular pago/vencimiento -- amount=0 es solo un
+  // valor técnico mientras esto sea true, nunca "vencido"/"abonado"
+  // reales. Si ya fue resuelto por inclusión en una factura posterior, el
+  // chequeo de "target" de arriba ya devolvió 'included' antes de llegar
+  // acá.
+  if(obligationExtraFields(o).amountPending===true){
+    return{cls:'pending-amount',label:'Importe pendiente'};
+  }
   const progress=paymentProgress(o);
   // CORRECCIÓN BLOQUEANTE — el orden anterior comprobaba o.status==='paid'
   // ANTES de progress.unavailable: un registro con status='paid' persistido
@@ -18244,6 +18264,11 @@ function boxText(o,service){
   }
   const target=consolidationTarget(o.id);
   if(target)return[`Incluida en ${monthLabel(target.period.slice(0,7))}`,formatObligationAmount(o,o.amount)];
+  // MEJORA #9 -- IMPORTES PENDIENTES: mismo criterio que dueState() --
+  // ver ese comentario para el porqué del orden.
+  if(obligationExtraFields(o).amountPending===true){
+    return['Importe pendiente','Todavía no se cargó el importe'];
+  }
   const progress=paymentProgress(o);
   // CORRECCIÓN BLOQUEANTE — mismo criterio que dueState(): progress.unavailable
   // se comprueba ANTES que o.status==='paid'. El status persistido nunca
@@ -19696,6 +19721,15 @@ function servicePriorityCategory(s,key){
     // operativo. La matriz sigue mostrando su estado real sin cambios;
     // esto solo decide si cuentan en el resumen de prioridades.
     if(cls==='voided'||cls==='included')return null;
+    // MEJORA #9 -- IMPORTES PENDIENTES: categoría propia, separada de
+    // 'sin_datos' (que hoy mezcla "sin obligación"/"sin vencimiento") y
+    // de cualquier bucket monetario -- un importe pendiente NO es una
+    // deuda vencida, próxima, ni un "dato incompleto" genérico. Debe
+    // decidirse ANTES que 'paid' (dueState() ya garantiza que un
+    // pendiente nunca llega con cls='paid', pero se deja explícito acá
+    // también para que el orden de este switch nunca dependa de esa
+    // garantía externa).
+    if(cls==='pending-amount')return'importes_pendientes';
     if(cls==='paid')return'abonados';
     // 'missing' cubre tanto "sin obligación" como "obligación sin
     // vencimiento cargado" (ver dueState) -- acá ya hay obligación, así
@@ -19723,7 +19757,7 @@ function servicePriorityCategory(s,key){
   return'sin_datos';
 }
 function computeServicePriorityCategories(key){
-  const buckets={vencidos:[],proximos:[],sin_datos:[],pendientes:[],abonados:[]};
+  const buckets={vencidos:[],proximos:[],sin_datos:[],importes_pendientes:[],pendientes:[],abonados:[]};
   services.forEach(s=>{
     const category=servicePriorityCategory(s,key);
     if(category)buckets[category].push(s);
@@ -19734,10 +19768,14 @@ const PRIORITY_CATEGORY_META={
   vencidos:{label:'Vencidos',dot:'bad'},
   proximos:{label:'Próximos a vencer',dot:'warn'},
   sin_datos:{label:'Sin importe / datos',dot:'missing'},
+  // MEJORA #9 -- categoría propia para "todavía no sabemos el importe",
+  // deliberadamente distinta de deuda monetaria (nunca suma a vencidos/
+  // próximos/pendientes ni a ningún total en pesos).
+  importes_pendientes:{label:'Importes por completar',dot:'missing'},
   pendientes:{label:'Pendientes',dot:null},
   abonados:{label:'Abonados',dot:'ok'}
 };
-const PRIORITY_CATEGORY_ORDER=['vencidos','proximos','sin_datos','pendientes','abonados'];
+const PRIORITY_CATEGORY_ORDER=['vencidos','proximos','sin_datos','importes_pendientes','pendientes','abonados'];
 function priorityPanelHtml(buckets){
   return `<div class="priority-panel">
     ${PRIORITY_CATEGORY_ORDER.map(key=>{
@@ -20078,6 +20116,27 @@ function openObligation(serviceId,key){
     )
     .sort((a,b)=>b.period.localeCompare(a.period));
 
+  // MEJORA #9 -- IMPORTES PENDIENTES: períodos ANTERIORES del mismo
+  // servicio marcados amountPending=true y todavía sin resolver (o
+  // resueltos como incluidos EN ESTE MISMO registro, para poder mostrar
+  // la elección ya hecha al reabrir el formulario -- mismo criterio que
+  // currentSourceIds/priorCandidates de arriba). Deliberadamente NO
+  // depende de paymentAllocationsLoadError/balanceFor -- un importe
+  // pendiente no tiene saldo monetario que verificar, es un dato
+  // operativo distinto.
+  const pendingCandidates=obligations
+    .filter(item=>
+      item.service_id===serviceId
+      && item.period<periodDate(key)
+      && item.status!=='cancelled'
+      && obligationExtraFields(item).amountPending===true
+      && (
+        !consolidationForSource(item.id)
+        || currentSourceIds.includes(item.id)
+      )
+    )
+    .sort((a,b)=>b.period.localeCompare(a.period));
+
   const existingInvoices=o
     ? documents.filter(d=>d.obligation_id===o.id&&d.kind==='invoice')
     : [];
@@ -20140,6 +20199,14 @@ function openObligation(serviceId,key){
         <label>Vencimiento</label>
         <input id="odue" type="date" value="${o?.due_date||''}" ${!editableNow?'disabled':''}>
       </div>
+    </div>
+
+    <div class="field" style="margin-top:-8px">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-weight:600">
+        <input type="checkbox" id="oamountPending" style="width:auto" ${extraFields.amountPending===true?'checked':''} ${!editableNow?'disabled':''}>
+        Todavía no tengo el importe -- dejar como "Importe pendiente"
+      </label>
+      <div class="category-help" style="margin-top:2px">No inventes un importe ni pongas 0 a mano. Vas a poder cargar el importe real más adelante editando este mismo registro, o marcar que quedó incluido en la factura de un mes posterior si corresponde.</div>
     </div>
 
     <div class="category-help" style="margin:14px 0 -2px;font-weight:600;text-transform:none">Segundo vencimiento <span style="font-weight:400">(opcional)</span></div>
@@ -20258,6 +20325,33 @@ function openObligation(serviceId,key){
 
           <div id="consolidationSummary" class="consolidation-summary"></div>
         </div>
+      </div>`:''}
+
+    ${pendingCandidates.length&&!sourceLink?`
+      <div class="consolidation-box" style="background:#fff7ec;border-color:#efaf6e">
+        <strong>Hay períodos anteriores con importe pendiente</strong>
+        <div class="category-help" style="margin:4px 0 10px">Para cada uno, indicá si esta factura lo incluye. No se preselecciona ninguna respuesta -- si todavía no lo sabés, dejalo pendiente y seguí completando este mes con normalidad.</div>
+        ${pendingCandidates.map(item=>{
+          const currentlyIncluded=currentSourceIds.includes(item.id);
+          return `<div class="consolidation-debt" style="flex-direction:column;align-items:flex-start;gap:6px">
+            <strong>${esc(monthLabel(item.period.slice(0,7)))}</strong>
+            <div class="category-help" style="margin:0">¿Esta factura incluye también este período?</div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400">
+                <input type="radio" name="pendingResolution-${item.id}" value="included" style="width:auto" ${currentlyIncluded?'checked':''}>
+                Sí, está incluido
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400">
+                <input type="radio" name="pendingResolution-${item.id}" value="not_included" style="width:auto">
+                No, no está incluido
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:400">
+                <input type="radio" name="pendingResolution-${item.id}" value="unknown" style="width:auto" ${currentlyIncluded?'':'checked'}>
+                Todavía no lo sé -- dejar pendiente
+              </label>
+            </div>
+          </div>`;
+        }).join('')}
       </div>`:''}
 
     <div class="field">
@@ -20428,6 +20522,24 @@ function openObligation(serviceId,key){
   document.getElementById('oamount')?.addEventListener('input',updateConsolidationUI);
   updateConsolidationUI();
 
+  // MEJORA #9 -- IMPORTES PENDIENTES: al marcar el checkbox, el importe
+  // deja de ser un dato real que el usuario tenga que inventar -- se
+  // limpia y se deshabilita el campo (nunca se le pide escribir 0 a
+  // mano). Al desmarcarlo, se reactiva para que pueda cargar el importe
+  // real normalmente.
+  const amountPendingCheckbox=document.getElementById('oamountPending');
+  const amountInput=document.getElementById('oamount');
+  if(amountPendingCheckbox&&amountInput){
+    const applyAmountPendingUI=()=>{
+      const pending=amountPendingCheckbox.checked;
+      amountInput.disabled=pending||!editableNow;
+      if(pending)amountInput.value='';
+      updateConsolidationUI();
+    };
+    amountPendingCheckbox.onchange=applyAmountPendingUI;
+    applyAmountPendingUI();
+  }
+
   bindDocumentCards({
     onDelete:()=>openObligation(serviceId,key)
   });
@@ -20447,7 +20559,15 @@ function openObligation(serviceId,key){
   if(!editableNow)return;
 
   async function saveMonthData({uploadInvoice=false}={}){
-    const amountValue=parseMoneyField(document.getElementById('oamount').value);
+    // MEJORA #9 -- IMPORTES PENDIENTES: si el checkbox está marcado, el
+    // importe NUNCA se toma del input (que además queda deshabilitado y
+    // vacío por applyAmountPendingUI()) -- se fuerza a 0, un valor
+    // puramente técnico (la columna real exige NOT NULL), nunca un
+    // importe real. La semántica real la gobierna extraFields.
+    // amountPending, nunca este 0 -- ver formatObligationAmount()/
+    // dueState()/boxText().
+    const amountPendingChecked=document.getElementById('oamountPending')?.checked||false;
+    let amountValue=amountPendingChecked?0:parseMoneyField(document.getElementById('oamount').value);
     const dueValue=document.getElementById('odue').value;
     const file=invoiceInput?.files?.[0]||null;
     const mode=document.querySelector('input[name="invoiceMode"]:checked')?.value||'additional';
@@ -20455,6 +20575,16 @@ function openObligation(serviceId,key){
       ? [...document.querySelectorAll('[data-consolidation-source]:checked')]
           .map(input=>input.dataset.consolidationSource)
       : [];
+    // MEJORA #9 -- resolución explícita de períodos anteriores con
+    // importe pendiente: SOLO se recolectan los marcados "Sí, está
+    // incluido" -- "No"/"todavía no lo sé" nunca generan escritura
+    // alguna, el período correspondiente simplemente sigue abierto
+    // (amountPending=true sin vínculo). Independiente de `mode`/
+    // `selectedSourceIds` a propósito -- no obliga a elegir "Esta
+    // factura incluye deuda anterior" solo para resolver un pendiente.
+    const pendingResolvedIds=pendingCandidates
+      .filter(item=>document.querySelector(`input[name="pendingResolution-${item.id}"]:checked`)?.value==='included')
+      .map(item=>item.id);
 
     // CORRECCIÓN BLOQUEANTE — HOTFIX PAYMENT_ALLOCATIONS: nunca confiar
     // solo en ocultar los controles de consolidación en el HTML. Si de
@@ -20464,9 +20594,15 @@ function openObligation(serviceId,key){
     if(paymentAllocationsLoadError&&mode==='consolidated'){
       throw new Error('No se pueden consolidar deudas hasta verificar las imputaciones de pagos. Recargá el espacio.');
     }
+    // MEJORA #9: resolver un pendiente anterior como "incluido" tampoco
+    // se puede confirmar sin las imputaciones de pagos verificadas --
+    // mismo criterio de seguridad que el resto de obligation_consolidations.
+    if(paymentAllocationsLoadError&&pendingResolvedIds.length){
+      throw new Error('No se pueden resolver períodos pendientes hasta verificar las imputaciones de pagos. Recargá el espacio.');
+    }
 
-    if(amountValue<=0||!dueValue){
-      throw new Error('Completá importe y vencimiento');
+    if((!amountPendingChecked&&amountValue<=0)||!dueValue){
+      throw new Error(amountPendingChecked?'Completá el vencimiento':'Completá importe y vencimiento');
     }
 
     if(uploadInvoice&&!file){
@@ -20528,7 +20664,12 @@ function openObligation(serviceId,key){
       provider:(document.getElementById('oprovider')?.value||'').trim(),
       invoiceNumber:(document.getElementById('oinvoicenumber')?.value||'').trim(),
       secondDueDate:secondDueValue||null,
-      secondAmount:secondAmountValue
+      secondAmount:secondAmountValue,
+      // MEJORA #9 -- IMPORTES PENDIENTES: siempre explícito (nunca
+      // omitido), igual criterio que secondAmount/secondDueDate -- así
+      // "editar Importe pendiente -> importe real" (o al revés) siempre
+      // sobrescribe el valor anterior, nunca lo deja implícito.
+      amountPending:amountPendingChecked
     };
 
     // CORRECCIÓN 6B4.15 - Historial de auditoría: solo se anexa cuando se
@@ -20537,6 +20678,7 @@ function openObligation(serviceId,key){
     const metaUpdate={extraFields:newExtra};
     if(o){
       const changedFields={};
+      if((previousExtra.amountPending===true)!==amountPendingChecked)changedFields.importePendiente={before:previousExtra.amountPending===true?'Sí':'No',after:amountPendingChecked?'Sí':'No'};
       if(Number(o.amount||0)!==amountValue)changedFields.importe={before:fmtMoneyExact(o.amount||0),after:fmtMoneyExact(amountValue)};
       if((o.due_date||'')!==dueValue)changedFields.vencimiento={before:o.due_date||'—',after:dueValue};
       if(targetPeriodKey!==key)changedFields.periodo={before:monthLabel(key),after:monthLabel(targetPeriodKey)};
@@ -20592,10 +20734,20 @@ function openObligation(serviceId,key){
 
       if(deleteLinkError)throw deleteLinkError;
 
-      if(mode==='consolidated'&&selectedSourceIds.length){
+      // MEJORA #9 -- IMPORTES PENDIENTES: reutiliza EXACTAMENTE el mismo
+      // mecanismo de obligation_consolidations ya existente ("esta
+      // factura incluye deuda anterior") para resolver un período
+      // pendiente como "incluido en una factura posterior" -- misma
+      // tabla, mismo insert, sin columna/tabla nueva. Independiente de
+      // `mode`: los períodos marcados "Sí, está incluido" se agregan acá
+      // aunque el usuario nunca haya elegido "Esta factura incluye deuda
+      // anterior" (son dos decisiones distintas -- una sobre deuda
+      // monetaria real, otra sobre un importe todavía desconocido).
+      const combinedSourceIds=[...new Set([...selectedSourceIds,...pendingResolvedIds])];
+      if(combinedSourceIds.length){
         const {error:insertLinkError}=await sb
           .from('obligation_consolidations')
-          .insert(selectedSourceIds.map(sourceId=>({
+          .insert(combinedSourceIds.map(sourceId=>({
             source_obligation_id:sourceId,
             target_obligation_id:saved.id,
             created_by:session.user.id
