@@ -98,6 +98,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 .included{background:#f0ebff;border-color:#c8b7f2}.included .status{color:#6941a5}
 .pending-amount{background:#fff7ec;border-color:#efaf6e}.pending-amount .status{color:#8a5b00}
 .inactive-service-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#f1f3f2;color:#5d6670;font-size:10px;font-weight:900;vertical-align:middle}.inactive-service-row{opacity:.68}.inactive-service-row:hover{opacity:1}.inactive-services-heading{margin:18px 0 8px;font-size:13px;font-weight:850;color:var(--muted);text-transform:uppercase}
+.payment-voided-badge{display:inline-block;margin-left:7px;padding:3px 7px;border-radius:999px;background:#f1f3f2;color:#5d6670;font-size:10px;font-weight:900;vertical-align:middle}.payment-row-voided{opacity:.68}.payment-row-voided:hover{opacity:1}.payment-voided-meta{font-size:12px;color:var(--muted);margin-top:4px}
 .consolidation-box{border:1px solid var(--line);border-radius:14px;padding:14px;margin:14px 0;background:#faf9ff}
 .consolidation-options{display:grid;gap:8px;margin-top:10px}
 .consolidation-option{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px;background:#fff;cursor:pointer}
@@ -19149,9 +19150,15 @@ function renderServices(ms){
       </div>
     </div>`:'')}`;
 }
+// MEJORA #11 -- ANULACIÓN NO DESTRUCTIVA DE PAGOS: un pago anulado no
+// puede seguir contando ni como "correspondía" ni como "pagó" en este
+// reporte -- se salta por completo (payment_contributions.amount de un
+// payment.voided===true NUNCA se suma acá; la fila histórica sigue
+// existiendo en la tabla real, solo se excluye de este cálculo
+// económico, igual criterio que paidAmountForWithAllocations()).
 function balanceData(){
   const rows=members.filter(m=>m.role==='admin'&&Number(m.participation_percent)>0).map(m=>({m,owed:0,paid:0,balance:0}));
-  payments.forEach(p=>{const o=obligations.find(x=>x.id===p.obligation_id);if(!o)return;const amount=Number(p.total_amount||0),sumShares=rows.reduce((a,r)=>a+Number(r.m.participation_percent||0),0)||100;rows.forEach(r=>r.owed+=amount*Number(r.m.participation_percent||0)/sumShares);contributions.filter(c=>c.payment_id===p.id).forEach(c=>{const r=rows.find(x=>x.m.id===c.membership_id);if(r)r.paid+=Number(c.amount||0)})});
+  payments.filter(p=>p.voided!==true).forEach(p=>{const o=obligations.find(x=>x.id===p.obligation_id);if(!o)return;const amount=Number(p.total_amount||0),sumShares=rows.reduce((a,r)=>a+Number(r.m.participation_percent||0),0)||100;rows.forEach(r=>r.owed+=amount*Number(r.m.participation_percent||0)/sumShares);contributions.filter(c=>c.payment_id===p.id).forEach(c=>{const r=rows.find(x=>x.m.id===c.membership_id);if(r)r.paid+=Number(c.amount||0)})});
   rows.forEach(r=>r.balance=r.paid-r.owed);return rows;
 }
 function renderBalance(){const rows=balanceData();return `<div class="balance card"><h2>Equilibrio acumulado</h2><p>Compara lo que correspondía pagar con lo efectivamente aportado.</p><div class="balancegrid">${rows.map(r=>`<div class="person"><strong>${esc(r.m.display_name)}</strong><div class="money ${r.balance>1?'positive':r.balance<-1?'negative':'neutral'}">${r.balance>=0?'+':''}${fmtMoney(r.balance)}</div><small>Correspondía ${fmtMoney(r.owed)} · Pagó ${fmtMoney(r.paid)}</small></div>`).join('')||'<div class="person">Definí los porcentajes de los administradores.</div>'}</div></div>`}
@@ -20448,12 +20455,14 @@ function openObligation(serviceId,key){
         <p>Podés abrir cada pago, cargar comprobantes o anular un pago parcial específico.</p>
         ${paymentRows.map((payment,index)=>{
           const receipts=receiptsForPayment(payment.id);
-          return `<div class="folderitem">
+          const voided=payment.voided===true;
+          return `<div class="folderitem${voided?' payment-row-voided':''}">
             <div class="folderhead">
               <div>
-                <strong>Pago ${paymentRows.length-index}</strong>
+                <strong>Pago ${paymentRows.length-index}${voided?' <span class="payment-voided-badge">ANULADO</span>':''}</strong>
                 <div>${fmtDate(payment.paid_at)} · ${fmtMoney(payment.total_amount)}</div>
                 ${paymentCreatedByLabel(payment)?`<small class="sub">${esc(paymentCreatedByLabel(payment))}</small>`:''}
+                ${voided?`<div class="payment-voided-meta">Motivo: ${esc(payment.void_reason||'—')}</div>`:''}
               </div>
               <button class="btn soft small" data-payment-detail="${payment.id}">Abrir pago</button>
             </div>
@@ -21581,7 +21590,7 @@ function openPaymentDetail(id){
     : [];
   const receipts=documents.filter(d=>d.payment_id===id&&d.kind==='receipt');
 
-  modal(`<h2>${esc(s?.name||'Servicio')}</h2>
+  modal(`<h2>${esc(s?.name||'Servicio')}${p.voided===true?' <span class="payment-voided-badge">ANULADO</span>':''}</h2>
     <div class="sub">${o?monthLabel(o.period.slice(0,7)):'Pago'}</div>
 
     <div class="notice">
@@ -21594,6 +21603,16 @@ function openPaymentDetail(id){
       dato informativo, nunca como si la persona fuera la dueña del pago. -->
       ${paymentCreatedByLabel(p)?`<br><small class="sub">${esc(paymentCreatedByLabel(p))}</small>`:''}
     </div>
+
+    ${p.voided===true?`
+      <div class="notice" style="border-color:#c9cdd1;background:#f1f3f2">
+        <strong>Este pago está anulado.</strong> Ya no reduce la deuda. Se conserva completo (aportes, comprobantes, historial) solo como referencia.
+        <div class="payment-voided-meta">
+          <div>Motivo: ${esc(p.void_reason||'—')}</div>
+          <div>Anulado por: ${esc(displayNameForUserId(p.voided_by))}</div>
+          <div>Anulado el: ${p.voided_at?esc(fmtDate(String(p.voided_at).slice(0,10))):'—'}</div>
+        </div>
+      </div>`:''}
 
     ${cs.map(c=>`
       <div class="row">
@@ -21643,8 +21662,8 @@ function openPaymentDetail(id){
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
       <button class="btn soft" id="openFolderBtn">Abrir carpeta</button>
-      ${isOwner()?'<button class="btn soft" id="correctHistoricalPaymentBtn">Corregir pago histórico</button>':''}
-      ${canEdit()?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
+      ${isOwner()&&p.voided!==true?'<button class="btn soft" id="correctHistoricalPaymentBtn">Corregir pago histórico</button>':''}
+      ${canEdit()&&p.voided!==true?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
     </div>`);
 
   bindDocumentCards({
@@ -21664,7 +21683,7 @@ function openPaymentDetail(id){
   }
 
   if(document.getElementById('annulPaymentBtn')){
-    document.getElementById('annulPaymentBtn').onclick=()=>annulPayment(id);
+    document.getElementById('annulPaymentBtn').onclick=()=>openAnnulPaymentModal(id);
   }
 
   // MEJORA #7 -- historial de correcciones: se carga de forma asíncrona
@@ -21738,7 +21757,20 @@ function openAddReceiptModal(paymentId,onDone){
   };
 }
 
-async function annulPayment(paymentId){
+// MEJORA #11 -- ANULACIÓN NO DESTRUCTIVA DE PAGOS: reemplaza por completo
+// al viejo flujo (DELETE real de payments + Storage.remove de
+// comprobantes, con un confirm() nativo). Ahora delega TODO el efecto real
+// al backend YA EXISTENTE public.void_payment(p_payment_id,p_reason) --
+// mismo RPC que ya usa #7 para anular un pago auxiliar durante una
+// corrección histórica. El frontend nunca hace DELETE ni recalcula nada
+// por su cuenta: solo arma los parámetros reales, muestra el resultado, y
+// deja que void_payment (SECURITY DEFINER, exige motivo no vacío,
+// verifica has_edit_access_to_payment, marca voided/voided_at/voided_by/
+// void_reason, desactiva payment_allocations activas, y ya sincroniza el
+// estado de la obligación server-side) haga el trabajo real. No se llama
+// syncObligationStatus() acá: sería un recálculo duplicado del que ya
+// hace el propio RPC.
+function openAnnulPaymentModal(paymentId){
   if(!canEdit())return toast('No tenés permiso para anular pagos');
 
   const payment=payments.find(item=>item.id===paymentId);
@@ -21746,60 +21778,62 @@ async function annulPayment(paymentId){
   const service=services.find(item=>item.id===obligation?.service_id);
 
   if(!payment||!obligation)return toast('No se encontró el pago');
+  if(payment.voided===true)return toast('Este pago ya está anulado');
 
   const receipts=documents.filter(
     item=>item.payment_id===paymentId&&item.kind==='receipt'
   );
 
-  const confirmed=confirm(
-    `¿Anular este pago de ${service?.name||'este servicio'} correspondiente a ${monthLabel(obligation.period.slice(0,7))}?\n\n`+
-    `Se eliminará este pago por ${fmtMoneyExact(payment.total_amount)}, sus aportes registrados y ${receipts.length} comprobante${receipts.length===1?'':'s'}.\n`+
-    `La factura conservará los demás pagos parciales, si los hubiera.\n\n`+
-    `Esta acción no se puede deshacer.`
-  );
+  modal(`<h2>Anular pago</h2>
+    <div class="sub">
+      ${esc(service?.name||'Servicio')} · ${monthLabel(obligation.period.slice(0,7))}<br>
+      ${fmtDate(payment.paid_at)} · ${fmtMoneyExact(payment.total_amount)}
+      ${receipts.length?`<br>${receipts.length} comprobante${receipts.length===1?'':'s'} asociado${receipts.length===1?'':'s'}`:''}
+    </div>
 
-  if(!confirmed)return;
+    <div class="notice">
+      Este pago quedará anulado y dejará de reducir la deuda.
+      No se borrarán el pago, sus aportes ni sus comprobantes.
+      La anulación quedará registrada y los comprobantes se conservarán.
+    </div>
 
-  const button=document.getElementById('annulPaymentBtn');
-  if(button){
+    <div class="field">
+      <label>Motivo de anulación *</label>
+      <textarea id="annulPaymentReason" rows="3" placeholder="Ej: pago duplicado, comprobante incorrecto..."></textarea>
+    </div>
+
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cancelar</button>
+      <button class="btn danger" id="confirmAnnulPayment">Anular pago</button>
+    </div>`);
+
+  const button=document.getElementById('confirmAnnulPayment');
+  button.onclick=async()=>{
+    const reason=(document.getElementById('annulPaymentReason').value||'').trim();
+    if(!reason)return toast('Ingresá el motivo de la anulación');
+
     button.disabled=true;
     button.textContent='Anulando…';
-  }
 
-  try{
-    const receiptPaths=receipts.map(item=>item.file_path).filter(Boolean);
+    try{
+      const {error}=await sb.rpc('void_payment',{
+        p_payment_id:paymentId,
+        p_reason:reason
+      });
 
-    const {error:deleteError}=await sb
-      .from('payments')
-      .delete()
-      .eq('id',paymentId);
+      if(error)throw error;
 
-    if(deleteError)throw deleteError;
-
-    await syncObligationStatus(obligation.id);
-
-    if(receiptPaths.length){
-      const {error:storageError}=await sb.storage
-        .from('documents')
-        .remove(receiptPaths);
-
-      if(storageError){
-        console.warn('El pago se anuló, pero quedaron archivos físicos:',storageError.message);
-      }
+      closeModal();
+      await refreshDashboardData();
+      toast('Pago anulado. Se conservó el historial y se actualizó la deuda.');
+      openPaymentDetail(paymentId);
+    }catch(err){
+      console.error('Error anulando pago:',err);
+      toast(err?.message||'No se pudo anular el pago');
+      button.disabled=false;
+      button.textContent='Anular pago';
     }
-
-    closeModal();
-    await refreshDashboardData();
-    toast('Pago anulado; la factura se actualizó');
-  }catch(err){
-    console.error('Error anulando pago:',err);
-    toast(err?.message||'No se pudo anular el pago');
-  }finally{
-    if(document.getElementById('annulPaymentBtn')){
-      document.getElementById('annulPaymentBtn').disabled=false;
-      document.getElementById('annulPaymentBtn').textContent='Anular pago';
-    }
-  }
+  };
 }
 
 // MEJORA #7 -- CORRECCIÓN TRAZABLE DE PAGOS HISTÓRICOS (FASE 2, LOCAL,

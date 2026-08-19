@@ -101,8 +101,12 @@ caso('CASO 1 — la migración propuesta existe y conserva el 6b13 de diagnósti
 });
 
 caso('CASO 2 — titular ve la acción "Corregir pago histórico" (gateada por isOwner(), no canEdit())', () => {
+  // AJUSTE (mejora #11, 20260819): el botón ahora también exige
+  // p.voided!==true (un pago ya anulado no debe ofrecer "Corregir pago
+  // histórico", ver mejora #11) -- sigue siendo isOwner() la condición
+  // real de titularidad, solo se le sumó ese AND adicional.
   for (const text of [indexText, operatorText]) {
-    assert.ok(text.includes("${isOwner()?'<button class=\"btn soft\" id=\"correctHistoricalPaymentBtn\">Corregir pago histórico</button>':''}"));
+    assert.ok(text.includes("${isOwner()&&p.voided!==true?'<button class=\"btn soft\" id=\"correctHistoricalPaymentBtn\">Corregir pago histórico</button>':''}"));
   }
 });
 
@@ -615,10 +619,15 @@ for (const [label, text] of [['index.html', indexText], ['index_operator.html', 
     assert.ok(!/\.update\(|\.delete\(|\.insert\(/.test(fnBlock));
   });
 
-  caso(`CASO 62 [${label}] — annulPayment() sigue siendo el mismo DELETE real ya documentado, NO fue modificado por esta mejora`, () => {
-    const fnBlock = extract(text, 'async function annulPayment(paymentId){', '// MEJORA #7 -- CORRECCIÓN TRAZABLE');
-    assert.ok(fnBlock.includes("from('payments')") && fnBlock.includes('.delete()'));
-    assert.ok(!fnBlock.includes('correct_historical_payment'), 'annulPayment no debe empezar a usar el mecanismo de corrección histórica');
+  // AJUSTE (mejora #11, 20260819): annulPayment() -- el DELETE real que
+  // esta suite documentaba como fuera de alcance de #7 -- fue justamente
+  // lo que #11 tenía que reemplazar (anulación no destructiva vía RPC
+  // void_payment). Lo que sigue siendo una garantía real de #7 es que la
+  // nueva función (openAnnulPaymentModal) tampoco empiece a mezclarse con
+  // el mecanismo de corrección histórica.
+  caso(`CASO 62 [${label}] — openAnnulPaymentModal() (mejora #11) no se mezcla con el mecanismo de corrección histórica de #7`, () => {
+    const fnBlock = extract(text, 'function openAnnulPaymentModal(paymentId){', '\n// MEJORA #7 -- CORRECCIÓN TRAZABLE');
+    assert.ok(!fnBlock.includes('correct_historical_payment'), 'openAnnulPaymentModal no debe usar el mecanismo de corrección histórica');
   });
 
   caso(`CASO 63 [${label}] — el bloque nuevo de mejora #7 no referencia Tarjetas (creditCard/credit_card/statement/movement/card_id como código real)`, () => {
@@ -648,15 +657,20 @@ caso('CASO 65 — Tarjetas permanece byte-idéntica en funciones core tras esta 
   }
 });
 
-caso('CASO 66 — annulPayment() es byte-idéntica al backup previo al inicio de esta mejora (no se tocó)', () => {
+// AJUSTE (mejora #11, 20260819): annulPayment() dejó de existir con ese
+// nombre/implementación -- fue reemplazada por completo, de forma
+// legítima y autorizada, por openAnnulPaymentModal() (ver mejora #11,
+// anulación no destructiva de pagos). Ya no corresponde exigir identidad
+// byte a byte contra un backup de antes de esa mejora.
+caso('CASO 66 — correct_historical_payment() (el RPC/bloque real de #7) permanece byte-idéntico al backup previo a mejora #11 -- #11 no tocó el mecanismo de corrección histórica', () => {
   for (const f of ['index.html', 'index_operator.html']) {
-    const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_implementar_mejora_7_correccion_pagos_20260818_020000', `${f}.antes_mejora7`);
+    const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_mejora_11_anulacion_pagos_20260819_173517', `${f}.antes_mejora11`);
     const before = fs.readFileSync(beforePath, 'utf8');
     const now = f === 'index.html' ? indexText : operatorText;
     assert.strictEqual(
-      extract(now, 'async function annulPayment(paymentId){', '// MEJORA #7 -- CORRECCIÓN TRAZABLE'),
-      extract(before, 'async function annulPayment(paymentId){', 'function permissionSummary('),
-      `annulPayment() en ${f} debe seguir byte-idéntica`
+      extract(now, 'function openCorrectHistoricalPaymentModal(paymentId){', '\nfunction permissionSummary('),
+      extract(before, 'function openCorrectHistoricalPaymentModal(paymentId){', '\nfunction permissionSummary('),
+      `openCorrectHistoricalPaymentModal() en ${f} debe seguir byte-idéntica`
     );
   }
 });

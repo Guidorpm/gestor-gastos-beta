@@ -519,10 +519,19 @@ for (const [label, text] of [['index.html', indexText], ['index_operator.html', 
     assert.ok(text.includes('async function deleteStoredDocument(documentId,onDelete){'));
   });
 
-  caso(`CASO 41 [${label}] — annulPayment() no fue modificado (sigue siendo el DELETE real ya documentado, fuera de esta mejora)`, () => {
-    const fnBlock = extract(text, 'async function annulPayment(paymentId){', '\nfunction permissionSummary(');
-    assert.ok(fnBlock.includes("from('payments')") && fnBlock.includes('.delete()'));
-    assert.ok(!fnBlock.includes('voided:true'), 'annulPayment no debe empezar a usar el mecanismo de anulación de documentos');
+  // AJUSTE (mejora #11, 20260819): annulPayment() -- que en el momento de
+  // #6 seguía siendo el DELETE real documentado acá -- se reemplazó por
+  // completo por openAnnulPaymentModal() (anulación NO destructiva de
+  // pagos vía RPC void_payment, ver mejora #11). Eso era exactamente el
+  // pendiente que #6 dejó fuera de alcance a propósito. Lo que SIGUE
+  // importándole a esta suite (que #6 y la anulación de pagos permanezcan
+  // mecanismos separados, uno para documents.voided y otro para
+  // payments.voided) se verifica igual: la anulación de pagos nunca debe
+  // reusar/pisar el mecanismo de anulación de DOCUMENTOS.
+  caso(`CASO 41 [${label}] — la anulación de pagos (openAnnulPaymentModal, mejora #11) nunca reutiliza el mecanismo de anulación de documentos (documents.voided)`, () => {
+    const fnBlock = extract(text, 'function openAnnulPaymentModal(paymentId){', '\n// MEJORA #7');
+    assert.ok(!fnBlock.includes('voided:true'), 'la anulación de pagos no debe escribir documents.voided directamente');
+    assert.ok(!/from\('documents'\)/.test(fnBlock), 'la anulación de pagos no debe tocar la tabla documents en absoluto');
   });
 
   caso(`CASO X [${label}] — el SELECT de documents del Panel general ahora incluye "voided"`, () => {
@@ -545,25 +554,26 @@ caso('CASO 40 — Tarjetas permanece byte-idéntica en funciones core tras esta 
   }
 });
 
-caso('CASO 41b — annulPayment() es byte-idéntica al backup previo (no se tocó)', () => {
-  // AJUSTE (mejora #7, 20260818): el marcador de fin original
-  // ('\nfunction permissionSummary(') asumía que nada se insertaría entre
-  // annulPayment() y permissionSummary() -- esa asunción dejó de ser
-  // válida en cuanto una mejora POSTERIOR y legítima (mejora #7,
-  // corrección trazable de pagos históricos) agregó funciones nuevas
-  // justo ahí (openCorrectHistoricalPaymentModal y helpers), sin tocar
-  // annulPayment() en absoluto. Se usa el comentario real que abre ese
-  // bloque nuevo como marcador de fin en el archivo ACTUAL -- el backup
-  // previo (que no tiene ese bloque) sigue usando el marcador original.
+// AJUSTE (mejora #11, 20260819): la función real que hacía esta suite
+// congelar ("annulPayment() nunca cambia") fue justamente la que #11
+// tenía que reemplazar -- ver CASO 41. Ya no tiene sentido exigir
+// identidad byte a byte contra un backup de antes de esa mejora legítima
+// y autorizada. Lo que sigue siendo una garantía real de esta suite (que
+// #6 -- anulación de documentos -- permanezca intacta) se verifica en
+// CASO 40 (Tarjetas) y en el resto de la suite (isVoidedServiceDocument/
+// openVoidServiceDocumentModal, ya cubiertos en otros casos).
+caso('CASO 41b — la anulación de pagos (openAnnulPaymentModal, mejora #11) sigue sin duplicar/reasignar ningún documento -- las funciones propias de #6 (isVoidedServiceDocument/openVoidServiceDocumentModal) permanecen byte-idénticas al backup previo a mejora #11', () => {
   for (const f of ['index.html', 'index_operator.html']) {
-    const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_implementar_anulacion_documentos_20260817_102821', `${f}.antes_implementar_anulacion_documentos`);
+    const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_mejora_11_anulacion_pagos_20260819_173517', `${f}.antes_mejora11`);
     const before = fs.readFileSync(beforePath, 'utf8');
     const now = f === 'index.html' ? indexText : operatorText;
-    assert.strictEqual(
-      extract(now, 'async function annulPayment(paymentId){', '// MEJORA #7 -- CORRECCIÓN TRAZABLE'),
-      extract(before, 'async function annulPayment(paymentId){', 'function permissionSummary('),
-      `annulPayment() en ${f} debe seguir byte-idéntica`
-    );
+    for (const fnName of ['isVoidedServiceDocument', 'openVoidServiceDocumentModal']) {
+      assert.strictEqual(
+        extract(now, `function ${fnName}(`, '\nfunction '),
+        extract(before, `function ${fnName}(`, '\nfunction '),
+        `${fnName}() en ${f} debe seguir byte-idéntica`
+      );
+    }
   }
 });
 
