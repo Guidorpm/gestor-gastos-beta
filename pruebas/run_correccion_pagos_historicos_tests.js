@@ -41,7 +41,11 @@ const operatorPath = path.join(ROOT, 'index_operator.html');
 const indexText = fs.readFileSync(indexPath, 'utf8');
 const operatorText = fs.readFileSync(operatorPath, 'utf8');
 const migrationPath = path.join(ROOT, 'migraciones', '6b13_PROPUESTA_CORRECCION_PAGOS_HISTORICOS_NO_EJECUTAR_20260818.sql');
-const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+// Normalizado a LF: git normaliza los .sql a CRLF al hacer commit/checkout
+// (el archivo real en disco puede quedar LF si nunca volvió a pasar por un
+// `git add`) -- normalizar acá evita que un marcador multilínea deje de
+// matchear solo por el line-ending real en disco.
+const migrationSql = fs.readFileSync(migrationPath, 'utf8').replace(/\r\n/g, '\n');
 
 function extract(text, startMarker, endMarker) {
   const s = text.indexOf(startMarker);
@@ -662,16 +666,27 @@ caso('CASO 65 — Tarjetas permanece byte-idéntica en funciones core tras esta 
 // legítima y autorizada, por openAnnulPaymentModal() (ver mejora #11,
 // anulación no destructiva de pagos). Ya no corresponde exigir identidad
 // byte a byte contra un backup de antes de esa mejora.
-caso('CASO 66 — correct_historical_payment() (el RPC/bloque real de #7) permanece byte-idéntico al backup previo a mejora #11 -- #11 no tocó el mecanismo de corrección histórica', () => {
+//
+// AJUSTE (BUGFIX #12 FASE 2B, 20260821): openCorrectHistoricalPaymentModal()
+// dejó de ser byte-idéntica a partir de acá, de forma legítima y
+// autorizada -- FASE 2B pidió explícitamente agregar la pregunta "¿Esta
+// diferencia corresponde a este mismo período?" cuando el importe
+// corregido supera el importe económico vigente, reordenar la ejecución
+// en RPC-primero/metadata-después, y manejar el error parcial. Ya no
+// corresponde exigir identidad byte a byte contra el backup previo a esa
+// FASE -- en su lugar se verifica que el RPC y sus 8 parámetros exactos
+// (ya cubiertos por CASO 55) y los guards de entrada (CASO 48/58) sigan
+// intactos, y que el orden RPC-antes-que-metadata esté presente en el
+// código real.
+caso('CASO 66 — correct_historical_payment() sigue siendo el único RPC real de corrección de pagos históricos, invocado ANTES de cualquier escritura de metadata (orden RPC -> effectivePeriodAmount preservado tras FASE 2B)', () => {
   for (const f of ['index.html', 'index_operator.html']) {
-    const beforePath = path.join(ROOT, 'respaldos_publicacion', 'antes_mejora_11_anulacion_pagos_20260819_173517', `${f}.antes_mejora11`);
-    const before = fs.readFileSync(beforePath, 'utf8');
     const now = f === 'index.html' ? indexText : operatorText;
-    assert.strictEqual(
-      extract(now, 'function openCorrectHistoricalPaymentModal(paymentId){', '\nfunction permissionSummary('),
-      extract(before, 'function openCorrectHistoricalPaymentModal(paymentId){', '\nfunction permissionSummary('),
-      `openCorrectHistoricalPaymentModal() en ${f} debe seguir byte-idéntica`
-    );
+    const fnBlock = extract(now, 'function openCorrectHistoricalPaymentModal(paymentId){', '\nfunction permissionSummary(');
+    const rpcIndex = fnBlock.indexOf("sb.rpc('correct_historical_payment',{");
+    const metaIndex = fnBlock.indexOf("extraFields:newExtraForHistory");
+    assert.ok(rpcIndex !== -1, `[${f}] debe seguir llamando al RPC correct_historical_payment`);
+    assert.ok(metaIndex !== -1, `[${f}] debe seguir pudiendo guardar effectivePeriodAmount tras el RPC`);
+    assert.ok(rpcIndex < metaIndex, `[${f}] el RPC debe ejecutarse ANTES que cualquier escritura de effectivePeriodAmount`);
   }
 });
 

@@ -657,15 +657,38 @@ function roundServiceMoney(value){return Math.round((Number(value)||0)*100)/100}
 // como abonado, un pago 1 centavo de menos no avisaba nada) -- acá NO:
 // serviceMoneyCents(0.01)===1, nunca 0.
 function serviceMoneyCents(value){return Math.round((Number(value)||0)*100)}
+// SEGUNDO HALLAZGO -- BUGFIX #12 (20260820): la versión anterior asumía
+// SIEMPRE formato AR con separador de miles ("."), quitando cualquier
+// punto incondicionalmente antes de interpretar la coma como decimal --
+// un valor sin coma pero CON punto decimal (ej. "49907.71", típico de un
+// teclado numérico que inserta "." en vez de ",") se leía mal
+// ("49907.71" -> 4990771, el punto se borraba como si fuera de miles).
+// Con coma presente, el criterio AR de siempre se mantiene sin cambios
+// (coma=decimal, cualquier punto=miles). SIN coma, un único punto es
+// ambiguo entre "separador de miles" ("105.000" = 105000, ya cubierto
+// por un test existente) y "separador decimal" ("49907.71" = 49907.71) --
+// se desambigua por la cantidad de dígitos después del punto: el dinero
+// en esta app siempre tiene EXACTAMENTE 2 decimales (numeric(14,2)), así
+// que exactamente 2 dígitos después del único punto es decimal;
+// cualquier otra cantidad (3, como en una agrupación de miles real) se
+// trata como miles, igual que antes. Sigue sin usar Math.round/parseInt
+// (no trunca ni redondea el valor real ingresado).
 function parseMoneyField(value){
   const raw=String(value??'').trim();
   if(!raw)return 0;
-  const normalized=raw
-    .replace(/\$/g,'')
-    .replace(/\s/g,'')
-    .replace(/\./g,'')
-    .replace(',','.')
-    .replace(/[^0-9.-]/g,'');
+  const cleaned=raw.replace(/\$/g,'').replace(/\s/g,'');
+  const hasComma=cleaned.includes(',');
+  const dotCount=(cleaned.match(/\./g)||[]).length;
+  let normalized;
+  if(hasComma){
+    normalized=cleaned.replace(/\./g,'').replace(',','.');
+  }else if(dotCount===1){
+    const decimals=cleaned.split('.')[1]||'';
+    normalized=decimals.length===2?cleaned:cleaned.replace(/\./g,'');
+  }else{
+    normalized=cleaned.replace(/\./g,'');
+  }
+  normalized=normalized.replace(/[^0-9.-]/g,'');
   const number=Number(normalized);
   return Number.isFinite(number)?number:0;
 }
@@ -1741,7 +1764,14 @@ async function loadSpacesDashboard(){
 
   const [servicesResult,obligationsResult,paymentsResult,documentsResult]=await Promise.all([
     sb.from('services').select('id,group_id,name,active,is_private').in('group_id',groupIds).eq('active',true),
-    sb.from('obligations').select('id,service_id,period,amount,status,due_date,services!inner(group_id,name)').in('services.group_id',groupIds),
+    // BUGFIX #12 FASE 2C -- esta consulta (Panel general / "Obligaciones
+    // del mes") no traía notes, así que obligationExtraFields() sobre
+    // estas filas SIEMPRE devolvía {} -- cualquier effectivePeriodAmount/
+    // amountPending/secondDueDate quedaba invisible acá aunque estuviera
+    // correctamente guardado (visible en el detalle del espacio, que sí
+    // usa select('*',...)). Se agrega notes para que ambos caminos lean
+    // la misma metadata real.
+    sb.from('obligations').select('id,service_id,period,amount,status,due_date,notes,services!inner(group_id,name)').in('services.group_id',groupIds),
     sb.from('payments').select('id,obligation_id,total_amount,paid_at,voided,notes,obligations!inner(service_id,services!inner(group_id))').in('obligations.services.group_id',groupIds),
     sb.from('documents').select('id,group_id,obligation_id,payment_id,kind,voided').in('group_id',groupIds)
   ]);
@@ -1958,10 +1988,21 @@ function obligationHasSecondStagePayment(obligationId,paymentsList){
     p.obligation_id===obligationId&&p.voided!==true&&paymentAppliedDueStage(p)==='second'
   );
 }
+// BUGFIX #12 FASE 2 -- DIFERENCIA DE PAGO DEL MISMO PERÍODO: si existe un
+// importe efectivo explícito del período (extraFields.effectivePeriodAmount),
+// reemplaza el importe DOCUMENTAL (obligation.amount) como base de TODO el
+// cálculo de acá en adelante -- obligation.amount (el importe que figura en
+// la factura real) NUNCA se modifica, este es el ÚNICO punto donde se
+// sustituye para calcular cuánto es económicamente exigible. Deliberadamente
+// SEPARADO de segundo vencimiento: si además hay secondDueDate/secondAmount
+// cargados, la lógica de escalar a importe 2 sigue funcionando exactamente
+// igual que antes, solo que ahora parte de effectivePeriodAmount en vez de
+// obligation.amount cuando corresponda -- nunca se inventa un segundo
+// vencimiento para representar esto.
 function effectiveObligationAmount(obligation,paymentsList,allocationsList){
   if(!obligation)return 0;
-  const amount1=Number(obligation.amount||0);
   const extra=obligationExtraFields(obligation);
+  const amount1=extra.effectivePeriodAmount!=null?Number(extra.effectivePeriodAmount):Number(obligation.amount||0);
   if(extra.secondDueDate&&extra.secondAmount!=null&&obligationHasSecondStagePayment(obligation.id,paymentsList)){
     return Number(extra.secondAmount);
   }
@@ -2334,7 +2375,13 @@ function serviceObligationRowsForMonth(monthKeyStr){
       });
       return;
     }
-    const amountArs=Number(amountRaw||0);
+    // BUGFIX #12 FASE 2C -- importe ECONÓMICO del período (effectiveObligationAmount),
+    // no el documental crudo: esta fila es un resumen económico ("cuánto
+    // corresponde este mes"), igual criterio que la tarjeta de servicio y
+    // el detalle mensual. amountRaw (documental) se sigue usando arriba
+    // solo para decidir "sin importe cargado" (hasAmount), que es un
+    // concepto distinto (importe pendiente de #9).
+    const amountArs=effectiveObligationAmount(obligation,spacesDashboard.payments,spacesDashboard.paymentAllocations);
     const remainingArs=calculateRealObligationBalance(obligation,spacesDashboard.payments,spacesDashboard.paymentAllocations);
     const paymentCode=remainingArs<=0.01?'paid':paidArs>0?'partial':'pending';
     const paymentLabel={paid:'Pagada',partial:'Pago parcial',pending:'Pendiente'}[paymentCode];
@@ -17793,11 +17840,26 @@ function paymentProgress(obligation){
 // parcial. El texto libre del usuario nunca se mezcla con el JSON ni se
 // le muestra el JSON como si fuera su nota.
 const OBLIGATION_META_PREFIX='[[OBLIGATION_META:';
+// BUGFIX #12 FASE 2C -- CAUSA RAÍZ REAL de que effectivePeriodAmount
+// (u otras claves de extraFields) puedan existir de verdad en
+// obligations.notes y aun así desaparecer para toda la app: esta función
+// exigía que el JSON terminara EXACTAMENTE al final de la primera línea
+// (firstLine.endsWith(']]')) -- cualquier contenido extra en esa misma
+// línea (un espacio final, texto pegado sin salto de línea, un CRLF/CR
+// suelto que split(/\r?\n/) no separó igual que el resto del archivo,
+// etc.) hacía que TODO el bloque se descartara silenciosamente y
+// devolviera {} -- perdiendo effectivePeriodAmount/secondDueDate/
+// amountPending/currency/etc. de un plumazo, sin ningún error visible.
+// obligationUserNotes() (abajo) YA usaba un regex tolerante que no exige
+// esto -- esta función quedaba inconsistente con esa. Ahora ambas usan el
+// mismo criterio: se extrae el primer bloque `[[OBLIGATION_META:{...}]]`
+// que aparece al inicio de notes, sin importar qué haya después en esa
+// misma línea.
 function obligationNoteMeta(rawNotes){
   const notes=String(rawNotes||'');
-  const firstLine=notes.split(/\r?\n/,1)[0];
-  if(!firstLine.startsWith(OBLIGATION_META_PREFIX)||!firstLine.endsWith(']]'))return{};
-  try{return JSON.parse(firstLine.slice(OBLIGATION_META_PREFIX.length,-2))||{};}catch{return{};}
+  const match=notes.match(/^\[\[OBLIGATION_META:(\{[\s\S]*?\})\]\]/);
+  if(!match)return{};
+  try{return JSON.parse(match[1])||{};}catch{return{};}
 }
 function obligationUserNotes(rawNotes){
   return String(rawNotes||'').replace(/^\[\[OBLIGATION_META:(\{.*?\})\]\][\r\n]*/,'');
@@ -20242,7 +20304,8 @@ function openObligation(serviceId,key){
         <strong>No se pudieron verificar las imputaciones de pagos de este espacio.</strong> Pagado y Saldo pendiente no se muestran hasta poder confirmarlas -- solo se conservan visibles el importe original y los documentos.
       </div>`:''}
       <div class="payment-summary">
-        <div class="item"><span>Total factura</span><strong>${formatObligationAmount(o,progress.amount)}</strong></div>
+        <div class="item"><span>Total factura</span><strong>${formatObligationAmount(o,o.amount)}</strong></div>
+        ${!progress.unavailable&&extraFields.effectivePeriodAmount!=null?`<div class="item"><span>Importe efectivo de este período</span><strong>${formatObligationAmount(o,progress.amount)}</strong></div>`:''}
         <div class="item"><span>Pagado</span><strong>${progress.unavailable?'No disponible':formatObligationAmount(o,progress.paid)}</strong></div>
         <div class="item"><span>Saldo pendiente</span><strong>${progress.unavailable?'No disponible':formatObligationAmount(o,progress.balance)}</strong></div>
         ${!progress.unavailable&&progress.creditBalance>0.01?`<div class="item"><span>Saldo a favor</span><strong>${formatObligationAmount(o,progress.creditBalance)}</strong></div>`:''}
@@ -20250,6 +20313,10 @@ function openObligation(serviceId,key){
       ${!progress.unavailable&&progress.creditBalance>0.01?`<div class="notice" style="border-color:#a8d4f5;background:#e7f5ff">
         <strong>Hay un saldo a favor de ${fmtMoneyExact(progress.creditBalance)}.</strong>
         Se pagó más de lo que figura como importe de este mes. Los pagos no se recortan ni se borran — requiere revisión manual antes de imputarlo a otro mes.
+        ${editableNow?`<div style="margin-top:8px">
+          <div class="category-help" style="margin:0 0 6px">¿Esta diferencia corresponde económicamente a este mismo período (no a otro mes, no un segundo vencimiento)?</div>
+          <button type="button" class="btn soft small" id="useAsEffectivePeriodAmount" data-suggested-amount="${progress.paid}">Sí, corresponde a este período</button>
+        </div>`:''}
       </div>`:''}
     `:''}
 
@@ -20278,6 +20345,25 @@ function openObligation(serviceId,key){
         Todavía no tengo el importe -- dejar como "Importe pendiente"
       </label>
       <div class="category-help" style="margin-top:2px">No inventes un importe ni pongas 0 a mano. Vas a poder cargar el importe real más adelante editando este mismo registro, o marcar que quedó incluido en la factura de un mes posterior si corresponde.</div>
+    </div>
+
+    <!-- BUGFIX #12 FASE 2 -- DIFERENCIA DE PAGO DEL MISMO PERÍODO: campo
+    separado de segundo vencimiento a propósito. El importe de la factura de
+    arriba NUNCA se toca acá -- esto solo registra, cuando corresponde, que
+    lo económicamente exigible de ESTE período es distinto (ej.: una
+    diferencia real que Mercado Pago mostraba y el sistema no dejaba cargar
+    antes). Vacío = comportamiento histórico sin cambios. -->
+    <div class="field" id="oeffectivePeriodAmountField" style="${extraFields.amountPending===true?'display:none':''}">
+      <label>Importe efectivo de este período <span style="font-weight:400">(opcional)</span></label>
+      <input
+        id="oeffectivePeriodAmount"
+        data-money-input
+        class="money-input"
+        value="${extraFields.effectivePeriodAmount!=null?formatMoneyField(extraFields.effectivePeriodAmount):''}"
+        placeholder="Dejar vacío si es igual al importe de la factura"
+        ${!editableNow?'disabled':''}
+      >
+      <div class="category-help" style="margin-top:2px">Completá esto SOLO si lo que corresponde pagar este período es distinto del importe que figura en la factura de arriba. El importe documental de la factura se conserva sin cambios -- esto no lo reemplaza, se usa además para calcular el saldo real de este mes.</div>
     </div>
 
     <div class="category-help" style="margin:14px 0 -2px;font-weight:600;text-transform:none">Segundo vencimiento <span style="font-weight:400">(opcional)</span></div>
@@ -20602,15 +20688,37 @@ function openObligation(serviceId,key){
   // real normalmente.
   const amountPendingCheckbox=document.getElementById('oamountPending');
   const amountInput=document.getElementById('oamount');
+  // BUGFIX #12 FASE 2: un importe efectivo del período solo tiene sentido
+  // cuando hay un importe documental/económico conocido -- si se marca
+  // "Importe pendiente", este campo se oculta, se deshabilita y se limpia,
+  // igual criterio que el campo de importe de arriba.
+  const effectivePeriodAmountField=document.getElementById('oeffectivePeriodAmountField');
+  const effectivePeriodAmountInput=document.getElementById('oeffectivePeriodAmount');
   if(amountPendingCheckbox&&amountInput){
     const applyAmountPendingUI=()=>{
       const pending=amountPendingCheckbox.checked;
       amountInput.disabled=pending||!editableNow;
       if(pending)amountInput.value='';
+      if(effectivePeriodAmountField)effectivePeriodAmountField.style.display=pending?'none':'';
+      if(effectivePeriodAmountInput){
+        effectivePeriodAmountInput.disabled=pending||!editableNow;
+        if(pending)effectivePeriodAmountInput.value='';
+      }
       updateConsolidationUI();
     };
     amountPendingCheckbox.onchange=applyAmountPendingUI;
     applyAmountPendingUI();
+  }
+
+  const useAsEffectiveBtn=document.getElementById('useAsEffectivePeriodAmount');
+  if(useAsEffectiveBtn&&effectivePeriodAmountInput){
+    useAsEffectiveBtn.onclick=()=>{
+      const suggested=Number(useAsEffectiveBtn.dataset.suggestedAmount||0);
+      effectivePeriodAmountInput.value=formatMoneyField(suggested);
+      effectivePeriodAmountInput.scrollIntoView({behavior:'smooth',block:'center'});
+      effectivePeriodAmountInput.focus();
+      toast('Revisá el importe y guardá para confirmar');
+    };
   }
 
   bindDocumentCards({
@@ -20729,6 +20837,22 @@ function openObligation(serviceId,key){
       throw new Error('El importe con segundo vencimiento debe ser mayor a cero');
     }
 
+    // BUGFIX #12 FASE 2 -- DIFERENCIA DE PAGO DEL MISMO PERÍODO: campo
+    // opcional, completamente separado de segundo vencimiento. Vacío =
+    // comportamiento histórico (obligation.amount sigue siendo la única
+    // fuente del importe exigible). NUNCA se infiere automáticamente del
+    // importe pendiente -- si amountPendingChecked está marcado, el campo ya
+    // queda oculto/limpio en el HTML, pero igual se vuelve a exigir acá
+    // server-side (nunca confiar solo en que el campo esté oculto).
+    const effectivePeriodAmountRaw=document.getElementById('oeffectivePeriodAmount')?.value||'';
+    const effectivePeriodAmountValue=effectivePeriodAmountRaw?parseMoneyField(effectivePeriodAmountRaw):null;
+    if(effectivePeriodAmountValue!=null&&effectivePeriodAmountValue<=0){
+      throw new Error('El importe efectivo del período debe ser mayor a cero');
+    }
+    if(amountPendingChecked&&effectivePeriodAmountValue!=null){
+      throw new Error('No se puede cargar un importe efectivo del período mientras el importe está marcado como pendiente');
+    }
+
     const previousFreeText=o?obligationUserNotes(o.notes):'';
     const newFreeText=document.getElementById('onotes').value;
     const previousExtra=o?obligationExtraFields(o):{};
@@ -20742,7 +20866,11 @@ function openObligation(serviceId,key){
       // omitido), igual criterio que secondAmount/secondDueDate -- así
       // "editar Importe pendiente -> importe real" (o al revés) siempre
       // sobrescribe el valor anterior, nunca lo deja implícito.
-      amountPending:amountPendingChecked
+      amountPending:amountPendingChecked,
+      // BUGFIX #12 FASE 2 -- siempre explícito (nunca omitido), mismo
+      // criterio que secondAmount: así "cargar -> quitar" el importe
+      // efectivo del período siempre sobrescribe el valor anterior.
+      effectivePeriodAmount:effectivePeriodAmountValue
     };
 
     // CORRECCIÓN 6B4.15 - Historial de auditoría: solo se anexa cuando se
@@ -20758,6 +20886,7 @@ function openObligation(serviceId,key){
       if((previousExtra.currency||'ARS')!==newExtra.currency)changedFields.moneda={before:previousExtra.currency||'ARS',after:newExtra.currency};
       if((previousExtra.provider||'')!==newExtra.provider)changedFields.proveedor={before:previousExtra.provider||'—',after:newExtra.provider||'—'};
       if((previousExtra.invoiceNumber||'')!==newExtra.invoiceNumber)changedFields.numeroFactura={before:previousExtra.invoiceNumber||'—',after:newExtra.invoiceNumber||'—'};
+      if((previousExtra.effectivePeriodAmount??null)!==newExtra.effectivePeriodAmount)changedFields.importeEfectivoPeriodo={before:previousExtra.effectivePeriodAmount!=null?fmtMoneyExact(previousExtra.effectivePeriodAmount):'—',after:newExtra.effectivePeriodAmount!=null?fmtMoneyExact(newExtra.effectivePeriodAmount):'—'};
       if((previousExtra.secondDueDate||null)!==newExtra.secondDueDate)changedFields.segundoVencimiento={before:previousExtra.secondDueDate||'—',after:newExtra.secondDueDate||'—'};
       if((previousExtra.secondAmount??null)!==newExtra.secondAmount)changedFields.segundoImporte={before:previousExtra.secondAmount!=null?fmtMoneyExact(previousExtra.secondAmount):'—',after:newExtra.secondAmount!=null?fmtMoneyExact(newExtra.secondAmount):'—'};
       if(previousFreeText!==newFreeText)changedFields.notas={before:previousFreeText||'—',after:newFreeText||'—'};
@@ -21107,7 +21236,8 @@ function openPayModal(o){
     </div>
 
     <div class="payment-summary">
-      <div class="item"><span>Total factura</span><strong>${fmtMoneyExact(progress.amount)}</strong></div>
+      <div class="item"><span>Total factura</span><strong>${fmtMoneyExact(baseAmount)}</strong></div>
+      ${extraDue.effectivePeriodAmount!=null?`<div class="item"><span>Importe efectivo de este período</span><strong>${fmtMoneyExact(progress.amount)}</strong></div>`:''}
       <div class="item"><span>Pagado</span><strong>${fmtMoneyExact(progress.paid)}</strong></div>
       <div class="item"><span>Saldo a pagar</span><strong>${fmtMoneyExact(progress.balance)}</strong></div>
     </div>
@@ -21595,7 +21725,7 @@ function openPaymentDetail(id){
 
     <div class="notice">
       Este pago: ${fmtDate(p.paid_at)} · ${fmtMoneyExact(p.total_amount)}
-      ${o?`<br>Total factura: ${fmtMoneyExact(progress.amount)} · Pagado acumulado: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(paidAmountFor(o.id))} · Saldo: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(balanceFor(o))}`:''}
+      ${o?`<br>Total factura: ${fmtMoneyExact(o.amount)}${obligationExtraFields(o).effectivePeriodAmount!=null?` · Importe efectivo de este período: ${fmtMoneyExact(progress.amount)}`:''} · Pagado acumulado: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(paidAmountFor(o.id))} · Saldo: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(balanceFor(o))}`:''}
       ${paymentAllocationsLoadError?'<br><small style="color:#7a1f1f">No se pudieron verificar las imputaciones de pagos de este espacio.</small>':''}
       <!-- CORRECCIÓN 6B4.11.1 - Sección 5 del pedido: "created_by" es solo
       trazabilidad de quién lo registró (nunca define propiedad -- el pago
@@ -21998,6 +22128,19 @@ function openCorrectHistoricalPaymentModal(paymentId){
       </div>
     </div>
 
+    <!-- BUGFIX #12 FASE 2B -- DIFERENCIA DE PAGO DEL MISMO PERÍODO: se
+    revela recién al confirmar, solo si el importe corregido supera el
+    importe económico VIGENTE del período. Deliberadamente separado del
+    checkbox de segundo vencimiento de arriba -- esta pregunta nunca lo
+    reemplaza ni lo marca por el usuario. -->
+    <div id="correctSamePeriodQuestion" class="notice hidden" style="border-color:#a8d4f5;background:#e7f5ff">
+      <strong id="correctSamePeriodText"></strong>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn soft small" id="correctSamePeriodYes">Sí, corresponde a este período</button>
+        <button type="button" class="btn outline small" id="correctSamePeriodNo">No, dejarla como saldo a favor</button>
+      </div>
+    </div>
+
     <div class="modalactions">
       <button type="button" class="btn outline" data-close>Cancelar</button>
       <button type="button" class="btn primary" id="confirmCorrectHistoricalPayment">Guardar corrección</button>
@@ -22010,6 +22153,69 @@ function openCorrectHistoricalPaymentModal(paymentId){
   const auxiliaryCheckbox=document.getElementById('correctHasAuxiliary');
   const auxiliaryFields=document.getElementById('correctAuxiliaryFields');
   auxiliaryCheckbox.onchange=()=>auxiliaryFields.classList.toggle('hidden',!auxiliaryCheckbox.checked);
+
+  // BUGFIX #12 FASE 2B -- DIFERENCIA DE PAGO DEL MISMO PERÍODO: orden
+  // OBLIGATORIO -- 1) correct_historical_payment (RPC real, nunca se
+  // omite); 2) recién si el RPC tuvo éxito Y el usuario eligió "Sí", se
+  // guarda extraFields.effectivePeriodAmount=newTotalAmount en
+  // OBLIGATION_META (merge, con editHistory) -- NUNCA al revés, NUNCA en
+  // paralelo. Un fallo del RPC no debe escribir metadata; un fallo de la
+  // metadata (después de un RPC exitoso) NUNCA revierte ni duplica el
+  // pago ya corregido -- solo se avisa. obligation.amount jamás se toca
+  // acá. No crea pagos ni obligaciones nuevas, no duplica documentos, no
+  // toca Storage.
+  async function executeHistoricalCorrection({newTotalAmount,reason,wantsSecondDue,secondDueAmount,secondDueDate,auxiliaryPaymentId,auxiliaryReason,samePeriodDecision}){
+    const button=document.getElementById('confirmCorrectHistoricalPayment');
+    if(button){button.disabled=true;button.textContent='Guardando…';}
+
+    try{
+      const {error}=await sb.rpc('correct_historical_payment',{
+        p_payment_id:paymentId,
+        p_new_total_amount:newTotalAmount,
+        p_reason:reason,
+        p_applied_due_stage:wantsSecondDue?'second':null,
+        p_second_due_date:secondDueDate,
+        p_second_due_amount:secondDueAmount,
+        p_void_auxiliary_payment_id:auxiliaryPaymentId,
+        p_void_auxiliary_reason:auxiliaryReason
+      });
+      if(error)throw error;
+    }catch(err){
+      console.error('Error corrigiendo el pago:',err);
+      toast(err?.message||'No se pudo corregir el pago');
+      if(button){button.disabled=false;button.textContent='Guardar corrección';}
+      return;
+    }
+
+    // El RPC ya tuvo éxito -- el pago quedó corregido pase lo que pase
+    // de acá en adelante. Un error de metadata NUNCA revierte esto.
+    let metaWarning=null;
+    if(samePeriodDecision==='same_period'){
+      try{
+        const newExtraForHistory={...extra,effectivePeriodAmount:newTotalAmount};
+        const changedFields={importeEfectivoPeriodo:{
+          before:extra.effectivePeriodAmount!=null?fmtMoneyExact(extra.effectivePeriodAmount):'—',
+          after:fmtMoneyExact(newTotalAmount)
+        }};
+        const history=obligationEditHistory(obligation);
+        const metaUpdate={
+          extraFields:newExtraForHistory,
+          editHistory:[...history,{at:new Date().toISOString(),by:session.user.id,changedFields}].slice(-20)
+        };
+        const notesValue=updateObligationNotes(obligation.notes,metaUpdate);
+        const {error:metaError}=await sb.from('obligations').update({notes:notesValue}).eq('id',obligation.id);
+        if(metaError)throw metaError;
+      }catch(metaErr){
+        console.error('Error guardando el importe efectivo del período:',metaErr);
+        metaWarning='El pago fue corregido, pero no pudo guardarse que la diferencia corresponde a este período.';
+      }
+    }
+
+    closeModal();
+    await refreshDashboardData();
+    toast(metaWarning||'Pago corregido');
+    openPaymentDetail(paymentId);
+  }
 
   document.getElementById('confirmCorrectHistoricalPayment').onclick=async()=>{
     const newTotalAmount=roundServiceMoney(parseMoneyField(document.getElementById('correctTotalAmount').value));
@@ -22033,42 +22239,50 @@ function openCorrectHistoricalPaymentModal(paymentId){
     const wantsAuxiliary=auxiliaryCheckbox.checked&&!auxiliaryCheckbox.disabled;
     let auxiliaryPaymentId=null;
     let auxiliaryReason=null;
+    let auxiliaryAmount=0;
     if(wantsAuxiliary){
       const selected=document.querySelector('input[name="correctAuxiliaryPaymentId"]:checked');
       if(!selected)return toast('Elegí cuál pago auxiliar anular');
       auxiliaryPaymentId=selected.value;
       auxiliaryReason=(document.getElementById('correctAuxiliaryReason').value||'').trim();
       if(!auxiliaryReason)return toast('La anulación del pago auxiliar requiere su propio motivo');
+      auxiliaryAmount=Number(auxiliaryCandidates.find(p=>p.id===auxiliaryPaymentId)?.total_amount||0);
     }
 
-    const button=document.getElementById('confirmCorrectHistoricalPayment');
-    button.disabled=true;
-    button.textContent='Guardando…';
+    // BUGFIX #12 FASE 2B -- estimación PREVIA al RPC (sin escribir nada
+    // todavía): si lo que quedaría pagado con esta corrección (pago
+    // corregido + resto de pagos activos - auxiliar que se vaya a anular)
+    // supera el importe económico VIGENTE del período (el mismo
+    // effectiveObligationAmount que usa toda la app -- respeta un
+    // effectivePeriodAmount previo si ya existiera), se pregunta ANTES de
+    // tocar nada real. Si no supera, comportamiento histórico intacto: se
+    // corrige directo, sin preguntar nada.
+    const vigente=effectiveObligationAmount(obligation,payments,paymentAllocations);
+    const currentPaid=paidAmountForWithAllocations(obligation.id,payments,paymentAllocations);
+    const estimatedPaidAfter=roundServiceMoney(currentPaid+(newTotalAmount-Number(payment.total_amount||0))-auxiliaryAmount);
+    const estimatedDiff=roundServiceMoney(estimatedPaidAfter-vigente);
 
-    try{
-      const {error}=await sb.rpc('correct_historical_payment',{
-        p_payment_id:paymentId,
-        p_new_total_amount:newTotalAmount,
-        p_reason:reason,
-        p_applied_due_stage:wantsSecondDue?'second':null,
-        p_second_due_date:secondDueDate,
-        p_second_due_amount:secondDueAmount,
-        p_void_auxiliary_payment_id:auxiliaryPaymentId,
-        p_void_auxiliary_reason:auxiliaryReason
-      });
+    const correctionPayload={newTotalAmount,reason,wantsSecondDue,secondDueAmount,secondDueDate,auxiliaryPaymentId,auxiliaryReason};
 
-      if(error)throw error;
-
-      closeModal();
-      await refreshDashboardData();
-      toast('Pago corregido');
-      openPaymentDetail(paymentId);
-    }catch(err){
-      console.error('Error corrigiendo el pago:',err);
-      toast(err?.message||'No se pudo corregir el pago');
-      button.disabled=false;
-      button.textContent='Guardar corrección';
+    if(serviceMoneyCents(estimatedDiff)>0){
+      const questionBox=document.getElementById('correctSamePeriodQuestion');
+      const questionText=document.getElementById('correctSamePeriodText');
+      questionText.textContent=`Hay una diferencia de ${fmtMoneyExact(estimatedDiff)}. ¿Esta diferencia corresponde a este mismo período?`;
+      questionBox.classList.remove('hidden');
+      const saveButton=document.getElementById('confirmCorrectHistoricalPayment');
+      saveButton.disabled=true;
+      document.getElementById('correctSamePeriodYes').onclick=()=>{
+        questionBox.classList.add('hidden');
+        executeHistoricalCorrection({...correctionPayload,samePeriodDecision:'same_period'});
+      };
+      document.getElementById('correctSamePeriodNo').onclick=()=>{
+        questionBox.classList.add('hidden');
+        executeHistoricalCorrection({...correctionPayload,samePeriodDecision:'credit_balance'});
+      };
+      return;
     }
+
+    await executeHistoricalCorrection({...correctionPayload,samePeriodDecision:null});
   };
 }
 
