@@ -19203,7 +19203,7 @@ function renderServices(ms){
             <div class="debt-amount">${fmtMoney(balanceFor(o))}</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
               <button class="btn soft small" data-old-debt="${o.service_id}|${debtMonth}">Abrir deuda</button>
-              ${canEdit()?`<button class="btn primary small" data-next-invoice="${o.service_id}|${nextMonth}">
+              ${canEdit()&&service?.active!==false?`<button class="btn primary small" data-next-invoice="${o.service_id}|${nextMonth}">
                 Cargar ${monthLabel(nextMonth)}
               </button>`:''}
             </div>
@@ -21670,6 +21670,104 @@ function openFolder(serviceId){
 // de metadata nuevo: se auditó el modelo real de `services` y esa tabla no
 // tiene hoy ningún campo de trazabilidad (notes/editHistory) -- no se
 // inventa uno para esta mejora (ver reporte de entrega).
+//
+// BUGFIX #13 FASE 2 -- VALIDACIÓN ROBUSTA DEL UPDATE: el UPDATE anterior
+// solo revisaba "error" -- si RLS bloqueaba la fila (USING/WITH CHECK no
+// matchea), PostgREST responde éxito con 0 filas afectadas y error=null,
+// así que el código mostraba "Servicio dado de baja" aunque en la base no
+// hubiera cambiado nada (diagnóstico real, ver 6b16). Se agrega
+// .select('id,active') y se valida explícitamente la fila devuelta.
+// DECISIÓN: se usa un array simple (SIN .single()/.maybeSingle()) --
+// .single() convierte tanto "0 filas" como "más de 1 fila" en el MISMO
+// código de error genérico de PostgREST (PGRST116), lo que impediría
+// distinguir "RLS bloqueó todo" de "hay una inconsistencia real de más de
+// una fila" y daría un mensaje menos claro en ambos casos. Con el array
+// se decide explícitamente por longitud, con un mensaje apropiado para
+// cada caso.
+function describeServiceUpdateError(err){
+  return {code:err?.code,message:err?.message,details:err?.details,hint:err?.hint};
+}
+async function applyServiceActiveUpdate(serviceId,targetActive){
+  const {data,error}=await sb
+    .from('services')
+    .update({active:targetActive})
+    .eq('id',serviceId)
+    .select('id,active');
+
+  if(error){
+    console.error('Error actualizando el estado del servicio:',{...describeServiceUpdateError(error),serviceId,targetActive});
+    return {ok:false};
+  }
+
+  const rows=data||[];
+  if(rows.length===0){
+    console.error('El UPDATE de services no afectó ninguna fila (posible bloqueo de RLS sobre esta fila puntual):',{serviceId,targetActive});
+    return {ok:false};
+  }
+  if(rows.length>1){
+    console.error('El UPDATE de services afectó más de una fila -- inconsistencia inesperada, filtrado por id debería garantizar como máximo una:',{serviceId,targetActive,filasAfectadas:rows.length});
+    return {ok:false};
+  }
+  const row=rows[0];
+  if(row.id!==serviceId||row.active!==targetActive){
+    console.error('La fila devuelta por el UPDATE no coincide con lo solicitado:',{serviceId,targetActive,filaDevuelta:row});
+    return {ok:false};
+  }
+  return {ok:true};
+}
+// BUGFIX #13 FASE 4 -- DEUDA REAL vs OBLIGACIÓN QUE DEJÓ DE CORRESPONDER:
+// dar de baja un servicio NUNCA anula automáticamente sus obligaciones
+// pendientes (una deuda real ya facturada sigue siendo una deuda real,
+// aunque el servicio se cancele después). Si quedan obligaciones
+// pendientes reales (isEffectivePending, la misma fuente de verdad que ya
+// usa "Deudas arrastradas"/previousBalanceFor), se ofrece una revisión
+// explícita servicio por servicio -- nunca una inferencia automática por
+// service.active=false. Reutiliza EXACTAMENTE annulObligationMonth() (el
+// mecanismo no destructivo ya existente, mejora #6/6B4.15: UPDATE
+// status='cancelled', preserva obligation/pagos/documentos/Storage,
+// motivo+quién+cuándo obligatorios) -- no se crea un segundo mecanismo de
+// anulación.
+function openServiceObligationsReviewModal(serviceId,pendingList){
+  modal(`<h2>Revisar obligaciones pendientes</h2>
+    <div class="sub">
+      Este servicio tiene obligaciones pendientes. Revisá si siguen correspondiendo pagar.
+    </div>
+    <div class="debt-list" id="serviceObligationsReviewList">
+      ${pendingList.map(o=>{
+        // Si ya tiene algún pago activo asociado (legado o vía
+        // payment_allocations, misma fuente real que el resto de la app),
+        // NO se ofrece el atajo acá -- requiere revisión manual abriendo
+        // el período (el botón "Anular registro" real sigue disponible
+        // ahí, y esa pantalla ya muestra Pagado/Saldo antes de decidir).
+        const hasActivePayment=serviceMoneyCents(paidAmountForWithAllocations(o.id,payments,paymentAllocations))>0;
+        return `<div class="debt-item" data-review-item="${o.id}">
+          <div>
+            <strong>${monthLabel(o.period.slice(0,7))}</strong>
+            <small>${formatObligationAmount(o,balanceFor(o))}</small>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center">
+            <button class="btn soft small" data-keep-debt="${o.id}">Mantener como deuda</button>
+            ${hasActivePayment
+              ? `<small class="category-help" style="margin:0">Tiene un pago registrado -- revisalo abriendo el período.</small>`
+              : `<button class="btn outline small" data-not-applicable="${o.id}|${o.service_id}|${o.period.slice(0,7)}">No corresponde pagar</button>`}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="modalactions">
+      <button class="btn outline" data-close>Cerrar</button>
+    </div>`,true);
+
+  document.querySelectorAll('[data-keep-debt]').forEach(e=>e.onclick=()=>{
+    // "Mantener como deuda" NUNCA escribe nada -- la obligación no se
+    // toca, sigue en Deudas arrastradas y puede pagarse después.
+    e.closest('[data-review-item]')?.remove();
+  });
+  document.querySelectorAll('[data-not-applicable]').forEach(e=>e.onclick=()=>{
+    const [obligationId,svcId,key]=e.dataset.notApplicable.split('|');
+    annulObligationMonth(obligationId,svcId,key);
+  });
+}
 async function dropService(serviceId){
   const service=services.find(s=>s.id===serviceId);
   if(!service)return;
@@ -21678,14 +21776,18 @@ async function dropService(serviceId){
   if(!confirm(warning))return;
 
   try{
-    const {error}=await sb.from('services').update({active:false}).eq('id',serviceId);
-    if(error)throw error;
+    const result=await applyServiceActiveUpdate(serviceId,false);
+    if(!result.ok)return toast('No se pudo confirmar el cambio del servicio.');
 
     closeModal();
     await refreshDashboardData();
     toast('Servicio dado de baja');
+
+    // BUGFIX #13 FASE 4 -- ver comentario de openServiceObligationsReviewModal.
+    const pendingForService=obligations.filter(o=>o.service_id===serviceId&&isEffectivePending(o));
+    if(pendingForService.length)openServiceObligationsReviewModal(serviceId,pendingForService);
   }catch(err){
-    console.error('Error dando de baja el servicio:',err);
+    console.error('Error dando de baja el servicio:',describeServiceUpdateError(err));
     toast(err?.message||'No se pudo dar de baja el servicio');
   }
 }
@@ -21696,14 +21798,14 @@ async function reactivateService(serviceId){
   if(!confirm(`¿Reactivar "${service.name}"? Volverá a aparecer entre los servicios activos.`))return;
 
   try{
-    const {error}=await sb.from('services').update({active:true}).eq('id',serviceId);
-    if(error)throw error;
+    const result=await applyServiceActiveUpdate(serviceId,true);
+    if(!result.ok)return toast('No se pudo confirmar el cambio del servicio.');
 
     closeModal();
     await refreshDashboardData();
     toast('Servicio reactivado');
   }catch(err){
-    console.error('Error reactivando el servicio:',err);
+    console.error('Error reactivando el servicio:',describeServiceUpdateError(err));
     toast(err?.message||'No se pudo reactivar el servicio');
   }
 }

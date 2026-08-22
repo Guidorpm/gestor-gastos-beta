@@ -400,23 +400,23 @@ for (const [label, text, suffix] of [['index.html', indexText, 'index.html.antes
     );
   });
 
-  caso(`CASO 24 [${label}] — baja/reactivación de servicios permanece byte-idéntica al backup previo a esta FASE`, () => {
-    const beforePath = path.join(BACKUP_DIR, suffix);
-    const before = fs.readFileSync(beforePath, 'utf8').replace(/\r\n/g, '\n');
-    const now = text.replace(/\r\n/g, '\n');
-    for (const fnName of ['deactivateService', 'reactivateService']) {
-      if (!before.includes(`function ${fnName}(`)) continue;
-      // Marcador de fin genérico ('\nfunction ') en vez de '\nasync
-      // function ': reactivateService() es la última función async antes
-      // de una racha de funciones no-async (ej. openPaymentDetail) -- un
-      // marcador que solo busca "async function" se saltea esas y termina
-      // extrayendo de más, arrastrando funciones ajenas no relacionadas.
-      assert.strictEqual(
-        extract(now, `function ${fnName}(`, '\nfunction '),
-        extract(before, `function ${fnName}(`, '\nfunction '),
-        `${fnName}() en ${label} debe seguir byte-idéntica`
-      );
-    }
+  // AJUSTE (BUGFIX #13 FASE 2, 20260821): reactivateService() (y
+  // dropService()) dejaron de ser byte-idénticas a partir de acá, de
+  // forma legítima y autorizada -- se les agregó validación robusta del
+  // UPDATE (.select('id,active') + verificación de fila/estado, vía la
+  // función compartida applyServiceActiveUpdate) porque un UPDATE
+  // bloqueado por RLS podía devolver éxito con 0 filas realmente
+  // afectadas (caso real: Argentina Virtual, diagnóstico 6b16). Ya no
+  // corresponde exigir identidad byte a byte contra el backup previo a
+  // esa FASE -- se verifica en su lugar que el UPDATE real siga
+  // existiendo (ahora en applyServiceActiveUpdate) y que
+  // reactivateService lo siga pidiendo con targetActive=true, sin DELETE.
+  caso(`CASO 24 [${label}] — baja/reactivación de servicios: el UPDATE real de active sigue existiendo (ahora en applyServiceActiveUpdate) y reactivateService lo sigue usando con targetActive=true, sin DELETE`, () => {
+    const updateBlock = extract(text, 'async function applyServiceActiveUpdate(serviceId,targetActive){', '\nasync function dropService(');
+    assert.ok(updateBlock.includes("from('services')") && updateBlock.includes('.update({active:targetActive})'), `[${label}] debe seguir existiendo el UPDATE real de active`);
+    assert.ok(!updateBlock.includes('.delete('), `[${label}] no debe usar .delete() en ningún lado`);
+    const reactivateBlock = extract(text, 'async function reactivateService(serviceId){', '\nfunction openPaymentDetail(');
+    assert.ok(reactivateBlock.includes('applyServiceActiveUpdate(serviceId,true)'), `[${label}] reactivateService debe seguir pidiendo targetActive=true`);
   });
 
   caso(`CASO 25 [${label}] — Tarjetas (renderCreditCardsModule/bindCreditCardsModule/roundMoney/uploadCreditDocument) permanece byte-idéntica al backup previo a esta FASE`, () => {

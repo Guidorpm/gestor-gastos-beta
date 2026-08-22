@@ -145,19 +145,31 @@ caso('CASO 1 — el modelo real detectado usa services.active (boolean) -- ya ex
   }
 });
 
-caso('CASO 2 — dropService() hace UPDATE de active=false, nunca DELETE', () => {
+// AJUSTE (BUGFIX #13 FASE 2, 20260821): el UPDATE de services.active dejó
+// de estar inline dentro de dropService()/reactivateService() -- se
+// extrajo a applyServiceActiveUpdate(serviceId,targetActive), compartida
+// por ambas, que además valida la fila devuelta (.select('id,active'),
+// exactamente 1 fila, mismo id, mismo estado) antes de confirmar éxito.
+// Cambio legítimo y autorizado (diagnóstico real 6b16: un UPDATE sin
+// validar podía mostrar "Servicio dado de baja" con 0 filas realmente
+// afectadas). Se ajustan estos dos casos para verificar el UPDATE real en
+// su ubicación real, y que dropService/reactivateService sigan llamándolo
+// con el targetActive correcto.
+caso('CASO 2 — dropService() hace UPDATE de active=false (vía applyServiceActiveUpdate), nunca DELETE', () => {
   for (const [label, text] of [['index.html', indexText], ['index_operator.html', operatorText]]) {
-    const block = extract(text, 'async function dropService(serviceId){', '\nasync function reactivateService(serviceId){');
-    assert.ok(block.includes("from('services').update({active:false}).eq('id',serviceId)"), `[${label}] dropService debe hacer UPDATE active:false`);
-    assert.ok(!block.includes('.delete('), `[${label}] dropService no debe usar .delete() en ningún lado`);
+    const updateBlock = extract(text, 'async function applyServiceActiveUpdate(serviceId,targetActive){', '\nasync function dropService(');
+    assert.ok(updateBlock.includes("from('services')") && updateBlock.includes('.update({active:targetActive})') && updateBlock.includes(".eq('id',serviceId)"), `[${label}] applyServiceActiveUpdate debe hacer UPDATE sobre active`);
+    assert.ok(!updateBlock.includes('.delete('), `[${label}] no debe usar .delete() en ningún lado`);
+    const dropBlock = extract(text, 'async function dropService(serviceId){', '\nasync function reactivateService(serviceId){');
+    assert.ok(dropBlock.includes('applyServiceActiveUpdate(serviceId,false)'), `[${label}] dropService debe pedir targetActive=false`);
   }
 });
 
-caso('CASO 3 — reactivateService() hace UPDATE de active=true sobre el mismo id (misma fila, mismo service_id)', () => {
+caso('CASO 3 — reactivateService() hace UPDATE de active=true (vía applyServiceActiveUpdate) sobre el mismo id (misma fila, mismo service_id)', () => {
   for (const [label, text] of [['index.html', indexText], ['index_operator.html', operatorText]]) {
-    const block = extract(text, 'async function reactivateService(serviceId){', '\nfunction openPaymentDetail(id){');
-    assert.ok(block.includes("from('services').update({active:true}).eq('id',serviceId)"), `[${label}] reactivateService debe hacer UPDATE active:true`);
-    assert.ok(!/insert\(/.test(block), `[${label}] reactivateService no debe insertar una fila nueva`);
+    const reactivateBlock = extract(text, 'async function reactivateService(serviceId){', '\nfunction openPaymentDetail(id){');
+    assert.ok(reactivateBlock.includes('applyServiceActiveUpdate(serviceId,true)'), `[${label}] reactivateService debe pedir targetActive=true`);
+    assert.ok(!/insert\(/.test(reactivateBlock), `[${label}] reactivateService no debe insertar una fila nueva`);
   }
 });
 
