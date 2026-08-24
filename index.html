@@ -6430,12 +6430,19 @@ const CREDIT_CONFIRM_TOLERANCE_USD=0.01;
 // total). Se agrupa por la MISMA categoría ya calculada por cada parser.
 function buildCreditReconcileBreakdown(movements){
   const sum=(pred)=>roundMoney((movements||[]).filter(pred).reduce((acc,m)=>acc+(m.amountArs||0),0));
+  // CORRECCIÓN TRAZABILIDAD 8374 20260809 - campos USD que faltaban
+  // (impuestos/percepciones/intereses/comisiones/ajustes/devoluciones en
+  // dólares): puramente ADITIVO -- ningún campo existente cambia de
+  // nombre/valor, solo se agregan nuevos. Antes no existía forma de saber
+  // cuánto de un total USD correspondía a impuestos/intereses en dólares
+  // (caso real: percepción RG5617 USD 0,12 en el resumen de Visa 8374).
+  const sumUsd=(pred)=>roundMoney((movements||[]).filter(pred).reduce((acc,m)=>acc+(m.amountUsd||0),0));
   return{
     // CORRECCIÓN 6B4.8.3 - "saldoAnterior" separado de "consumosArs": el
     // capital trasladado del resumen previo nunca es un consumo nuevo (ver
     // Fase 2/5/15 del pedido).
     saldoAnterior:sum(m=>m.category==='carried_balance'),
-    saldoAnteriorUsd:roundMoney((movements||[]).filter(m=>m.category==='carried_balance').reduce((acc,m)=>acc+(m.amountUsd||0),0)),
+    saldoAnteriorUsd:sumUsd(m=>m.category==='carried_balance'),
     consumosArs:sum(m=>m.category==='purchase'),
     impuestos:sum(m=>m.category==='tax'&&m.taxSubtype!=='percepcion'),
     percepciones:sum(m=>m.category==='tax'&&m.taxSubtype==='percepcion'),
@@ -6445,7 +6452,13 @@ function buildCreditReconcileBreakdown(movements){
     comisiones:sum(m=>m.category==='fee'),
     ajustes:sum(m=>m.category==='adjustment'),
     devoluciones:sum(m=>m.category==='refund'),
-    consumosUsd:roundMoney((movements||[]).filter(m=>m.category==='purchase').reduce((acc,m)=>acc+(m.amountUsd||0),0)),
+    consumosUsd:sumUsd(m=>m.category==='purchase'),
+    impuestosUsd:sumUsd(m=>m.category==='tax'&&m.taxSubtype!=='percepcion'),
+    percepcionesUsd:sumUsd(m=>m.category==='tax'&&m.taxSubtype==='percepcion'),
+    interesesUsd:sumUsd(m=>m.category==='interest'),
+    comisionesUsd:sumUsd(m=>m.category==='fee'),
+    ajustesUsd:sumUsd(m=>m.category==='adjustment'),
+    devolucionesUsd:sumUsd(m=>m.category==='refund'),
   };
 }
 // CORRECCIÓN 6B4.7 - Motor de reconciliación (orden pedido: identidad ya
@@ -12702,14 +12715,69 @@ function creditStatementCompositionReconciliation(statement,items,paymentModel){
       message:'Desglose incompleto: este resumen no tiene movimientos individuales guardados, así que no se puede reconciliar la composición contra el total del banco.',
     };
   }
-  const breakdown=buildCreditReconcileBreakdown(items.map(creditNormalizeStoredMovementForBreakdown));
+  // CORRECCIÓN TRAZABILIDAD 8374 20260809 - BUG REAL #1: saldoAnterior (el
+  // capital trasladado del ciclo previo) se sumaba DENTRO del total de
+  // ESTE ciclo -- el banco jamás lo incluye en total_ars/total_usd del
+  // período actual, es el PUENTE entre ciclos (ver panel "Ciclo
+  // anterior"/creditStatementBridgeInfo), nunca un componente de este
+  // total. BUG REAL #2: se sumaban intereses + interesesFinanciacion +
+  // interesesPunitorios juntos -- los dos últimos ya son subtotales
+  // incluidos DENTRO de "intereses" (ver buildCreditReconcileBreakdown),
+  // sumarlos aparte duplicaba el interés real (caso real 8374: $14.546,94
+  // contado dos veces = $29.093,88 en vez de $14.546,94). BUG REAL #3: una
+  // devolución de percepción de dólares (RG4815/RG5617) vinculada al ciclo
+  // ANTERIOR (reverso de la percepción ya cobrada, una vez pagado el USD)
+  // se restaba acá como si fuera un ajuste de ESTE ciclo -- es un evento
+  // puente entre ciclos, no una devolución de este período (mismo criterio
+  // semántico que ya usa creditPaymentModel.priorRefund para esta misma
+  // categoría vía creditDollarPerceptionCode -- excluida del insumo ANTES
+  // de agregar, para no depender de ningún supuesto sobre el signo
+  // guardado).
+  // AJUSTE FASE 3A (20260822): el reverso de una percepción RG4815/RG5617
+  // solo puede ocurrir una vez pagado el USD -- estructuralmente nunca en
+  // el mismo ciclo en que se cobró esa percepción -- SALVO que la propia
+  // percepción que cierra esté también presente en ESTE MISMO resumen
+  // (mismos items); en ese caso el reverso corresponde al ciclo actual y
+  // debe conservarse para que ambas se neteen. Señal ya disponible en los
+  // datos recibidos -- no se inventa metadata nueva.
+  const compositionItems=items.filter(m=>{
+    if(creditMovementType(m)!=='refund'||!creditDollarPerceptionCode(m))return true;
+    // AJUSTE FASE 3D (20260822) -- BUG REAL confirmado por Guido (Visa 8374,
+    // julio 2026): el criterio de FASE 3A emparejaba una devolución con
+    // CUALQUIER percepción del mismo código regulatorio (RG4815/RG5617) en
+    // el mismo resumen, sin exigir que fuera la MISMA percepción -- dos
+    // eventos distintos (una percepción nueva de este ciclo y el reverso
+    // histórico de un ciclo anterior) pueden compartir código sin ser el
+    // mismo hecho económico. Se agrega evidencia monetaria mínima (mismo
+    // criterio moneda/importe ya usado en registeredCreditPaymentsInWindow/
+    // creditRefundsInWindow: currency + Math.abs(Number(amount))) -- misma
+    // moneda Y mismo importe absoluto (dentro de la tolerancia ya existente
+    // del módulo, CREDIT_CARRY_TOLERANCE_ARS/USD, sin inventar ninguna
+    // tolerancia nueva). Sin esa doble evidencia, la devolución solo puede
+    // ser de un ciclo anterior y se excluye.
+    const code=creditTaxCode(m);
+    const refundAmount=Math.abs(Number(m.amount||0));
+    const tolerance=m.currency==='USD'?CREDIT_CARRY_TOLERANCE_USD:CREDIT_CARRY_TOLERANCE_ARS;
+    const hasMatchingCurrentCyclePerception=items.some(other=>
+      other!==m
+      &&creditMovementType(other)==='tax'
+      &&creditTaxCode(other)===code
+      &&other.currency===m.currency
+      &&Math.abs(Math.abs(Number(other.amount||0))-refundAmount)<=tolerance
+    );
+    return hasMatchingCurrentCyclePerception;
+  });
+  const breakdown=buildCreditReconcileBreakdown(compositionItems.map(creditNormalizeStoredMovementForBreakdown));
   const composedArs=roundMoney(
-    (breakdown.saldoAnterior||0)+(breakdown.consumosArs||0)+(breakdown.intereses||0)+
-    (breakdown.interesesFinanciacion||0)+(breakdown.interesesPunitorios||0)+
+    (breakdown.consumosArs||0)+(breakdown.intereses||0)+
     (breakdown.comisiones||0)+(breakdown.impuestos||0)+(breakdown.percepciones||0)+
     (breakdown.ajustes||0)-(breakdown.devoluciones||0)
   );
-  const composedUsd=roundMoney((breakdown.saldoAnteriorUsd||0)+(breakdown.consumosUsd||0));
+  const composedUsd=roundMoney(
+    (breakdown.consumosUsd||0)+(breakdown.interesesUsd||0)+
+    (breakdown.comisionesUsd||0)+(breakdown.impuestosUsd||0)+(breakdown.percepcionesUsd||0)+
+    (breakdown.ajustesUsd||0)-(breakdown.devolucionesUsd||0)
+  );
   const diffArs=roundMoney(paymentModel.bankArs-composedArs);
   const diffUsd=roundMoney(paymentModel.bankUsd-composedUsd);
   const matches=Math.abs(diffArs)<=CREDIT_COMPOSITION_TOLERANCE_ARS&&Math.abs(diffUsd)<=CREDIT_COMPOSITION_TOLERANCE_USD;
@@ -12718,6 +12786,7 @@ function creditStatementCompositionReconciliation(statement,items,paymentModel){
     composedArs,composedUsd,
     bankArs:paymentModel.bankArs,bankUsd:paymentModel.bankUsd,
     diffArs,diffUsd,
+    breakdown,
     message:matches
       ?'La composición del resumen coincide con el total declarado por el banco.'
       :`Desglose incompleto. Diferencia pendiente de conciliar: ${formatARS(Math.abs(diffArs))}${Math.abs(diffUsd)>0.01?` · ${fmtUsd(Math.abs(diffUsd))}`:''}. El total del banco es la referencia de deuda: el desglose disponible todavía no explica completamente ese total.`,
