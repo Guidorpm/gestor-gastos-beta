@@ -410,6 +410,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
   .obligation-more-grid{grid-template-columns:1fr 1fr}
 }
 </style>
+<script src="group-login.js"></script>
 </head>
 <body>
 <div id="app"><div class="spinner">Conectando con la nube…</div></div>
@@ -417,7 +418,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
 <script>
 const SUPABASE_URL='https://xjpuwokoefklxqezslwv.supabase.co';
 const SUPABASE_KEY='sb_publishable_e8wc6ko1ZmlbkrPSR6PhrQ__wfoELkM';
-const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,window.GROUP_LOGIN.options());
 const VAPID_PUBLIC_KEY='BORqa7ChkThWW0x59odxaEcrrss5_yv12uCqf4Hq-jzkLzWDCs1pxJ3p6GqsHR_ocL2koE2IcfYZRihkz3n79sY';
 const APP_URL='https://guidorpm.github.io/gestor-gastos-beta/';
 const APP_OPERATOR_FIX_VERSION='operator-20260708-v8-final-completo';
@@ -1196,6 +1197,7 @@ console.log('Gestor de Gastos operator fix cargado:', APP_OPERATOR_FIX_VERSION);
 async function init(){
   try{
     registerServiceWorker().catch(error=>console.warn('Service Worker:',error));
+    await window.GROUP_LOGIN.prepare(sb,SUPABASE_URL,SUPABASE_KEY);
     const {data,error}=await sb.auth.getSession();
     if(error)throw error;
     session=data.session;
