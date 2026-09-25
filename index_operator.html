@@ -17871,6 +17871,7 @@ function paidAmountFor(obligationId){
   return paidAmountForWithAllocations(obligationId,payments,paymentAllocations);
 }
 function balanceFor(obligation){
+  if(settledConsolidationTarget(obligation))return 0;
   return calculateRealObligationBalance(obligation,payments,paymentAllocations);
 }
 // CORRECCIÓN 6B4.15 - Un importe corregido a la baja por debajo de lo ya
@@ -17891,6 +17892,26 @@ function creditBalanceFor(obligation){
 // nada, para que NINGÚN consumidor pueda derivar un estado financiero de un
 // dato incompleto. unavailable:true es la señal explícita para esos
 // consumidores.
+function settledConsolidationTarget(obligation){
+  if(paymentAllocationsLoadError||!obligation||obligation.status==='cancelled')return null;
+  const seen=new Set([obligation.id]);
+  let source=obligation;
+  while(source){
+    const links=consolidations.filter(link=>link.source_obligation_id===source.id);
+    if(links.length!==1)return null;
+    const target=obligations.find(item=>item.id===links[0].target_obligation_id);
+    if(!target||seen.has(target.id)||target.status==='cancelled'
+      ||target.service_id!==source.service_id||target.period<=source.period
+      ||(obligationExtraFields(target).currency||'ARS')!==(obligationExtraFields(source).currency||'ARS')
+      ||obligationExtraFields(target).amountPending===true)return null;
+    seen.add(target.id);
+    const amount=effectiveObligationAmount(target,payments,paymentAllocations);
+    const paid=paidAmountForWithAllocations(target.id,payments,paymentAllocations);
+    if(serviceMoneyCents(amount)>0&&serviceMoneyCents(paid)>=serviceMoneyCents(amount))return target;
+    source=target;
+  }
+  return null;
+}
 function paymentProgress(obligation){
   // MEJORA — SEGUNDO VENCIMIENTO: "amount" ya no es siempre obligation.amount
   // -- effectiveObligationAmount() aplica la regla real (importe 1 antes
@@ -17901,14 +17922,16 @@ function paymentProgress(obligation){
   if(paymentAllocationsLoadError){
     return{amount,paid:null,balance:null,creditBalance:null,fullyPaid:false,partial:false,unavailable:true};
   }
-  const paid=paidAmountFor(obligation?.id);
+  const directPaid=paidAmountFor(obligation?.id);
+  const settledVia=settledConsolidationTarget(obligation);
+  const paid=settledVia?Math.max(amount,directPaid):directPaid;
   const signedBalance=roundServiceMoney(amount-paid);
   const balance=Math.max(0,signedBalance);
   const creditBalance=Math.max(0,-signedBalance);
   // MEJORA — EXACTITUD A CENTAVOS: saldo 0.01 NUNCA es "abonado" -- se
   // compara en centavos enteros, sin la vieja tolerancia <=0.01/>0.01
   // que trataba un centavo real de diferencia como si fuera cero.
-  return{amount,paid,balance,creditBalance,fullyPaid:amount>0&&serviceMoneyCents(balance)<=0,partial:paid>0&&serviceMoneyCents(balance)>0,unavailable:false};
+  return{amount,paid,directPaid,settledVia,balance,creditBalance,fullyPaid:amount>0&&serviceMoneyCents(balance)<=0,partial:paid>0&&serviceMoneyCents(balance)>0,unavailable:false};
 }
 // CORRECCIÓN 6B4.15 - Metadata técnica de obligations (anulación, historial
 // de ediciones, moneda/proveedor/n° de factura sin columna real en el
@@ -18161,7 +18184,14 @@ function receiptsForPayment(paymentId){
   return documents.filter(d=>d.payment_id===paymentId&&d.kind==='receipt');
 }
 function receiptsForObligation(obligationId){
-  const ids=paymentsFor(obligationId).map(p=>p.id);
+  const obligation=obligations.find(item=>item.id===obligationId);
+  const settledVia=settledConsolidationTarget(obligation);
+  const coveredIds=new Set([obligationId,...(settledVia?[settledVia.id]:[])]);
+  const ids=payments.filter(p=>{
+    if(p.voided===true)return false;
+    const active=paymentAllocations.filter(a=>a.payment_id===p.id&&a.is_active===true);
+    return active.length?active.some(a=>coveredIds.has(a.obligation_id)&&Number(a.allocated_amount)>0):coveredIds.has(p.obligation_id);
+  }).map(p=>p.id);
   return documents.filter(d=>ids.includes(d.payment_id)&&d.kind==='receipt');
 }
 async function syncObligationStatus(obligationId){
@@ -18344,6 +18374,8 @@ function dueState(o){
     return{cls:'voided',label:`Anulado por ${displayNameForUserId(obligationVoidInfo(o)?.voidedBy)}`};
   }
   const target=consolidationTarget(o.id);
+  const settledVia=settledConsolidationTarget(o);
+  if(settledVia)return{cls:'paid',label:`Abonado en ${monthLabel(settledVia.period.slice(0,7))}`};
   if(target)return{cls:'included',label:`Incluida en ${monthLabel(target.period.slice(0,7))}`};
   // MEJORA #9 -- IMPORTES PENDIENTES: todavía no se conoce el importe de
   // este período (checkbox "Importe pendiente" activo al cargar/editar).
@@ -20315,7 +20347,7 @@ function openObligation(serviceId,key){
       item.service_id===serviceId
       && item.period<periodDate(key)
       && item.status!=='cancelled'
-      && serviceMoneyCents(balanceFor(item))>0
+      && (currentSourceIds.includes(item.id)||serviceMoneyCents(balanceFor(item))>0)
       && (
         !consolidationForSource(item.id)
         || currentSourceIds.includes(item.id)
@@ -20374,7 +20406,7 @@ function openObligation(serviceId,key){
 
     ${sourceLink?`
       <div class="notice">
-        <strong>Deuda consolidada.</strong>
+        <strong>${progress.settledVia?`Abonado en ${monthLabel(progress.settledVia.period.slice(0,7))}.`:"Deuda consolidada."}</strong>
         Este importe no se suma por separado porque está incluido en
         ${monthLabel(target.period.slice(0,7))}.
       </div>`:''}
@@ -20741,7 +20773,7 @@ function openObligation(serviceId,key){
     const selected=paymentAllocationsLoadError?[]:[...document.querySelectorAll('[data-consolidation-source]:checked')]
       .map(input=>obligations.find(item=>item.id===input.dataset.consolidationSource))
       .filter(Boolean);
-    const includedTotal=selected.reduce((sum,item)=>sum+balanceFor(item),0);
+    const includedTotal=selected.reduce((sum,item)=>sum+calculateRealObligationBalance(item,payments,paymentAllocations),0);
     const invoiceTotal=parseMoneyField(document.getElementById('oamount')?.value||0);
     const newPeriodAmount=Math.max(0,invoiceTotal-includedTotal);
     const summary=document.getElementById('consolidationSummary');
@@ -20882,7 +20914,7 @@ function openObligation(serviceId,key){
     const selectedTotal=selectedSourceIds
       .map(id=>obligations.find(item=>item.id===id))
       .filter(Boolean)
-      .reduce((sum,item)=>sum+balanceFor(item),0);
+      .reduce((sum,item)=>sum+calculateRealObligationBalance(item,payments,paymentAllocations),0);
 
     if(mode==='consolidated'&&amountValue<selectedTotal){
       throw new Error('El total de la nueva factura no puede ser menor que los saldos incluidos');
@@ -21638,7 +21670,9 @@ function openFolder(serviceId){
             <div>${fmtMoneyExact(progress.amount)} · vence ${fmtDate(o.due_date)}</div>
           </div>
           <span>
-            ${sourceLink&&target
+            ${progress.settledVia
+              ? `Abonado en ${monthLabel(progress.settledVia.period.slice(0,7))}`
+              : sourceLink&&target
               ? `<span class="included-badge">Incluida en ${monthLabel(target.period.slice(0,7))}</span>`
               : progress.unavailable
                 ? '<span class="partial-badge" style="background:#fdecea;color:#7a1f1f">No disponible</span>'
@@ -21669,7 +21703,7 @@ function openFolder(serviceId){
           </div>`:''}
 
         ${sourceLink&&target?`
-          <p>Se conserva como historial, pero no se suma por separado a la deuda exigible.</p>
+          <p>${progress.settledVia?`Cancelado con el pago de ${monthLabel(progress.settledVia.period.slice(0,7))}. El comprobante corresponde a ese mismo pago; no se registra un segundo pago.`:"Se conserva como historial, pero no se suma por separado a la deuda exigible."}</p>
         `:''}
 
         ${paymentRows.length?`<p>${paymentRows.length} pago${paymentRows.length===1?'':'s'} registrado${paymentRows.length===1?'':'s'}${progress.unavailable?'':` · ${fmtMoney(progress.paid)}`}</p>`:''}

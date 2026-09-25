@@ -18,7 +18,7 @@
 // archivo igual se re-registra porque el contenido del script cambió (el
 // navegador compara bytes, no esta constante) y el registro en index.html
 // ya sube su propio "?v=" para forzarlo sin esperar el chequeo periódico.
-const CACHE_VERSION = 'gestor-gastos-v10-6b4-5-1';
+const CACHE_VERSION = 'gestor-gastos-consolidaciones-20260925';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const STATIC_ASSETS = ['icon-192.png', 'icon-512.png', 'manifest.json'];
 

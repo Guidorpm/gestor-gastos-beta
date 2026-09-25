@@ -1,0 +1,43 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const functions=['serviceMoneyCents','roundServiceMoney','paidAmountForWithAllocations','paidAmountAsOfWithAllocations','effectiveObligationAmount','obligationHasSecondStagePayment','paymentAppliedDueStage','paymentNoteMetadata','paidAmountFor','calculateRealObligationBalance','settledConsolidationTarget','balanceFor','paymentProgress','receiptsForObligation'];
+let checks=0;
+for(const file of ['index.html','index_operator.html']){
+ const src=fs.readFileSync(require('path').join(__dirname,'..',file),'utf8');
+ const code=functions.map(name=>{const start=src.indexOf('function '+name+'(');assert(start>=0,name);const end=src.indexOf('\n}',start);return src.slice(start,end+2);}).join('\n');
+ const c={obligations:[],payments:[],paymentAllocations:[],consolidations:[],documents:[],paymentAllocationsLoadError:false,obligationExtraFields:o=>o?.extra||{},todayDateString:()=> '2026-09-23'};
+ vm.createContext(c);vm.runInContext(code,c);
+ const august={id:'aug',service_id:'service',period:'2026-08-01',amount:150166};
+ const september={id:'sep',service_id:'service',period:'2026-09-01',amount:306221};
+ c.obligations=[august,september];c.consolidations=[{source_obligation_id:'aug',target_obligation_id:'sep'}];
+ c.payments=[{id:'p',obligation_id:'sep',total_amount:306221}];c.documents=[{id:'receipt',kind:'receipt',payment_id:'p'}];
+ function check(label,fn){assert(fn(),file+': '+label);checks++;console.log('PASS '+file+' '+label);}
+ check('agosto cancelado por septiembre',()=>c.paymentProgress(august).fullyPaid&&c.balanceFor(august)===0);
+ check('un solo pago real',()=>c.paidAmountFor('aug')===0&&c.paidAmountFor('sep')===306221&&c.payments.length===1);
+ check('comprobante compartido',()=>c.receiptsForObligation('aug')[0].id==='receipt');
+ c.payments[0].total_amount=306220.99;
+ check('un centavo faltante no cancela agosto',()=>!c.paymentProgress(august).fullyPaid);
+ c.payments.push({id:'p2',obligation_id:'sep',total_amount:0.01});
+ check('varios pagos completan total',()=>c.paymentProgress(august).fullyPaid);
+ c.payments[0].voided=true;
+ check('anulacion revierte cancelacion',()=>!c.paymentProgress(august).fullyPaid&&c.receiptsForObligation('aug').length===0);
+ c.payments[0].voided=false;c.payments[0].total_amount=306221;c.payments.pop();
+ c.paymentAllocations=[{payment_id:'p',obligation_id:'sep',allocated_amount:100,is_active:true}];
+ check('respeta imputaciones reales',()=>!c.paymentProgress(august).fullyPaid);
+ c.paymentAllocations=[];c.paymentAllocationsLoadError=true;
+ check('datos no disponibles no afirman pago',()=>c.paymentProgress(august).unavailable&&!c.settledConsolidationTarget(august));
+ c.paymentAllocationsLoadError=false;c.consolidations=[];
+ check('sin vinculo no se infiere por importe',()=>!c.paymentProgress(august).fullyPaid);
+ c.consolidations=[{source_obligation_id:'aug',target_obligation_id:'sep'}];september.status='cancelled';
+ check('factura anulada no cancela origen',()=>!c.paymentProgress(august).fullyPaid);
+ delete september.status;september.extra={currency:'USD'};
+ check('no mezcla monedas',()=>!c.paymentProgress(august).fullyPaid);
+ delete september.extra;september.service_id='otro';
+ check('no mezcla servicios',()=>!c.paymentProgress(august).fullyPaid);
+ september.service_id='service';c.payments=[];
+ c.consolidations.push({source_obligation_id:'sep',target_obligation_id:'aug'});
+ check('ciclo no cancela ni se bloquea',()=>!c.paymentProgress(august).fullyPaid);
+ c.consolidations.pop();const october={id:'oct',service_id:'service',period:'2026-10-01',amount:460000};c.obligations.push(october);c.consolidations.push({source_obligation_id:'sep',target_obligation_id:'oct'});c.payments=[{id:'p',obligation_id:'oct',total_amount:460000}];
+ check('cadena de meses cancelada por ultimo pago',()=>c.paymentProgress(august).settledVia.id==='oct'&&c.paymentProgress(september).fullyPaid);
+ check('comprobante de cadena',()=>c.receiptsForObligation('aug')[0].id==='receipt');
+}
+console.log(checks+' comprobaciones correctas');
