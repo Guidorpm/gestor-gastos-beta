@@ -1,0 +1,382 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"/><base href="/"/><title>Banco Provincia de Buenos Aires</title><meta name="description" content="Banco Provincia de Buenos Aires"/><meta name="theme-color" content="#000000"/><meta name="robots" content="index, follow"/><meta property="og:title" content="Banco Provincia de Buenos Aires"/><meta property="og:description" content="Banco Provincia de Buenos Aires"/><meta property="og:type" content="website"/><meta name="facebook-domain-verification" content="40mn26jvd7s1elwrnbni0214bjetvc"/><link rel="icon" href="/favicon.ico" sizes="any"/><meta http-equiv="Content-Security-Policy" content="default-src 'self' https: localhost:*; script-src 'unsafe-inline' https: localhost:*; connect-src https: localhost:* ws://localhost:*; style-src 'unsafe-inline' https:; object-src 'none'; font-src 'self' data: https://fonts.gstatic.com https://provincianet.s1gateway.com;"/><link rel="preload" href="/fonts/EncodeSans.woff2" as="font" type="font/woff2" crossorigin/><link rel="preload" href="/vendor/single-spa.min.js" as="script"/><link rel="preload" href="/vendor/react.production.min.js" as="script"/><link rel="preload" href="/vendor/react-dom.production.min.js" as="script"/><link rel="preload" href="/vendor/axios.min.js" as="script"/><link rel="preload" href="/vendor/styled-components.min.js" as="script"/><link rel="preload" href="/vendor/react-router-dom.production.min.js" as="script"/><link rel="preload" href="/vendor/react-router.production.min.js" as="script"/><link rel="preload" href="/vendor/history.production.min.js" as="script"/><link rel="preload" href="/vendor/remix-router.umd.min.js" as="script"/><link rel="preload" href="/header/bpba-header.js" as="script"/><link rel="preload" href="/paginas/bpba-paginas.js" as="script"/><link rel="preload" href="/footer/bpba-footer.js" as="script"/><link rel="preload" href="/header/assets/logo.svg" as="image" fetchpriority="high"/><style>@font-face {
+      font-family: 'Encode Sans';
+      src: url('/fonts/EncodeSans.woff2') format('woff2');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    /* Reset minimo: evita el flash de 8px (user-agent default body margin)
+       que se ve alrededor de los slots grises reservados antes que el primer
+       MFE monte e inyecte su GlobalStyles. */
+    html, body { margin: 0; padding: 0; }
+    main > [id^="single-spa-application"] { display: contents; }
+    /* Header / Footer: alturas EXACTAS al render real medido con Playwright
+       en cada viewport. Reservado = footer real → 0 CLS al hidratar.
+         Header — >=768: 120  /  640-767: 112  /  <640: 94
+         Footer — >=1024: 898  /  900-1023: 1458  /  768-899: 1476  /
+                  640-767: 1428  /  411-639: 2122  /  <=410: 2140
+       El footer real tiene una franja superior gris-clara (IconosGrandes con
+       bg #EBEBEB) que ocupa 192px en desktop y varia en tablet/mobile. Para
+       que el slot reservado se vea identico al footer real, usamos un
+       linear-gradient con esa misma franja clara arriba + oscuro abajo.
+       Header conserva display:block solo cuando :empty para no romper sticky. */
+    #single-spa-application\:\@bpba\/header:empty { display: block; min-height: 120px; background: #ebebeb; }
+    #single-spa-application\:\@bpba\/footer:empty {
+      display: block;
+      min-height: 898px;
+      background: linear-gradient(to bottom, #ebebeb 0, #ebebeb 192px, #3c3c3b 192px, #3c3c3b 100%);
+    }
+    @media (max-width: 1023px) {
+      #single-spa-application\:\@bpba\/footer:empty {
+        min-height: 1458px;
+        background: linear-gradient(to bottom, #ebebeb 0, #ebebeb 240px, #3c3c3b 240px, #3c3c3b 100%);
+      }
+    }
+    @media (max-width: 899px) {
+      #single-spa-application\:\@bpba\/footer:empty { min-height: 1476px; }
+    }
+    @media (max-width: 767px) {
+      #single-spa-application\:\@bpba\/header:empty { min-height: 112px; }
+      #single-spa-application\:\@bpba\/footer:empty { min-height: 1428px; }
+    }
+    @media (max-width: 639px) {
+      #single-spa-application\:\@bpba\/header:empty { min-height: 94px; }
+      #single-spa-application\:\@bpba\/footer:empty {
+        min-height: 2122px;
+        background: linear-gradient(to bottom, #ebebeb 0, #ebebeb 170px, #3c3c3b 170px, #3c3c3b 100%);
+      }
+    }
+    @media (max-width: 410px) {
+      #single-spa-application\:\@bpba\/footer:empty { min-height: 2140px; }
+    }</style><script>(function(){
+    var path = location.pathname;
+    var endpointPath = (!path || path === '/') ? '/' : path;
+    var endpoint = '/gateway/webback/paginas' + endpointPath;
+    var slotSel = '#single-spa-application\\:\\@bpba\\/paginas';
+
+    var HEIGHTS = {"Novelties":{"mobile":642,"tablet":664,"desktop":498,"isFixed":false},"Productos1":{"mobile":2359,"tablet":1220,"desktop":696,"isFixed":false},"IconosSlider":{"mobile":203,"tablet":258,"desktop":255,"isFixed":false},"Beneficios":{"mobile":865,"tablet":790,"desktop":696,"isFixed":false},"Productos2":{"mobile":2359,"tablet":1220,"desktop":696,"isFixed":false},"Productos3":{"mobile":729,"tablet":804,"desktop":792,"isFixed":false},"TabComponent":{"mobile":801,"tablet":884,"desktop":830,"isFixed":false},"ImagenesSlider":{"mobile":579,"tablet":538,"desktop":616,"isFixed":false},"ImagenesSliderMirror":{"mobile":579,"tablet":538,"desktop":616,"isFixed":false},"AppDestacada":{"mobile":780,"tablet":550,"desktop":600,"isFixed":false},"ModuloTexto":{"mobile":619,"tablet":536,"desktop":539,"isFixed":false},"TarjetaGrande":{"mobile":571,"tablet":628,"desktop":636,"isFixed":false},"IconosGrandes":{"mobile":106,"tablet":192,"desktop":192,"isFixed":false},"Faqs":{"mobile":209,"tablet":349,"desktop":349,"isFixed":false},"BotonFlotante":{"mobile":0,"tablet":0,"desktop":0,"isFixed":true},"TopComponent":{"mobile":82,"tablet":178,"desktop":178,"isFixed":false}};
+    var w = innerWidth;
+    var device = w <= 768 ? 'mobile' : w <= 1024 ? 'tablet' : 'desktop';
+    var FALLBACK_AVG = device === 'mobile' ? 766 : device === 'tablet' ? 623 : 546;
+
+    /** Mapeo layout (backend) -> nombre en HEIGHTS */
+    var LAYOUT_MAP = {
+      modulo_banners: 'Novelties',
+      tarjeta_simple: 'Productos1',
+      beneficio: 'Beneficios',
+      micrositio: 'Productos2',
+      especial_cdni: 'AppDestacada',
+      iconos_grandes: 'IconosGrandes',
+      iconos_slider: 'IconosSlider',
+      preguntas_frecuentes: 'Faqs',
+      imagenes_slider: 'ImagenesSlider',
+      imagenes_slider_espejado: 'ImagenesSliderMirror',
+      tarjeta_grande: 'TarjetaGrande',
+      boton_flotante: 'BotonFlotante',
+      modulo_texto: 'ModuloTexto',
+      productos3: 'Productos3',
+      solapas: 'TabComponent'
+    };
+
+    /** Suffix de variante responsive servido por el CDN (matchea
+     * `@bpba/modules-components` IMG_SUFFIX). */
+    function suffixForViewport(ww){
+      return ww <= 413 ? '_XS' : ww <= 575 ? '_S' : ww <= 992 ? '_M' : '_L';
+    }
+
+    /** Dims naturales por variant — DEBEN matchear `IMG_SIZES` en
+     * `@bpba/modules-components` Slide.tsx. Si desincroniza, el overlay tiene
+     * aspect distinto al real Slide -> CLS y flicker visible al swap. */
+    function dimsForSuffix(sfx){
+      if (sfx === '_XS') return { w: 360, h: 498 };
+      if (sfx === '_S')  return { w: 414, h: 498 };
+      if (sfx === '_M')  return { w: 768, h: 550 };
+      return { w: 1152, h: 360 }; // _L (desktop)
+    }
+
+    /** Extrae LCP image del modulo `modulo_banners` (Novelties).
+     * Solo ese layout esta soportado; cualquier otro como modulos[0] no gana
+     * el overlay (el LCP natural de la pagina toma su lugar, scorea bien
+     * igual). Si en el futuro hace falta soporte para otro layout, agregar
+     * un nuevo extractor + actualizar el flow al pie de este script. */
+    function extractLcpFromBanners(mod, sfx){
+      var item = mod.modulosItems && mod.modulosItems[0];
+      if (!item || !item.rutaImagen) return null;
+      var d = dimsForSuffix(sfx);
+      return { url: item.rutaImagen + sfx, w: d.w, h: d.h };
+    }
+
+    var STORAGE_KEY = 'bpba.paginasHeight:' + endpointPath + ':' + device;
+    var STYLE_ID = 'paginas-slot-reservation';
+    var OVERLAY_ID = 'lcp-image-overlay';
+
+    /** Inyecta/actualiza un <style> en <head> con `min-height` para el slot
+     * mientras esta :empty. CSS aplica desde que el slot se parsea — no hay
+     * que esperar a DOMContentLoaded. Cuando @bpba/paginas monta sus
+     * skeletons, el slot deja de ser :empty y la regla se desactiva sola
+     * (los skeletons mantienen el alto correcto). */
+    function applyMinHeight(px){
+      var el = document.getElementById(STYLE_ID);
+      if (!el) {
+        el = document.createElement('style');
+        el.id = STYLE_ID;
+        document.head.appendChild(el);
+      }
+      el.textContent = '#single-spa-application\\:\\@bpba\\/paginas:empty{display:block;min-height:' + px + 'px}';
+    }
+
+    /** Preload <link> para que el browser arranque la descarga ASAP. */
+    function preloadImage(url){
+      if (!url) return;
+      var link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'image';
+      link.href = url;
+      link.setAttribute('fetchpriority', 'high');
+      document.head.appendChild(link);
+    }
+
+    /** Inyecta un `<img>` real como overlay absoluto en <body>, posicionado
+     * sobre donde el primer modulo de paginas va a renderizar. La imagen ya
+     * fue precargada (cache hit, paint instantaneo). El overlay vive en
+     * <body>, fuera del slot de paginas → React.createRoot no lo wipea
+     * cuando monta el MFE.
+     *
+     * MutationObserver vigila el slot: cuando el modulo real renderiza su
+     * propia imagen visible y completa, removemos el overlay. Si por algun
+     * motivo eso no ocurre (error de chunk, etc), un timeout safety lo
+     * remueve a los 10s.
+     *
+     * Resultado neto: LCP entry fires al primer paint del overlay (~150-300ms
+     * cold), una sola entry, no se ve tapada por re-render de React. */
+    /** Top (relativo al document) donde el overlay debe posicionarse —
+     * exactamente donde va a renderizar la imagen del primer modulo. La
+     * estructura es: slot (display:contents, h=0) -> PaginaContainer (full vw)
+     * -> wrapper del modulo (full vw) -> Container limited (max 1152, con
+     * padding-top en desktop). El Container limited es el que define el top
+     * del Slide real, NO el slot. Heuristica: BFS buscando el primer
+     * descendant cuyo width matchee `min(ww, 1152)` — eso identifica el
+     * Container limited de forma robusta a cambios de class names. */
+    function getOverlayTop(){
+      var ww = window.innerWidth;
+      var expectedW = Math.min(ww, 1152);
+      var slot = document.querySelector(slotSel);
+      if (slot) {
+        // Buscar el descendant MAS PROFUNDO cuyo width matchee expectedW.
+        // En desktop el wrapper outer tiene w=full-vw (1440) y el Container
+        // inner w=1152 -> solo el inner matchea. En tablet/mobile ambos tienen
+        // el mismo width pero el inner esta mas profundo y tiene el padding-top
+        // del primer modulo aplicado -> da el `top` exacto del Slide real.
+        // ARRANCAMOS DESDE LOS HIJOS del slot, NO desde el slot mismo: cuando
+        // el slot esta :empty con min-height aplicado por el prefetch, su
+        // bounding rect matchea expectedW pero su top es la base del header,
+        // SIN sumar el padding-top de NoveltiesOuter. Saltarlo asegura que
+        // BFS solo matchee descendants reales (Container del modulo).
+        var bestTop = null;
+        var stack = [];
+        for (var i0 = 0; i0 < slot.children.length; i0++) {
+          stack.push({ n: slot.children[i0], d: 1 });
+        }
+        var bestDepth = -1;
+        while (stack.length) {
+          var item = stack.shift();
+          var r = item.n.getBoundingClientRect();
+          // height > 200 filtra descendants chicos (botones, headers internos)
+          // que casualmente comparten el width del Container inner.
+          if (r.height > 200 && Math.abs(r.width - expectedW) < 5 && r.top > 0) {
+            if (item.d > bestDepth) {
+              bestDepth = item.d;
+              bestTop = r.top + window.pageYOffset;
+            }
+          }
+          for (var i = 0; i < item.n.children.length; i++) {
+            stack.push({ n: item.n.children[i], d: item.d + 1 });
+          }
+        }
+        if (bestTop !== null) return bestTop;
+      }
+      // Fallback antes que Novelties hidrate: header height + Novelties
+      // `isFirst` padding-top. Sin esto, el overlay queda pegado al header y
+      // cuando Novelties monta hay un salto de 24px (en sm+) hacia abajo.
+      // Valores deben matchear NoveltiesOuter.padding-top con $isFirst=true.
+      if (ww < 640) return 94 + 0;   // mobile: header 94 + padding-top 0
+      if (ww < 768) return 112 + 24; // sm portrait: header 112 + 24
+      return 120 + 24;                // md/lg: header 120 + 24
+    }
+
+    function injectLcpOverlay(lcp){
+      if (!lcp || !lcp.url) return;
+      // Container max-width del design system BPBA
+      var CONTAINER_MAX = 1152;
+      var ww = window.innerWidth;
+      var renderedW = Math.min(ww, CONTAINER_MAX);
+      // Aspect del variant especifico (lcp.w/lcp.h ya viene del breakpoint).
+      // En mobile/tablet la imagen es vertical (498/550 alto), no horizontal.
+      var renderedH = renderedW * (lcp.h / lcp.w);
+      var leftOffset = (ww - renderedW) / 2;
+      var topPx = getOverlayTop();
+      // Border radius solo en desktop, matchea CARROUSEL_RADIUS=8 de Slide.tsx
+      // (en breakpoint lg con fullBorderRadius=false → 8px solo top corners).
+      var radiusCss = ww > 992 ? 'border-top-left-radius:8px;border-top-right-radius:8px;overflow:hidden;' : '';
+
+      var overlay = document.createElement('div');
+      overlay.id = OVERLAY_ID;
+      overlay.style.cssText =
+        'position:absolute;' +
+        'top:' + topPx + 'px;' +
+        'left:' + leftOffset + 'px;' +
+        'width:' + renderedW + 'px;' +
+        'height:' + renderedH + 'px;' +
+        'pointer-events:none;' +
+        'z-index:1;' +
+        radiusCss;
+
+      var img = document.createElement('img');
+      img.src = lcp.url;
+      img.width = lcp.w;
+      img.height = lcp.h;
+      img.loading = 'eager';
+      img.decoding = 'sync';
+      img.setAttribute('fetchpriority', 'high');
+      img.alt = '';
+      img.style.cssText = 'width:100%;height:100%;display:block;object-fit:cover;';
+
+      overlay.appendChild(img);
+
+      function attach(){
+        if (!document.body) return false;
+        document.body.appendChild(overlay);
+        return true;
+      }
+      if (!attach()) {
+        document.addEventListener('DOMContentLoaded', attach);
+      }
+
+      var slot = document.querySelector(slotSel);
+      var slotObs = null;
+      var safetyTimeout = null;
+      var rafActive = true;
+      function cleanup(){
+        rafActive = false;
+        if (overlay.isConnected) overlay.remove();
+        if (slotObs) slotObs.disconnect();
+        if (safetyTimeout) clearTimeout(safetyTimeout);
+      }
+
+      // Reposicionar el overlay con rAF loop: el header reservado mide 120px
+      // pero el real (cuando monta) mide 144px en desktop/tablet. Sin esto
+      // el overlay queda 24-50px arriba del Slide real -> salto vertical al
+      // swap. ResizeObserver/MutationObserver no funcionan porque el slot
+      // tiene `display: contents` (no tiene box propio). El rAF corre solo
+      // mientras el overlay vive (~200-500ms tipico, max 10s safety).
+      function tick(){
+        if (!rafActive || !overlay.isConnected) { rafActive = false; return; }
+        var newTop = getOverlayTop();
+        if (Math.abs(newTop - topPx) > 0.5) {
+          topPx = newTop;
+          overlay.style.top = newTop + 'px';
+        }
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+
+      // Cleanup: cuando el slot tenga una <img> real visible y completa,
+      // remover el overlay (asi no quedan dos imagenes superpuestas).
+      if (slot && typeof MutationObserver !== 'undefined') {
+        slotObs = new MutationObserver(function(){
+          var imgs = slot.querySelectorAll('img');
+          for (var i = 0; i < imgs.length; i++){
+            var im = imgs[i];
+            if (im.complete && im.naturalWidth > 0) {
+              var r = im.getBoundingClientRect();
+              if (r.width > 200 && r.height > 100) {
+                cleanup();
+                return;
+              }
+            }
+          }
+        });
+        slotObs.observe(slot, { childList: true, subtree: true });
+        // Safety: si por algun motivo el modulo real nunca renderiza imagen,
+        // remover el overlay a los 10s para no dejar artefactos visuales.
+        safetyTimeout = setTimeout(cleanup, 10000);
+      }
+    }
+
+    // 1) SYNC: aplicar default conservador inmediatamente para reservar espacio
+    //    antes del primer paint. Si despues llegamos a un valor mas preciso,
+    //    sobrescribimos. Default = total flow promedio del story (under-shoots
+    //    paginas con muchos modulos pero over-shoots paginas chicas).
+    var DEFAULT_HEIGHT = device === 'mobile' ? 5500 : device === 'tablet' ? 4500 : 3500;
+    applyMinHeight(DEFAULT_HEIGHT);
+
+    // 2) Refinamos con el ultimo valor exitoso si existe (mas preciso por ruta)
+    try {
+      var stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) applyMinHeight(parseInt(stored, 10));
+    } catch (e) {}
+
+    fetch(endpoint, { credentials: 'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(data){
+        if (!data) return;
+        // Bridge para Web.Paginas (consumido por usePagina.ts)
+        window.__PAGINAS_DATA__ = data;
+        window.__PAGINAS_PATH__ = endpointPath;
+
+        // Suma de heights por layout
+        var modulos = data.modulos || [];
+        var total = 0;
+        for (var i = 0; i < modulos.length; i++){
+          var name = LAYOUT_MAP[modulos[i].layout];
+          var h = (HEIGHTS[name] || {})[device];
+          total += (h || FALLBACK_AVG);
+        }
+        // TopComponent siempre se appendea por Pagina.tsx
+        total += (HEIGHTS.TopComponent || {})[device] || 0;
+
+        applyMinHeight(total);
+        try { localStorage.setItem(STORAGE_KEY, String(total)); } catch (e) {}
+
+        // LCP optimization: si modulos[0] es modulo_banners (Novelties),
+        // preload + inject overlay. Si es cualquier otro layout, skip
+        // silencioso — la home (lo unico que se mide con Lighthouse) siempre
+        // arranca con Novelties.
+        var first = modulos[0];
+        if (first && first.layout === 'modulo_banners') {
+          try {
+            var sfx = suffixForViewport(window.innerWidth);
+            var lcp = extractLcpFromBanners(first, sfx);
+            if (lcp && lcp.url) {
+              preloadImage(lcp.url);
+              injectLcpOverlay(lcp);
+            }
+          } catch (e) {
+            // Cualquier error en el extractor → no romper la pagina, log silencioso
+          }
+        }
+      })
+      .catch(function(){
+        // Si fetch falla y no habia valor en localStorage, fallback conservador
+        try {
+          if (!localStorage.getItem(STORAGE_KEY)) applyMinHeight(5000);
+        } catch (e) {
+          applyMinHeight(5000);
+        }
+      });
+  })();</script><script type="speculationrules">{
+    "prerender": [
+      {
+        "where": {
+          "and": [
+            { "href_matches": "/*" },
+            { "not": { "href_matches": "/mvc/*" } },
+            { "not": { "selector_matches": "[rel~=external]" } }
+          ]
+        },
+        "eagerness": "moderate"
+      }
+    ]
+  }</script><meta name="importmap-type" content="systemjs-importmap"/><meta name="import-map-overrides-domains" content="denylist:www.bancoprovincia.com.ar"/><script type="systemjs-importmap" src="/imports-map.json"></script><script defer="defer" src="/vendor/regenerator-runtime.js"></script><script defer="defer" src="/vendor/system.min.js"></script><script defer="defer" src="/vendor/system-amd.min.js"></script><script defer="defer" src="/bpba-root-config.js"></script><script defer="defer" src="/header/error.backup.js"></script><script defer="defer" src="/footer/error.backup.js"></script></head><body><noscript>Necesita habilitar Javascript</noscript><main><div id="single-spa-application:@bpba/header"></div><div id="single-spa-application:@bpba/paginas"></div><div id="single-spa-application:@bpba/footer"></div></main><script>document.addEventListener('DOMContentLoaded', function () {
+      System.import('@bpba/root-config');
+    });</script></body></html>

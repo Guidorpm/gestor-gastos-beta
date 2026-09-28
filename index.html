@@ -409,6 +409,7 @@ main{max-width:1180px;margin:auto;padding:26px 20px 70px}.card{background:var(--
   .obligation-action button{width:100%}
   .obligation-more-grid{grid-template-columns:1fr 1fr}
 }
+.credit-brand-logos{display:flex;align-items:center;gap:12px;min-height:34px;margin-bottom:7px}.credit-brand-logo{object-fit:contain;width:48px;height:28px}.credit-brand-logo.bank{width:104px;background:#fff;border-radius:5px;padding:3px}
 </style>
 <script src="group-login.js"></script>
 </head>
@@ -3448,7 +3449,38 @@ function creditUsdPaymentDecision(bankUsd,paidUsd){
   if(paidUsd>0.01)return'PARTIAL_USD';
   return'PENDING_DECISION';
 }
+
+function creditBrandLogos(card){
+  const brand=creditBrandFamily(card.brand||card.card_brand||'');
+  const issuer=creditIssuerFamily(card.issuer||card.bank||'');
+  const img=(file,label,wide=false)=>'<img class="credit-brand-logo'+(wide?' bank':'')+'" src="assets/brands/'+file+'" alt="'+label+'" width="'+(wide?104:48)+'" height="28">';
+  return '<span class="credit-brand-logos">'+(brand==='visa'?img('visa.svg','Visa'):brand==='mastercard'?img('mastercard.svg','Mastercard'):brand==='mercado_pago'?img('mercado-pago.svg','Mercado Pago'):'')+(issuer==='banco_provincia'?img('banco-provincia.svg','Banco Provincia',true):issuer==='mercado_pago'&&brand!=='mercado_pago'?img('mercado-pago.svg','Mercado Pago'):'')+'</span>';
+}
+function creditVerifiedDocument(statement){
+  const meta=creditStatementMeta(statement),doc=meta.documentFinancials;
+  if(!doc||doc.version!==1||!Array.isArray(doc.components)||!doc.totals)return null;
+  const t=doc.totals;
+  if([t.statementArs,t.statementUsd,t.calculatedArs,t.calculatedUsd].some(v=>typeof v!=='number'||!Number.isFinite(v)))return null;
+  if(Math.abs(t.statementArs-Number(statement.total_ars||0))>0.01||Math.abs(t.statementUsd-Number(statement.total_usd||0))>0.01)return null;
+  if(Math.abs(t.statementArs-t.calculatedArs)>0.01||Math.abs(t.statementUsd-t.calculatedUsd)>0.01)return null;
+  return doc;
+}
+function creditDocumentModelItems(statement,items){
+  const doc=creditVerifiedDocument(statement);
+  if(!doc)return items||[];
+  const result=(items||[]).filter(m=>creditMovementType(m)==='payment');
+  for(const m of doc.components){
+    if(m.category==='payment')continue;
+    for(const [field,currency] of [['amountArs','ARS'],['amountUsd','USD']]){
+      if(m[field]==null)continue;
+      result.push({description:m.description,amount:Number(m[field]),currency,notes:CREDIT_META_PREFIX+JSON.stringify({movementType:m.category})+']]'});
+    }
+  }
+  return result;
+}
+
 function creditPaymentModel(statement,items){
+  items=creditDocumentModelItems(statement,items);
   const bankArs=Number(statement?.total_ars||0);
   const bankUsd=Number(statement?.total_usd||0);
   const statementMeta=creditStatementMeta(statement);
@@ -3624,6 +3656,7 @@ function creditUsdPaymentRecommendation(statement,items,decision,partialUsdAmoun
     warnings.push('Todavía no hay pago en dólares registrado ni una decisión confirmada para este resumen.');
   }
 
+  if(!creditVerifiedDocument(statement)&&!(items||[]).some(m=>creditMovementType(m)==='purchase')){calculationConfidence='baja';warnings.push('Falta verificar el desglose del PDF; el importe puede omitir impuestos o percepciones.');}
   return{
     decision:simulated,
     realDecision,isHypothetical,
@@ -5241,7 +5274,7 @@ const SPANISH_MONTH_ABBR=['ene','feb','mar','abr','may','jun','jul','ago','sep',
 // dígitos siempre se resuelve a 20YY (los resúmenes reales de esta app son
 // todos de la década de 2020 en adelante; no hay ambigüedad de siglo).
 function parseSpanishAbbrevDate(day,monthAbbr,yy){
-  const idx=SPANISH_MONTH_ABBR.indexOf(String(monthAbbr||'').toLowerCase().slice(0,3));
+  const idx=SPANISH_MONTH_ABBR.indexOf(String(monthAbbr||'').toLowerCase().slice(0,3).replace(/^set$/,'sep'));
   if(idx<0)return null;
   const dd=String(day).padStart(2,'0');
   const mm=String(idx+1).padStart(2,'0');
@@ -6673,6 +6706,8 @@ function buildFinancialReviewNotes(userNotes,financialResult,identity,periodSour
     declaredFeesArs:financialResult?.breakdown?financialResult.breakdown.comisiones:null,
     declaredTaxArs:financialResult?.breakdown?roundMoney((financialResult.breakdown.impuestos||0)+(financialResult.breakdown.percepciones||0)):null,
     declaredNewPurchasesArs:financialResult?.breakdown?financialResult.breakdown.consumosArs:null,
+    documentFinancials:financialResult?.valid?{version:1,totals:financialResult.totals,components:financialResult.movements||[]}:null,
+    currentDollarPerceptionArs:financialResult?.valid?roundMoney((financialResult.movements||[]).reduce((sum,m)=>m.category==='tax'&&/RG\s*(4815|5617)/i.test(m.description||'')&&Number(m.amountArs)>0?sum+Number(m.amountArs):sum,0)):null,
     sourceFileHash:extraMeta?.sourceFileHash||null,
     sourceFileName:extraMeta?.sourceFileName||null,
     parserVersion:extraMeta?.parserVersion||CREDIT_STATEMENT_PARSER_VERSION,
@@ -12605,7 +12640,7 @@ function creditNotificationBannerHtml(models){
 }
 function creditCardsRowsTableHtml(models){
   return `<section class="credit-table-card"><div class="credit-table-title"><div><h2>Tarjetas y saldos pendientes</h2><p>Una tarjeta por fila. El detalle de consumos e impuestos queda oculto hasta que lo abras.<br><small>Los saldos corresponden únicamente al último resumen de cada tarjeta.</small></p></div><span class="credit-due-pill ok">${new Date().toLocaleDateString('es-AR')}</span></div><div class="credit-table-scroll"><table class="credit-master-table"><thead><tr><th>Tarjeta</th><th>Estado / vencimiento</th><th>Saldo banco ARS</th><th>Percepciones</th><th>Pagos registrados</th><th>Restante ARS</th><th>Restante USD</th><th>Consumos a revisar</th><th></th></tr></thead><tbody>${models.map(row=>{
-    if(!row.statement)return `<tr class="${row.card.id===selectedCreditCardId?'selected':''}" data-credit-card="${row.card.id}"><td class="card-name"><strong>${esc(creditCardName(row.card))}</strong><small>${esc(row.card.holder_name||'Sin titular')}</small></td><td><span class="credit-due-pill missing">Sin resumen</span></td><td colspan="6"><small>Falta cargar el primer resumen de esta tarjeta.</small></td><td class="credit-row-action"><button class="credit-expand-button" data-credit-card="${row.card.id}">Abrir</button></td></tr>`;
+    if(!row.statement)return `<tr class="${row.card.id===selectedCreditCardId?'selected':''}" data-credit-card="${row.card.id}"><td class="card-name">${creditBrandLogos(row.card)}<strong>${esc(creditCardName(row.card))}</strong><small>${esc(row.card.holder_name||'Sin titular')}</small></td><td><span class="credit-due-pill missing">Sin resumen</span></td><td colspan="6"><small>Falta cargar el primer resumen de esta tarjeta.</small></td><td class="credit-row-action"><button class="credit-expand-button" data-credit-card="${row.card.id}">Abrir</button></td></tr>`;
     const selected=row.card.id===selectedCreditCardId&&row.statement.id===selectedCreditStatementId;
     // CORRECCIÓN 6B4.8 - Fase 7 del pedido: nunca mezclar en la misma
     // etiqueta la falta de resumen con el vencimiento/pago del último
@@ -12620,12 +12655,12 @@ function creditCardsRowsTableHtml(models){
     // revisado" de "sin movimientos guardados" (row.items=[]). Nunca se
     // muestra "Todo revisado" para un resumen sin ningún movimiento
     // extraído.
-    const rowHasNoMovements=row.items.length===0;
+    const rowHasNoMovements=!row.items.some(m=>creditMovementType(m)==='purchase');
     const reviewClass=row.identification.unrecognized?'danger':row.reviewCount?'warning':(rowHasNoMovements?'warning':'ok');
     const reviewPillLabel=row.reviewCount?`${row.reviewCount} por revisar`:(rowHasNoMovements?'Sin movimientos extraídos':'Todo revisado');
     const payment=row.model.paymentStatus;
     const remainingClass=row.due.className==='today'||row.due.className==='overdue'?'overdue':'';
-    return `<tr class="${selected?'selected':''}" data-credit-card="${row.card.id}" data-credit-open-statement="${row.statement.id}"><td class="card-name"><strong>${esc(creditCardName(row.card))}</strong><small>${esc(row.card.holder_name||'Sin titular')} · ${creditStatementLabel(row.statement)}</small></td><td><span class="credit-payment-state ${payment.code}">${payment.label}</span><small>${docPillHtml}<span class="credit-due-pill ${dueClass}">${dueText}</span> · ${row.statement.due_date?fmtDate(row.statement.due_date):'Sin fecha'}</small></td><td class="money"><strong>${formatARS(row.model.bankArs)}</strong><small>${row.model.bankUsd>0?`+ ${fmtUsd(row.model.bankUsd)}`:'Sin saldo USD'}</small></td><td class="money credit"><strong>${formatARS(row.model.dollarPerception)}</strong><small>${row.model.dollarPerception>0?row.model.dollarTaxLabel:'Sin percepción dólar'}</small></td><td class="money paid"><strong>${formatARS(row.model.paidArs)}</strong><small>${row.model.paidUsd>0?fmtUsd(row.model.paidUsd):'Sin pagos USD'}</small></td><td class="money remaining ${remainingClass}"><strong>${formatARS(row.model.remainingArs)}</strong></td><td class="money remaining ${remainingClass}"><strong>${fmtUsd(row.model.remainingUsd)}</strong></td><td class="review-cell"><span class="credit-review-pill ${reviewClass}">${reviewPillLabel}</span><small>${row.identification.unrecognized} no reconocido${row.identification.unrecognized===1?'':'s'}</small></td><td class="credit-row-action"><div class="credit-row-buttons"><button class="credit-payment-button" data-register-credit-payment="${row.statement.id}" ${payment.code==='paid'?'disabled':''}>Registrar pago</button><button class="credit-expand-button" data-credit-card="${row.card.id}" data-credit-open-statement="${row.statement.id}">${selected?'Detalle abierto':'Ver detalle'}</button></div></td></tr>`;
+    return `<tr class="${selected?'selected':''}" data-credit-card="${row.card.id}" data-credit-open-statement="${row.statement.id}"><td class="card-name">${creditBrandLogos(row.card)}<strong>${esc(creditCardName(row.card))}</strong><small>${esc(row.card.holder_name||'Sin titular')} · ${creditStatementLabel(row.statement)}</small></td><td><span class="credit-payment-state ${payment.code}">${payment.label}</span><small>${docPillHtml}<span class="credit-due-pill ${dueClass}">${dueText}</span> · ${row.statement.due_date?fmtDate(row.statement.due_date):'Sin fecha'}</small></td><td class="money"><strong>${formatARS(row.model.bankArs)}</strong><small>${row.model.bankUsd>0?`+ ${fmtUsd(row.model.bankUsd)}`:'Sin saldo USD'}</small></td><td class="money credit"><strong>${formatARS(row.model.dollarPerception)}</strong><small>${row.model.dollarPerception>0?row.model.dollarTaxLabel:'Sin percepción dólar'}</small></td><td class="money paid"><strong>${formatARS(row.model.paidArs)}</strong><small>${row.model.paidUsd>0?fmtUsd(row.model.paidUsd):'Sin pagos USD'}</small></td><td class="money remaining ${remainingClass}"><strong>${formatARS(row.model.remainingArs)}</strong></td><td class="money remaining ${remainingClass}"><strong>${fmtUsd(row.model.remainingUsd)}</strong></td><td class="review-cell"><span class="credit-review-pill ${reviewClass}">${reviewPillLabel}</span><small>${row.identification.unrecognized} no reconocido${row.identification.unrecognized===1?'':'s'}</small></td><td class="credit-row-action"><div class="credit-row-buttons"><button class="credit-payment-button" data-register-credit-payment="${row.statement.id}" ${payment.code==='paid'?'disabled':''}>Registrar pago</button><button class="credit-expand-button" data-credit-card="${row.card.id}" data-credit-open-statement="${row.statement.id}">${selected?'Detalle abierto':'Ver detalle'}</button></div></td></tr>`;
   }).join('')||'<tr><td colspan="9">Todavía no hay tarjetas cargadas.</td></tr>'}</tbody></table></div></section>`;
 }
 function creditSystemRowsHtml(items,emptyText){
@@ -12685,7 +12720,9 @@ const CREDIT_TRACE_RESULT_LABELS={
 // marcada explícitamente como "declarado por el PDF" — nunca se presenta
 // como un dato con el mismo nivel de certeza que un movimiento real.
 function creditStatementCompositionSummary(statement,items){
-  const hasMovementDetail=(items||[]).length>0;
+  const doc=creditVerifiedDocument(statement);
+  if(doc){const b=buildCreditReconcileBreakdown(doc.components);return {hasMovementDetail:false,carriedArs:b.saldoAnterior,carriedUsd:b.saldoAnteriorUsd,newPurchasesArs:b.consumosArs,newPurchasesUsd:b.consumosUsd,interestArs:b.intereses,feesArs:b.comisiones,taxArs:roundMoney(b.impuestos+b.percepciones)};}
+  const hasMovementDetail=(items||[]).some(item=>creditMovementType(item)!=='payment');
   const breakdown=buildCreditReconcileBreakdown((items||[]).map(creditNormalizeStoredMovementForBreakdown));
   const meta=creditStatementMeta(statement);
   return{
@@ -12707,7 +12744,9 @@ function creditStatementCompositionSummary(statement,items){
 const CREDIT_COMPOSITION_TOLERANCE_ARS=CREDIT_CARRY_TOLERANCE_ARS;
 const CREDIT_COMPOSITION_TOLERANCE_USD=CREDIT_CARRY_TOLERANCE_USD;
 function creditStatementCompositionReconciliation(statement,items,paymentModel){
-  const hasMovementDetail=(items||[]).length>0;
+  const doc=creditVerifiedDocument(statement);
+  if(doc)return {status:'MATCH',composedArs:doc.totals.calculatedArs,composedUsd:doc.totals.calculatedUsd,bankArs:doc.totals.statementArs,bankUsd:doc.totals.statementUsd,diffArs:doc.totals.diffArs,diffUsd:doc.totals.diffUsd,message:'Los componentes leídos del PDF concilian con el total del banco. Los pagos registrados se descuentan por separado.'};
+  const hasMovementDetail=(items||[]).some(item=>creditMovementType(item)!=='payment');
   if(!hasMovementDetail){
     return{
       status:'INSUFFICIENT_DETAIL',
@@ -12799,8 +12838,9 @@ function creditStatementCompositionReconciliation(statement,items,paymentModel){
 // los impuestos identificados en la composición — nunca reemplaza una fuente
 // por la otra, siempre muestra ambas cifras y la diferencia.
 function creditTaxCoherenceCheck(statement,items,paymentModel){
+  items=creditDocumentModelItems(statement,items);
   const modelTaxTotal=roundMoney((paymentModel.dollarPerception||0)+(paymentModel.ivaRg4240||0)+(paymentModel.ivaPerception||0)+(paymentModel.iibb||0)+(paymentModel.sellosArs||0));
-  const hasMovementDetail=(items||[]).length>0;
+  const hasMovementDetail=(items||[]).some(m=>creditMovementType(m)!=='payment');
   if(!hasMovementDetail){
     return{status:'INSUFFICIENT_DETAIL',modelTaxTotal,compositionTaxTotal:null,diff:null,
       message:'Detalle impositivo incompleto: este resumen no tiene movimientos individuales guardados para comparar contra la composición.'};
@@ -12832,7 +12872,7 @@ function creditStatementCompositionHtml(statement,items,model){
     <h3>Composición del saldo vigente</h3>
     ${confidenceNote}
     ${row('Saldo anterior trasladado',s.carriedArs,s.carriedUsd)}
-    ${row('Consumos nuevos',s.newPurchasesArs,0)}
+    ${row('Consumos nuevos',s.newPurchasesArs,s.newPurchasesUsd||0)}
     ${row('Intereses y financiación',s.interestArs,0)}
     ${row('Comisiones',s.feesArs,0)}
     ${row('Impuestos',s.taxArs,0)}
@@ -13145,7 +13185,7 @@ function creditSelectedDetailHtml(selectedCard,statements,selectedStatement,move
   // "Desglose incompleto" para ese mismo resumen: dos mensajes
   // contradictorios en la misma pantalla. noMovementsExtracted distingue
   // ambos casos explícitamente.
-  const noMovementsExtracted=movements.length===0;
+  const noMovementsExtracted=!movements.some(m=>creditMovementType(m)==='purchase');
   const system=creditStatementSystemMovements(movements);
   const taxes=system.filter(item=>creditMovementType(item)==='tax');
   const charges=system.filter(item=>['interest','fee'].includes(creditMovementType(item)));
@@ -13168,6 +13208,49 @@ function creditSelectedDetailHtml(selectedCard,statements,selectedStatement,move
   const monthlyPaymentsSection=creditCardPaymentsSectionHtml(selectedCard);
   return `<section class="credit-detail-panel"><div class="credit-detail-head"><div><h2>${esc(creditCardName(selectedCard))} · ${creditStatementLabel(selectedStatement)}</h2><p>Cierre ${selectedStatement.close_date?fmtDate(selectedStatement.close_date):'—'} · Vencimiento ${selectedStatement.due_date?fmtDate(selectedStatement.due_date):'—'}</p></div><div class="credit-detail-toolbar"><select id="creditStatementQuickSelect">${statements.map(statement=>`<option value="${statement.id}" ${statement.id===selectedStatement.id?'selected':''}>${creditStatementLabel(statement)}</option>`).join('')}</select><button class="credit-payment-button" data-register-credit-payment="${selectedStatement.id}" ${model.paymentStatus.code==='paid'?'disabled':''}>Registrar pago</button><button class="btn outline small" id="editCreditCard">Editar tarjeta</button><button class="btn outline small" id="editStatement">Editar resumen</button><button class="btn primary small" id="openDirectStatementUpload">Subir resumen</button><button class="btn outline small" id="openHistoricalUpload">Cargar resúmenes históricos</button>${selectedCard.brand==='mercado_pago'&&canRepairCreditDocuments()?'<button class="btn outline small" id="openMpReplace">Reemplazar resúmenes de esta tarjeta</button>':''}<button class="btn primary small" id="newMovement">+ Consumo</button></div></div><div class="credit-currency-summary"><div class="credit-currency-block"><h3>Pesos</h3><div class="credit-currency-row"><span>Saldo original liquidado</span><strong>${formatARS(model.bankArs)}</strong></div><div class="credit-currency-row deduction"><span>Percepciones descontables</span><strong>− ${formatARS(model.dollarPerception)}</strong></div><div class="credit-currency-row target"><span>Objetivo de pago</span><strong>${formatARS(model.beforePaymentsArs)}</strong></div><div class="credit-currency-row deduction"><span>Pagos registrados</span><strong>− ${formatARS(model.paidArs)}</strong></div><div class="credit-currency-row remaining"><span>Saldo pendiente</span><strong>${formatARS(model.remainingArs)}</strong></div></div><div class="credit-currency-block"><h3>Dólares</h3><div class="credit-currency-row"><span>Saldo original liquidado</span><strong>${formatUSD(model.bankUsd)}</strong></div><div class="credit-currency-row deduction"><span>Pagos registrados</span><strong>− ${formatUSD(model.paidUsd)}</strong></div><div class="credit-currency-row remaining"><span>Saldo pendiente</span><strong>${formatUSD(model.remainingUsd)}</strong></div></div><div class="credit-currency-status"><span>Estado</span><strong><span class="credit-payment-state ${model.paymentStatus.code}">${model.paymentStatus.label}</span></strong></div></div>${creditUsdPaymentRecommendationHtml(selectedStatement,movements)}${creditStatementCompositionHtml(selectedStatement,movements,model)}${paymentNote}${documentsSection}${monthlyPaymentsSection}<details class="credit-composition" data-credit-panel="composition" ${isCreditPanelOpen('composition')?'open':''}><summary><span>Ver composición completa del resumen</span><span class="credit-review-pill ${reviewPillClass}">${reviewPillLabel}</span></summary><div class="credit-composition-body"><div class="credit-column-summary"><div class="credit-column-box"><h3>Consumos</h3><p>Compras y servicios clasificables.</p><div class="big">${formatARS(totals.totalArs)} · ${fmtUsd(totals.totalUsd)}</div><small>GR ${formatARS(totals.grArs)} · Personal ${formatARS(totals.personalArs)}</small></div><div class="credit-column-box tax"><h3>Impuestos y cargos</h3><p>Separados de los consumos.</p><div class="big">${formatARS(taxTotals.ars+chargeTotals.ars)}</div><small>Impuestos ${formatARS(taxTotals.ars)} · cargos ${formatARS(chargeTotals.ars)}</small></div><div class="credit-column-box alert"><h3>Revisión necesaria</h3><p>Consumos sin confirmar o sin asignar.</p><div class="big">${reviewCount}</div><small>${identification.unrecognized} marcados como no reconocidos</small></div></div><div class="credit-review-banner ${reviewClass}"><div><strong>${reviewBannerTitle}</strong><small>${noMovementsExtracted&&!reviewCount?'Este resumen se guardó solo con sus totales generales -- reprocesalo para completar el detalle línea por línea.':'El indicador permanecerá visible hasta que cada compra esté reconocida y asignada a GR o Personal.'}</small></div>${reviewCount?'<button class="btn primary small" data-set-credit-filter="pending">Revisar ahora</button>':''}</div><details class="credit-subsection" data-credit-panel="purchases" ${isCreditPanelOpen('purchases',reviewCount>0)?'open':''}><summary><span>Consumos y reconocimiento</span><span>${purchases.length} movimientos</span></summary><div class="credit-subsection-body">${creditPurchasesReviewTableHtml(purchases)}</div></details><details class="credit-subsection" data-credit-panel="taxes" ${isCreditPanelOpen('taxes')?'open':''}><summary><span>Impuestos y percepciones</span><span>${formatARS(taxTotals.ars)} · ${fmtUsd(taxTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(taxes,'No hay impuestos ni percepciones registrados.')}</div></details><details class="credit-subsection" data-credit-panel="charges" ${isCreditPanelOpen('charges')?'open':''}><summary><span>Intereses y cargos bancarios</span><span>${formatARS(chargeTotals.ars)} · ${fmtUsd(chargeTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(charges,'No hay intereses ni cargos registrados.')}</div></details><details class="credit-subsection" data-credit-panel="payments" ${isCreditPanelOpen('payments')?'open':''}><summary><span>Pagos, devoluciones y ajustes</span><span>${formatARS(paymentTotals.ars)} · ${fmtUsd(paymentTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(payments,'No hay pagos, devoluciones ni ajustes registrados.')}</div></details></div></details>${creditTraceabilityHtml(selectedCard)}${creditAnnualCalendarHtml(selectedCard,new Date().getFullYear())}</section>`;
 }
+
+async function reviewCurrentCreditDocuments(){
+  if(!canRepairCreditDocuments())return toast('No tenés permiso para actualizar resúmenes');
+  modal('<h2>Revisar PDFs actuales</h2><p id="documentReviewProgress">Leyendo los documentos originales…</p>');
+  const results=[];
+  for(const card of creditCards){
+    const statement=creditRowModel(card).statement;
+    const doc=statement?creditStatementOriginalDoc(statement.id):null;
+    const row={card,statement,doc,error:null,result:null};results.push(row);
+    try{
+      if(!doc?.file_path)throw new Error('Falta el PDF original');
+      const signed=await sb.storage.from('documents').createSignedUrl(doc.file_path,120);
+      if(signed.error)throw signed.error;
+      const response=await fetch(signed.data.signedUrl);if(!response.ok)throw new Error('No se pudo leer el PDF');
+      const file=new File([await response.blob()],doc.original_name||'resumen.pdf',{type:'application/pdf'});
+      const identity=await detectCreditStatementIdentity(file);
+      const family=creditBrandFamily(card.brand);
+      if(creditBrandFamily(identity.brandFamily||identity.brand)!=='unknown'&&creditBrandFamily(identity.brandFamily||identity.brand)!==family)throw new Error('La marca del PDF no coincide');
+      const parsed=await parseCreditStatementFinancials(file,{...identity,brandFamily:family});
+      const result=reconcileCreditStatementTotals(parsed,{...identity,brandFamily:family},normalizeCreditStatementPeriod(statement.statement_month));
+      if(!result.valid)throw new Error('El desglose del PDF no concilia. Requiere revisión; no se modificará.');
+      if(Math.abs(Number(statement.total_ars||0)-result.totals.statementArs)>0.01||Math.abs(Number(statement.total_usd||0)-result.totals.statementUsd)>0.01)throw new Error('Los totales del PDF difieren del resumen guardado. Requiere revisión.');
+      row.result=result;row.identity={...identity,brandFamily:family};
+    }catch(e){row.error=e.message||'No se pudo verificar';}
+  }
+  modal('<h2>Revisión de los resúmenes actuales</h2><p>Se actualizarán únicamente el desglose y las fechas verificadas. Se conservan pagos, comprobantes y clasificaciones.</p>'+results.map(r=>'<div class="notice"><strong>'+esc(creditCardName(r.card))+'</strong><p>'+esc(r.error||('PDF conciliado · '+r.result.movements.length+' componentes · vencimiento '+fmtDate(r.result.declaredDueDate||r.statement.due_date)))+'</p></div>').join('')+'<div class="modalactions"><button class="btn outline" data-close>Cerrar</button><button class="btn primary" id="applyDocumentReview">Actualizar los verificados</button></div>');
+  document.getElementById('applyDocumentReview').onclick=async()=>{
+    const button=document.getElementById('applyDocumentReview');button.disabled=true;let saved=0;const failures=[];
+    for(const r of results.filter(x=>x.result)){
+      try{
+        const rebuilt=buildFinancialReviewNotes(creditStatementUserNotes(r.statement),r.result,r.identity,null,{sourceFileName:r.doc.original_name,sourceFileHash:creditStatementMeta(r.statement).sourceFileHash});
+        const meta={...creditStatementMeta(r.statement),...creditStatementMeta({notes:rebuilt})};
+        const payload={notes:buildCreditStatementNotes(creditStatementUserNotes(r.statement),meta),due_date:r.result.declaredDueDate||r.statement.due_date,close_date:r.result.declaredCloseDate||r.statement.close_date};
+        let query=sb.from('credit_card_statements').update(payload).eq('id',r.statement.id).eq('total_ars',r.statement.total_ars).eq('total_usd',r.statement.total_usd);
+        query=r.statement.notes==null?query.is('notes',null):query.eq('notes',r.statement.notes);
+        const updated=await query.select('id');if(updated.error)throw updated.error;if(!updated.data?.length)throw new Error('El resumen cambió; volvé a revisarlo');saved++;
+      }catch(e){failures.push(creditCardName(r.card)+': '+e.message);}
+    }
+    await loadCreditCardsData();renderCreditCardsModule();
+    modal('<h2>Revisión finalizada</h2><p>'+saved+' resúmenes actualizados.</p>'+results.filter(r=>r.error).map(r=>'<p>'+esc(creditCardName(r.card)+': '+r.error)+'</p>').join('')+failures.map(x=>'<p>'+esc(x)+'</p>').join('')+'<button class="btn outline" data-close>Cerrar</button>');
+  };
+}
+
 function renderCreditCardsModule(){
   // CORRECCIÓN ESTABILIZACIÓN 20260804 - TARJETAS: mismo gate real que
   // openCreditCardsModule()/loadCreditCardsData() (canAccessTarjetas()) --
@@ -13205,7 +13288,7 @@ function renderCreditCardsModule(){
     ? renderCreditReportsBody()
     : `${creditNotificationCenterHtml()}${creditNotificationBannerHtml(models)}${creditCardsRowsTableHtml(models)}${creditSelectedDetailHtml(selectedCard,statements,selectedStatement,movements)}`;
 
-  app.innerHTML=`<main><div class="pagehead"><div><h1>Tarjetas de crédito</h1><p>Una fila por tarjeta. Abrí el detalle solamente cuando necesites revisar la composición del resumen.</p></div><div class="actions"><button class="btn outline" id="backToSpaces">← Mis espacios</button>${canRepairCreditDocuments()?'<button class="btn outline" id="openCreditHistoricalReview">Revisar estado de resúmenes anteriores</button>':''}<button class="btn outline" id="verifyStatementPreview" title="Analiza un PDF localmente, sin guardar ni subir nada">Verificar resumen sin guardar</button>${canRepairCreditDocuments()?'<button class="btn outline" id="openMassiveLoad" title="Analiza toda la carpeta de resúmenes históricos y permite cargarlos de forma conciliada">Carga masiva conciliada (2025+)</button>':''}<button class="btn outline" id="importCreditAudit">Importar auditoría</button><input id="creditAuditFile" type="file" accept="application/json,.json" hidden><button class="btn primary" id="newCreditCard">+ Nueva tarjeta</button></div></div>${moduleTabsHtml}${bodyHtml}<div style="margin-top:24px;text-align:center;opacity:.45;font-size:11px">Versión documentos: 6B4.5.1</div></main>`;
+  app.innerHTML=`<main><div class="pagehead"><div><h1>Tarjetas de crédito</h1><p>Una fila por tarjeta. Abrí el detalle solamente cuando necesites revisar la composición del resumen.</p></div><div class="actions"><button class="btn outline" id="backToSpaces">← Mis espacios</button>${canRepairCreditDocuments()?'<button class="btn outline" id="reviewCurrentCreditDocuments">Releer PDFs actuales</button><button class="btn outline" id="openCreditHistoricalReview">Revisar estado de resúmenes anteriores</button>':''}<button class="btn outline" id="verifyStatementPreview" title="Analiza un PDF localmente, sin guardar ni subir nada">Verificar resumen sin guardar</button>${canRepairCreditDocuments()?'<button class="btn outline" id="openMassiveLoad" title="Analiza toda la carpeta de resúmenes históricos y permite cargarlos de forma conciliada">Carga masiva conciliada (2025+)</button>':''}<button class="btn outline" id="importCreditAudit">Importar auditoría</button><input id="creditAuditFile" type="file" accept="application/json,.json" hidden><button class="btn primary" id="newCreditCard">+ Nueva tarjeta</button></div></div>${moduleTabsHtml}${bodyHtml}<div style="margin-top:24px;text-align:center;opacity:.45;font-size:11px">Versión documentos: 6B4.5.1</div></main>`;
   bindCreditCardsModule();
   bindCreditReportsView();
   const quick=document.getElementById('creditStatementQuickSelect');
@@ -13231,6 +13314,8 @@ function bindCreditCardsModule(){
     button.onclick=event=>{event.stopPropagation();openCreditCalendarConfigModal(button.dataset.configCreditCalendar);};
   });
   // CORRECCIÓN 6B4.8.2 - Fase 6/13: vista de auditoría, solo titular/admin.
+  const documentReviewBtn=document.getElementById('reviewCurrentCreditDocuments');
+  if(documentReviewBtn)documentReviewBtn.onclick=reviewCurrentCreditDocuments;
   const historicalReviewBtn=document.getElementById('openCreditHistoricalReview');
   if(historicalReviewBtn)historicalReviewBtn.onclick=()=>openCreditHistoricalReviewModal();
   // CORRECCIÓN 6B4.13 - Botón separado, de solo lectura: nunca reutiliza el
