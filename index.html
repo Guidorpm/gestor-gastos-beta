@@ -6734,7 +6734,7 @@ function normalizePlainText(value){
 // comercial nunca cambia la familia de marca. Usa \b para que "master" no
 // se detecte dentro de una palabra no relacionada (p.ej. "mastermind").
 function creditBrandFamily(value){
-  const raw=normalizePlainText(value);
+  const raw=normalizePlainText(value).replace(/[_-]+/g,' ');
   if(!raw)return 'unknown';
   if(/\bmercado\s*pago\b/.test(raw)||/\bmercadopago\b/.test(raw))return 'mercado_pago';
   if(/\bvisa\b/.test(raw))return 'visa';
@@ -6747,7 +6747,7 @@ const ISSUER_FAMILY_LABELS={banco_provincia:'Banco Provincia',mercado_pago:'Merc
 // "Visa Signature", "Mastercard Black" ni "Mastercard Platinum" como
 // emisor — son marca/producto, no banco (quedan en 'unknown').
 function creditIssuerFamily(value){
-  const raw=normalizePlainText(value);
+  const raw=normalizePlainText(value).replace(/[_-]+/g,' ');
   if(!raw)return 'unknown';
   if(/\bmercado\s*pago\b/.test(raw)||/\bmercadopago\b/.test(raw))return 'mercado_pago';
   if(/\bbanco\s*(?:de\s*la\s*)?provincia\b/.test(raw)||/\bbanca\s*internet\s*provincia\b/.test(raw)||/\bbapro\b/.test(raw))return 'banco_provincia';
