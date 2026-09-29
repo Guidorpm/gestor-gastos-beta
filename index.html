@@ -12721,7 +12721,7 @@ const CREDIT_TRACE_RESULT_LABELS={
 // como un dato con el mismo nivel de certeza que un movimiento real.
 function creditStatementCompositionSummary(statement,items){
   const doc=creditVerifiedDocument(statement);
-  if(doc){const b=buildCreditReconcileBreakdown(doc.components);return {hasMovementDetail:false,carriedArs:b.saldoAnterior,carriedUsd:b.saldoAnteriorUsd,newPurchasesArs:b.consumosArs,newPurchasesUsd:b.consumosUsd,interestArs:b.intereses,feesArs:b.comisiones,taxArs:roundMoney(b.impuestos+b.percepciones)};}
+  if(doc){const b=buildCreditReconcileBreakdown(doc.components);return {hasMovementDetail:false,verifiedDocument:true,adjustmentsArs:roundMoney(doc.components.filter(m=>["adjustment","refund","payment"].includes(m.category)).reduce((v,m)=>v+Number(m.amountArs||0),0)),carriedArs:b.saldoAnterior,carriedUsd:b.saldoAnteriorUsd,newPurchasesArs:b.consumosArs,newPurchasesUsd:b.consumosUsd,interestArs:b.intereses,feesArs:b.comisiones,taxArs:roundMoney(b.impuestos+b.percepciones)};}
   const hasMovementDetail=(items||[]).some(item=>creditMovementType(item)!=='payment');
   const breakdown=buildCreditReconcileBreakdown((items||[]).map(creditNormalizeStoredMovementForBreakdown));
   const meta=creditStatementMeta(statement);
@@ -12865,7 +12865,7 @@ function creditStatementCompositionHtml(statement,items,model){
     if(value==null)return `<div class="credit-currency-row"><span>${esc(label)}</span><strong>Sin datos suficientes</strong></div>`;
     return `<div class="credit-currency-row"><span>${esc(label)}</span><strong>${formatARS(value)}${usd>0.01?` · ${fmtUsd(usd)}`:''}</strong></div>`;
   };
-  const confidenceNote=s.hasMovementDetail
+  const confidenceNote=s.verifiedDocument?'Los totales y componentes del PDF fueron verificados. El detalle de compras individuales puede estar incompleto.':s.hasMovementDetail
     ?''
     :'<div class="credit-note">Este resumen no tiene movimientos individuales guardados (carga histórica sin desglose línea por línea): los valores de abajo son los declarados por el propio PDF al cargarlo, no un cálculo con confianza total.</div>';
   return `<div class="credit-composition-summary">
@@ -12876,6 +12876,7 @@ function creditStatementCompositionHtml(statement,items,model){
     ${row('Intereses y financiación',s.interestArs,0)}
     ${row('Comisiones',s.feesArs,0)}
     ${row('Impuestos',s.taxArs,0)}
+    ${s.adjustmentsArs?row('Pagos, devoluciones y ajustes incluidos en el PDF',s.adjustmentsArs,0):''}
     ${row('Pagos aplicados',model.paidArs,model.paidUsd)}
     <div class="credit-currency-row remaining"><span>Saldo vigente</span><strong>${formatARS(model.remainingArs)}${model.remainingUsd>0.01?` · ${fmtUsd(model.remainingUsd)}`:''}</strong></div>
     <div class="credit-note ${reconciliation.status==='MATCH'?'':'warning'}">${esc(reconciliation.message)}</div>
