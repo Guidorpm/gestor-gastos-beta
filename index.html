@@ -3454,7 +3454,7 @@ function creditBrandLogos(card){
   const brand=creditBrandFamily(card.brand||card.card_brand||'');
   const issuer=creditIssuerFamily(card.issuer||card.bank||'');
   const img=(file,label,wide=false)=>'<img class="credit-brand-logo'+(wide?' bank':'')+'" src="assets/brands/'+file+'" alt="'+label+'" width="'+(wide?104:48)+'" height="28">';
-  return '<span class="credit-brand-logos">'+(brand==='visa'?img('visa.svg','Visa'):brand==='mastercard'?img('mastercard.svg','Mastercard'):brand==='mercado_pago'?img('mercado-pago.svg','Mercado Pago'):'')+(issuer==='banco_provincia'?img('banco-provincia.svg','Banco Provincia',true):issuer==='mercado_pago'&&brand!=='mercado_pago'?img('mercado-pago.svg','Mercado Pago'):'')+'</span>';
+  return '<span class="credit-brand-logos">'+(brand==='visa'?img('visa.svg','Visa'):brand==='mastercard'?img('mastercard.svg','Mastercard'):brand==='mercado_pago'?img('mercado-pago.svg','Mercado Pago'):'')+(issuer==='banco_provincia'?img('banco-provincia-v2.svg','Banco Provincia',true):issuer==='mercado_pago'&&brand!=='mercado_pago'?img('mercado-pago.svg','Mercado Pago'):'')+'</span>';
 }
 function creditVerifiedDocument(statement){
   const meta=creditStatementMeta(statement),doc=meta.documentFinancials;
