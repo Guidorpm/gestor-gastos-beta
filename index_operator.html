@@ -20386,6 +20386,53 @@ function openServiceModal(serviceId=null){
     }
   };
 }
+function serviceInvoiceItemsTotal(items){
+  if(!Array.isArray(items)||!items.length)throw new Error('Agregá al menos una factura');
+  let cents=0;
+  for(const item of items){
+    if(!Number.isFinite(item.amount)||item.amount<=0)throw new Error('Cada factura debe tener un importe mayor a cero');
+    cents+=Math.round(item.amount*100);
+  }
+  if(!Number.isSafeInteger(cents))throw new Error('El importe es demasiado grande');
+  return cents/100;
+}
+function bindServiceInvoiceItems(extra,editable){
+  const box=document.getElementById('serviceInvoiceItems');
+  const add=document.getElementById('addServiceInvoiceItem');
+  if(!box||!add)return ()=>null;
+  let active=Array.isArray(extra.invoiceItems)&&extra.invoiceItems.length>0;
+  const amount=document.getElementById('oamount');
+  const pending=document.getElementById('oamountPending');
+  const read=()=>[...box.querySelectorAll('[data-service-invoice-row]')].map(row=>({number:row.querySelector('[data-invoice-number]').value.trim(),amount:parseMoneyField(row.querySelector('[data-invoice-amount]').value)}));
+  const sync=()=>{
+    amount.readOnly=active;
+    if(pending)pending.disabled=active||!editable;
+    if(active){
+      amount.value=formatMoneyField(read().reduce((sum,item)=>sum+(Number.isFinite(item.amount)?item.amount:0),0));
+      amount.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  };
+  const append=item=>{
+    const row=document.createElement('div');row.className='grid2';row.dataset.serviceInvoiceRow='';
+    row.innerHTML='<div class="field"><label>Número o referencia de factura</label><input data-invoice-number value="'+esc(item.number||'')+'" '+(!editable?'disabled':'')+'></div><div class="field"><label>Importe de esta factura</label><input data-invoice-amount data-money-input value="'+formatMoneyField(item.amount??'')+'" '+(!editable?'disabled':'')+'><button type="button" class="btn outline small" data-remove-invoice '+(!editable?'disabled':'')+'>Quitar del desglose</button></div>';
+    box.appendChild(row);bindMoneyInputs(row);
+    row.querySelector('[data-invoice-amount]').addEventListener('input',sync);
+    row.querySelector('[data-remove-invoice]').onclick=()=>{row.remove();if(!box.children.length)active=false;sync();};
+  };
+  if(active)extra.invoiceItems.forEach(append);
+  add.onclick=()=>{
+    if(!editable)return;
+    if(!active){
+      active=true;
+      append({number:document.getElementById('oinvoicenumber')?.value||'',amount:parseMoneyField(amount.value)||''});
+      if(pending?.checked){pending.checked=false;pending.dispatchEvent(new Event('change',{bubbles:true}));}
+    }
+    append({number:'',amount:''});sync();
+  };
+  sync();
+  return ()=>active?read():null;
+}
+
 function openObligation(serviceId,key){
   const s=services.find(x=>x.id===serviceId);
   const o=obligationFor(serviceId,key);
@@ -20520,7 +20567,7 @@ function openObligation(serviceId,key){
 
     <div class="grid2">
       <div class="field">
-        <label>Importe total que figura en la factura</label>
+        <label>Importe total del mes (una o varias facturas)</label>
         <input
           id="oamount"
           data-money-input
@@ -20537,6 +20584,12 @@ function openObligation(serviceId,key){
       </div>
     </div>
 
+    <div class="notice">
+      <strong>Facturas de este mes</strong>
+      <p>Si recibiste dos facturas distintas, cargá sus importes por separado. El total se suma automáticamente y los pagos ya registrados se conservan. Los archivos se adjuntan debajo.</p>
+      <div id="serviceInvoiceItems"></div>
+      <button type="button" class="btn outline" id="addServiceInvoiceItem" ${!editableNow?'disabled':''}>+ Agregar otra factura de este mes</button>
+    </div>
     <div class="field" style="margin-top:-8px">
       <label style="display:flex;align-items:center;gap:8px;text-transform:none;font-weight:600">
         <input type="checkbox" id="oamountPending" style="width:auto" ${extraFields.amountPending===true?'checked':''} ${!editableNow?'disabled':''}>
@@ -20935,6 +20988,7 @@ function openObligation(serviceId,key){
     };
   }
 
+  const readServiceInvoiceItems=bindServiceInvoiceItems(extraFields,editableNow);
   if(!editableNow)return;
 
   async function saveMonthData({uploadInvoice=false}={}){
@@ -20947,6 +21001,11 @@ function openObligation(serviceId,key){
     // dueState()/boxText().
     const amountPendingChecked=document.getElementById('oamountPending')?.checked||false;
     let amountValue=amountPendingChecked?0:parseMoneyField(document.getElementById('oamount').value);
+    const invoiceItems=readServiceInvoiceItems();
+    if(invoiceItems){
+      if(amountPendingChecked)throw new Error('Completá los importes de las facturas');
+      amountValue=serviceInvoiceItemsTotal(invoiceItems);
+    }
     const dueValue=document.getElementById('odue').value;
     const file=invoiceInput?.files?.[0]||null;
     const mode=document.querySelector('input[name="invoiceMode"]:checked')?.value||'additional';
@@ -21054,7 +21113,10 @@ function openObligation(serviceId,key){
     const previousFreeText=o?obligationUserNotes(o.notes):'';
     const newFreeText=document.getElementById('onotes').value;
     const previousExtra=o?obligationExtraFields(o):{};
+    if(invoiceItems&&effectivePeriodAmountValue!=null&&Math.round(effectivePeriodAmountValue*100)!==Math.round(amountValue*100))throw new Error('El importe efectivo del período debe coincidir con la suma de las facturas o quedar vacío');
     const newExtra={
+      ...previousExtra,
+      invoiceItems,
       currency:document.getElementById('ocurrency')?.value||previousExtra.currency||'ARS',
       provider:(document.getElementById('oprovider')?.value||'').trim(),
       invoiceNumber:(document.getElementById('oinvoicenumber')?.value||'').trim(),
@@ -21077,6 +21139,7 @@ function openObligation(serviceId,key){
     const metaUpdate={extraFields:newExtra};
     if(o){
       const changedFields={};
+      if(JSON.stringify(previousExtra.invoiceItems||null)!==JSON.stringify(invoiceItems))changedFields.facturasDelMes={before:JSON.stringify(previousExtra.invoiceItems||[]),after:JSON.stringify(invoiceItems||[])};
       if((previousExtra.amountPending===true)!==amountPendingChecked)changedFields.importePendiente={before:previousExtra.amountPending===true?'Sí':'No',after:amountPendingChecked?'Sí':'No'};
       if(Number(o.amount||0)!==amountValue)changedFields.importe={before:fmtMoneyExact(o.amount||0),after:fmtMoneyExact(amountValue)};
       if((o.due_date||'')!==dueValue)changedFields.vencimiento={before:o.due_date||'—',after:dueValue};
@@ -21830,7 +21893,7 @@ function openFolder(serviceId){
 
     <div class="modalactions">
       ${canEdit()?`
-        <button class="btn primary" id="addInvoiceMonthBtn">+ Agregar factura de otro mes</button>
+        <button class="btn primary" id="addInvoiceMonthBtn">+ Agregar factura / elegir mes</button>
         <button class="btn soft" id="editServiceBtn">Editar servicio</button>
         ${s.active===false
           ? `<button class="btn primary" id="reactivateServiceBtn">Reactivar servicio</button>`
