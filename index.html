@@ -21810,7 +21810,7 @@ function openFolder(serviceId){
             <div>${fmtMoneyExact(progress.amount)} · vence ${fmtDate(o.due_date)}</div>
           </div>
           <span>
-            ${progress.settledVia
+            ${isObligationVoided(o)?'Anulado':progress.settledVia
               ? `Abonado en ${monthLabel(progress.settledVia.period.slice(0,7))}`
               : sourceLink&&target
               ? `<span class="included-badge">Incluida en ${monthLabel(target.period.slice(0,7))}</span>`
