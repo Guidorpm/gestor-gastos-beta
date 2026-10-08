@@ -21389,6 +21389,13 @@ async function deleteObligationMonth(obligationId,serviceId,key){
 // nada. El importe nunca puede superar min(crédito disponible, saldo de
 // la obligación destino) -- reforzado tanto en el valor por defecto del
 // campo como en la validación al confirmar.
+function confirmServiceFormAction(button,message){
+  if(button.dataset.confirmMessage===message){delete button.dataset.confirmMessage;document.getElementById('serviceActionConfirmation')?.remove();return true;}
+  let notice=document.getElementById('serviceActionConfirmation');
+  if(!notice){notice=document.createElement('div');notice.id='serviceActionConfirmation';notice.className='notice';notice.style.whiteSpace='pre-line';button.parentElement.before(notice);}
+  notice.textContent=message+'\nRevisá los importes y presioná Confirmar para guardar.';
+  button.dataset.confirmMessage=message;button.textContent='Confirmar';notice.scrollIntoView({block:'nearest'});return false;
+}
 function openApplyCreditModal(serviceId,targetObligation){
   const credits=availableServiceCredits(serviceId);
   if(!credits.length)return toast('No hay saldo a favor disponible en este servicio');
@@ -21423,7 +21430,7 @@ function openApplyCreditModal(serviceId,targetObligation){
     if(amountRequested<=0)return toast('Ingresá un importe a aplicar');
     if(serviceMoneyCents(amountRequested)>serviceMoneyCents(maxApplicable))return toast('El importe no puede superar el crédito disponible ni el saldo de la obligación');
 
-    const seguro=confirm(`Se aplicará ${fmtMoneyExact(amountRequested)} de saldo a favor a esta obligación.\n\n¿Confirmás?`);
+    const seguro=confirmServiceFormAction(document.getElementById('confirmApplyCredit'),`Se aplicará ${fmtMoneyExact(amountRequested)} de saldo a favor a esta obligación.\n\n¿Confirmás?`);
     if(!seguro)return;
 
     const button=document.getElementById('confirmApplyCredit');
@@ -21564,7 +21571,7 @@ function openPayModal(o){
     `).join('')}
 
     <div class="field">
-      <label>Comprobante</label>
+      <label>Medio de pago y referencia (opcional)</label><input id="servicePaymentReference" placeholder="Ej.: Mastercard · número de operación"></div><div class="field"><label>Comprobante</label>
       ${fileUploadButtonHtml('receiptFile','Adjuntar comprobante')}
       <div id="receiptLocalPreview" class="local-preview hidden"></div>
     </div>
@@ -21652,10 +21659,10 @@ function openPayModal(o){
     const diffCents=serviceMoneyCents(total)-serviceMoneyCents(selectedDueAmount);
     const diff=roundServiceMoney(total-selectedDueAmount);
     if(diffCents<0){
-      const seguro=confirm(`${hasSecondDue?`Aplicar a: ${stageLabel}\n`:''}Importe correspondiente: ${fmtMoneyExact(selectedDueAmount)}\nPago ingresado: ${fmtMoneyExact(total)}\nQuedará un saldo pendiente de ${fmtMoneyExact(selectedDueAmount-total)}.\n\n¿Confirmás este pago parcial?`);
+      const seguro=confirmServiceFormAction(document.getElementById('savePay'),`${hasSecondDue?`Aplicar a: ${stageLabel}\n`:''}Importe correspondiente: ${fmtMoneyExact(selectedDueAmount)}\nPago ingresado: ${fmtMoneyExact(total)}\nQuedará un saldo pendiente de ${fmtMoneyExact(selectedDueAmount-total)}.\n\n¿Confirmás este pago parcial?`);
       if(!seguro)return;
     }else if(diffCents>0){
-      const seguro=confirm(`${hasSecondDue?`Aplicar a: ${stageLabel}\n`:''}Importe correspondiente: ${fmtMoneyExact(selectedDueAmount)}\nPago ingresado: ${fmtMoneyExact(total)}\nEl importe ingresado supera el importe correspondiente en ${fmtMoneyExact(diff)}.\nSe generará un saldo a favor.\n\n¿Confirmás este pago?`);
+      const seguro=confirmServiceFormAction(document.getElementById('savePay'),`${hasSecondDue?`Aplicar a: ${stageLabel}\n`:''}Importe correspondiente: ${fmtMoneyExact(selectedDueAmount)}\nPago ingresado: ${fmtMoneyExact(total)}\nEl importe ingresado supera el importe correspondiente en ${fmtMoneyExact(diff)}.\nSe generará un saldo a favor.\n\n¿Confirmás este pago?`);
       if(!seguro)return;
     }
 
@@ -21690,7 +21697,7 @@ function openPayModal(o){
           paid_at:document.getElementById('paidDate').value,
           total_amount:total,
           created_by:session.user.id,
-          notes:buildPaymentNotes(null,{appliedDueStage:dueStage})
+          notes:buildPaymentNotes(document.getElementById('servicePaymentReference')?.value.trim()||null,{appliedDueStage:dueStage})
         })
         .select()
         .single();
