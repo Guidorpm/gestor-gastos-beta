@@ -1966,6 +1966,102 @@ function paymentNoteMetadata(rawNotes){
   try{parsed=JSON.parse(raw);}catch{return{};}
   return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{};
 }
+
+const SERVICE_PAYMENT_METHODS={unknown:'Sin informar',cash:'Efectivo',transfer:'Transferencia',debit_card:'Tarjeta de débito',credit_card:'Tarjeta de crédito',automatic_debit:'Débito en cuenta',wallet:'Billetera virtual',other:'Otro'};
+function servicePaymentFunding(payment){
+  const meta=paymentNoteMetadata(payment?.notes);
+  return {method:SERVICE_PAYMENT_METHODS[meta.paymentMethod]?meta.paymentMethod:'unknown',cardId:meta.paymentCardId||'',cardLabel:meta.paymentCardLabel||'',reference:meta.paymentReference||'',movementId:meta.paymentCreditMovementId||''};
+}
+function serviceFundingMovementValid(payment,movement,statements){
+  const f=servicePaymentFunding(payment);
+  return !!(f.method==='credit_card'&&f.cardId&&movement&&movement.card_id===f.cardId&&movement.currency!=='USD'&&creditMovementType(movement)==='purchase'&&Number(movement.amount)>0&&serviceMoneyCents(movement.amount)===serviceMoneyCents(payment.total_amount)&&statements.some(s=>s.id===movement.statement_id&&s.card_id===f.cardId));
+}
+// Only explicit, unique links to real purchases can remove duplicate expenses.
+// Service status and bank statement balances are never modified by reconciliation.
+function serviceCardReconciliation(year,paymentsList,obligationsList,allocationsList,movementsList,statementsList,maxPeriod){
+  let duplicate=0,duplicateForAverage=0,financedPaid=0,unlinked=0;
+  const active=paymentsList.filter(p=>p.voided!==true);
+  const uses=new Map();
+  active.forEach(p=>{const id=servicePaymentFunding(p).movementId;if(id)uses.set(id,(uses.get(id)||0)+1)});
+  const room=new Map(obligationsList.filter(o=>o.status!=='cancelled').map(o=>[o.id,Math.max(0,serviceMoneyCents(o.amount))]));
+  for(const p of active){
+    const f=servicePaymentFunding(p);if(f.method!=='credit_card')continue;
+    const allocations=allocationsList.filter(a=>a.payment_id===p.id&&a.is_active===true);
+    const shares=allocations.length?allocations:[{obligation_id:p.obligation_id,allocated_amount:p.total_amount}];
+    let remaining=Math.max(0,serviceMoneyCents(p.total_amount)),inYear=0,throughMonth=0;
+    for(const share of shares){
+      const o=obligationsList.find(o=>o.id===share.obligation_id&&o.status!=='cancelled');
+      if(!o)continue;
+      const cents=Math.min(remaining,room.get(o.id)||0,Math.max(0,serviceMoneyCents(share.allocated_amount)));
+      remaining-=cents;room.set(o.id,(room.get(o.id)||0)-cents);
+      if(String(o.period).startsWith(year)){inYear+=cents;if(maxPeriod&&String(o.period).slice(0,7)<=maxPeriod)throughMonth+=cents;}
+    }
+
+    const movement=movementsList.find(m=>m.id===f.movementId);
+    const statement=statementsList.find(s=>s.id===movement?.statement_id);
+    const linked=uses.get(f.movementId)===1&&serviceFundingMovementValid(p,movement,statementsList);
+    if(linked&&String(statement.due_date||'').startsWith(year)){
+      duplicate+=inYear;
+      if(maxPeriod&&String(statement.due_date).slice(0,7)<=maxPeriod)duplicateForAverage+=throughMonth;
+    }else if(inYear&&!linked)unlinked+=inYear;
+  }
+  const financedPayments=active.filter(p=>servicePaymentFunding(p).method==='credit_card');
+  financedPaid=obligationsList.filter(o=>o.status!=='cancelled'&&String(o.period).startsWith(year)).reduce((sum,o)=>sum+serviceMoneyCents(paidAmountForWithAllocations(o.id,financedPayments,allocationsList)),0);
+  return {duplicate:duplicate/100,duplicateForAverage:duplicateForAverage/100,financedPaid:financedPaid/100,unlinked:unlinked/100};
+}
+function serviceFundingFields(payment={}){
+  const f=servicePaymentFunding(payment);
+  const cards=creditCards.map(c=>({id:c.id,label:creditCardName(c)}));
+  if(f.cardId&&!cards.some(c=>c.id===f.cardId))cards.push({id:f.cardId,label:f.cardLabel||'Tarjeta registrada'});
+  return `<div class="field"><label for="servicePaymentMethod">Medio de pago</label><select id="servicePaymentMethod">${Object.entries(SERVICE_PAYMENT_METHODS).map(([id,label])=>`<option value="${id}" ${id===f.method?'selected':''}>${label}</option>`).join('')}</select></div>
+    <div id="servicePaymentCardFields"><div class="field"><label for="servicePaymentCard">Tarjeta utilizada</label><select id="servicePaymentCard"><option value="">Seleccionar tarjeta</option>${cards.map(c=>`<option value="${esc(c.id)}" ${c.id===f.cardId?'selected':''}>${esc(c.label)}</option>`).join('')}</select><small>Si no tenés acceso a Tarjetas, indicá el banco y la tarjeta abajo.</small></div>
+    <div class="field"><label for="servicePaymentCardLabel">Banco y tarjeta (si no está en la lista)</label><input id="servicePaymentCardLabel" value="${esc(f.cardLabel)}" placeholder="Ej.: Banco · Mastercard"></div>
+    <div class="field"><label for="servicePaymentMovement">Consumo en el resumen</label><select id="servicePaymentMovement"></select><small>Elegí el consumo de este pago. Se ofrecen compras en pesos por el mismo importe. Si todavía no llegó el resumen, dejalo pendiente y vinculalo después desde Abrir pago. Vincular no reduce la deuda con el banco.</small></div></div>
+    <div class="field"><label for="servicePaymentReference">Referencia / número de operación</label><input id="servicePaymentReference" value="${esc(f.reference)}" placeholder="Número de operación o aclaración"></div>`;
+}
+function bindServiceFundingFields(payment={},amountReader=()=>Number(payment.total_amount||0)){
+  const f=servicePaymentFunding(payment),method=document.getElementById('servicePaymentMethod'),card=document.getElementById('servicePaymentCard'),movement=document.getElementById('servicePaymentMovement');
+  let firstFundingRender=true;
+  function update(){
+    document.getElementById('servicePaymentCardFields').hidden=method.value!=='credit_card';
+    const chosen=firstFundingRender?f.movementId:movement.value;firstFundingRender=false;
+    const candidate={total_amount:amountReader(),notes:buildPaymentNotes(null,{paymentMethod:'credit_card',paymentCardId:card.value})};
+    const used=[...payments,...spacesDashboard.payments].filter(p=>p.id!==payment.id&&p.voided!==true).map(p=>servicePaymentFunding(p).movementId);
+    const options=creditMovements.filter(m=>serviceFundingMovementValid(candidate,m,creditStatements)&&!used.includes(m.id));
+    movement.innerHTML='<option value="">Pendiente de vincular al resumen</option>'+options.map(m=>`<option value="${esc(m.id)}" ${m.id===chosen?'selected':''}>${esc(fmtDate(m.movement_date))} · ${esc(m.description)} · ${fmtMoneyExact(m.amount)}</option>`).join('');
+    if(chosen&&!options.some(m=>m.id===chosen)&&chosen===f.movementId)movement.innerHTML+=`<option value="${esc(chosen)}" selected>Vínculo existente no verificable (no se descuenta)</option>`;
+  }
+  method.onchange=update;card.onchange=()=>{movement.innerHTML='';update()};update();return update;
+}
+function readServiceFundingFields(payment={}){
+  const method=document.getElementById('servicePaymentMethod').value,cardId=document.getElementById('servicePaymentCard').value;
+  const card=creditCards.find(c=>c.id===cardId),cardLabel=card?creditCardName(card):document.getElementById('servicePaymentCardLabel').value.trim();
+  const movementId=document.getElementById('servicePaymentMovement').value;
+  if(method==='credit_card'&&!cardId&&!cardLabel)throw Error('Indicá qué tarjeta utilizaste.');
+  if(method==='credit_card'&&movementId&&movementId!==servicePaymentFunding(payment).movementId){
+    const candidate={...payment,notes:buildPaymentNotes(null,{paymentMethod:method,paymentCardId:cardId})};
+    if(!serviceFundingMovementValid(candidate,creditMovements.find(m=>m.id===movementId),creditStatements))throw Error('El consumo debe coincidir con la tarjeta y el importe pagado.');
+    if([...payments,...spacesDashboard.payments].some(p=>p.id!==payment.id&&p.voided!==true&&servicePaymentFunding(p).movementId===movementId))throw Error('Este consumo ya está vinculado a otro pago.');
+  }
+  return {paymentMethod:method,paymentCardId:method==='credit_card'?cardId:null,paymentCardLabel:method==='credit_card'?cardLabel:null,paymentCreditMovementId:method==='credit_card'?movementId:null,paymentReference:document.getElementById('servicePaymentReference').value.trim()};
+}
+function openServiceFundingModal(id){
+  const p=payments.find(p=>p.id===id);if(!p||p.voided===true||!canEdit())return;
+  modal(`<h2>Medio de pago</h2><p>${fmtDate(p.paid_at)} · ${fmtMoneyExact(p.total_amount)}</p>${serviceFundingFields(p)}<div class="modalactions"><button class="btn outline" data-close>Cancelar</button><button class="btn primary" id="saveServiceFunding">Guardar medio de pago</button></div>`);
+  bindServiceFundingFields(p);
+  document.getElementById('saveServiceFunding').onclick=async()=>{
+    const button=document.getElementById('saveServiceFunding');button.disabled=true;
+    try{
+      const metadata=readServiceFundingFields(p);
+      let query=sb.from('payments').update({notes:buildPaymentNotes(p.notes,metadata)}).eq('id',p.id);
+      query=p.notes==null?query.is('notes',null):query.eq('notes',p.notes);
+      const {data,error}=await query.select('id');
+      if(error)throw error;if(!data?.length)throw Error('No se pudo guardar el medio de pago.');
+      await refreshDashboardData();openPaymentDetail(id);toast('Medio de pago guardado');
+    }catch(error){toast(error.message||'No se pudo guardar');button.disabled=false;}
+  };
+}
+
 function paymentAppliedDueStage(payment){
   const stage=paymentNoteMetadata(payment?.notes).appliedDueStage;
   return stage==='first'||stage==='second'?stage:null;
@@ -2755,15 +2851,17 @@ function renderOwnerDashboard(){
   // Tarjetas (cardMetrics) es un cálculo estructuralmente separado
   // (resúmenes de tarjeta, no payment_allocations) y nunca se ve afectado.
   const anyGroupFinancialDataUnavailable=rows.some(row=>row.metrics.financialDataUnavailable);
+  const averagePeriod=getAveragePeriodForYear(year);
+  const funding=serviceCardReconciliation(year,spacesDashboard.payments.filter(p=>ownedGroups.some(g=>g.id===p.group_id)),spacesDashboard.obligations.filter(o=>ownedGroups.some(g=>g.id===o.group_id)),spacesDashboard.paymentAllocations,creditMovements,creditStatements,averagePeriod.maxPeriod);
   const total={
-    total:rows.reduce((sum,row)=>sum+row.metrics.total,0)+cardMetrics.total,
-    paid:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.paid,0)+cardMetrics.paid,
+    total:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.total,0)+cardMetrics.total-funding.duplicate,
+    paid:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.paid,0)+cardMetrics.paid-funding.financedPaid,
     pending:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.pending,0)+cardMetrics.pending,
     unpaid:anyGroupFinancialDataUnavailable?null:rows.reduce((sum,row)=>sum+row.metrics.unpaid,0)+cardMetrics.unpaid,
     invoices:rows.reduce((sum,row)=>sum+row.metrics.invoices,0)+cardMetrics.invoices,
     receipts:rows.reduce((sum,row)=>sum+row.metrics.receipts,0)+cardMetrics.receipts,
     activeServices:rows.reduce((sum,row)=>sum+row.metrics.activeServices,0)+cardMetrics.activeServices,
-    averageMonthly:(rows.reduce((sum,row)=>sum+row.metrics.total,0)/12)+cardMetrics.averageMonthly
+    averageMonthly:(rows.reduce((sum,row)=>sum+row.metrics.total,0)/12)+cardMetrics.averageMonthly-(averagePeriod.monthsToUse?funding.duplicateForAverage/averagePeriod.monthsToUse:0)
   };
   const ownerFmt=(n)=>n===null?'No disponible':fmtMoney(n);
   const ownerCount=(n)=>n===null?'No disponible':n;
@@ -2776,11 +2874,12 @@ function renderOwnerDashboard(){
       <strong>No se pudieron verificar las imputaciones de pagos de uno o más espacios.</strong> Pagado, Pendiente y No abonados no se muestran hasta poder confirmarlas -- recargá para reintentar.
     </div>`:''}
 
+${!anyGroupFinancialDataUnavailable?`    <div class="notice">Servicios pagados con tarjeta: ${fmtMoneyExact(funding.financedPaid)}. Se mantienen abonados en su espacio; no se vuelven a sumar como salida de dinero junto al pago de la tarjeta.<br>Repeticiones vinculadas descontadas del total anual: ${fmtMoneyExact(funding.duplicate)}. Pendiente de vincular al resumen: ${fmtMoneyExact(funding.unlinked)}. Si faltan vínculos, el total combinado puede contener duplicaciones. Los saldos bancarios no se modifican.</div>`:""}
     <div class="owner-metrics-grid">
-      <div class="owner-metric"><span>Total anual cargado</span><strong>${fmtMoney(total.total)}</strong></div>
-      <div class="owner-metric"><span>Total pagado</span><strong>${ownerFmt(total.paid)}</strong></div>
+      <div class="owner-metric"><span>Total anual cargado</span><strong>${ownerFmt(total.total)}</strong></div>
+      <div class="owner-metric"><span>Pagado sin anticipos con tarjeta</span><strong>${ownerFmt(total.paid)}</strong></div>
       <div class="owner-metric"><span>Pendiente total</span><strong>${ownerFmt(total.pending)}</strong></div>
-      <div class="owner-metric"><span>Promedio mensual</span><strong>${fmtMoney(total.averageMonthly)}</strong></div>
+      <div class="owner-metric"><span>Promedio mensual</span><strong>${ownerFmt(total.averageMonthly)}</strong></div>
     </div>
     <div class="owner-metrics-grid" style="margin-top:10px">
       <div class="owner-metric"><span>Total bruto de resúmenes (tarjetas)</span><strong>${fmtMoney(cardMetrics.grossTotalArs)}</strong></div>
@@ -21570,8 +21669,7 @@ function openPayModal(o){
       </div>
     `).join('')}
 
-    <div class="field">
-      <label>Medio de pago y referencia (opcional)</label><input id="servicePaymentReference" placeholder="Ej.: Mastercard · número de operación"></div><div class="field"><label>Comprobante</label>
+    ${serviceFundingFields()}<div class="field"><label>Comprobante</label>
       ${fileUploadButtonHtml('receiptFile','Adjuntar comprobante')}
       <div id="receiptLocalPreview" class="local-preview hidden"></div>
     </div>
@@ -21607,6 +21705,8 @@ function openPayModal(o){
     distributePaymentContributions(parseMoneyField(paidTotalInput.value));
   });
 
+  const updateFunding=bindServiceFundingFields({},()=>parseMoneyField(paidTotalInput.value));
+  paidTotalInput.addEventListener('blur',updateFunding);
   const receiptInput=document.getElementById('receiptFile');
   receiptInput.onchange=()=>renderLocalFilePreview(
     receiptInput,
@@ -21666,6 +21766,8 @@ function openPayModal(o){
       if(!seguro)return;
     }
 
+    let funding;
+    try{funding=readServiceFundingFields({total_amount:total});}catch(error){return toast(error.message);}
     const saveButton=document.getElementById('savePay');
     const original=saveButton.textContent;
     saveButton.disabled=true;
@@ -21697,7 +21799,7 @@ function openPayModal(o){
           paid_at:document.getElementById('paidDate').value,
           total_amount:total,
           created_by:session.user.id,
-          notes:buildPaymentNotes(document.getElementById('servicePaymentReference')?.value.trim()||null,{appliedDueStage:dueStage})
+          notes:buildPaymentNotes(null,{appliedDueStage:dueStage,...funding})
         })
         .select()
         .single();
@@ -22110,6 +22212,9 @@ function openPaymentDetail(id){
 
     <div class="notice">
       Este pago: ${fmtDate(p.paid_at)} · ${fmtMoneyExact(p.total_amount)}
+      <br>Medio de pago: ${esc(SERVICE_PAYMENT_METHODS[servicePaymentFunding(p).method])}${servicePaymentFunding(p).cardLabel?` · ${esc(servicePaymentFunding(p).cardLabel)}`:''}
+      ${servicePaymentFunding(p).reference?`<br>Referencia: ${esc(servicePaymentFunding(p).reference)}`:''}
+      ${servicePaymentFunding(p).method==='credit_card'?`<br><small>Servicio abonado con tarjeta. ${servicePaymentFunding(p).movementId?'Vínculo al resumen registrado; el consolidado lo verifica antes de descontar la repetición.':'Pendiente de vincular al consumo del resumen.'}</small>`:''}
       ${o?`<br>Total factura: ${fmtMoneyExact(o.amount)}${obligationExtraFields(o).effectivePeriodAmount!=null?` · Importe efectivo de este período: ${fmtMoneyExact(progress.amount)}`:''} · Pagado acumulado: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(paidAmountFor(o.id))} · Saldo: ${paymentAllocationsLoadError?'No disponible':fmtMoneyExact(balanceFor(o))}`:''}
       ${paymentAllocationsLoadError?'<br><small style="color:#7a1f1f">No se pudieron verificar las imputaciones de pagos de este espacio.</small>':''}
       <!-- CORRECCIÓN 6B4.11.1 - Sección 5 del pedido: "created_by" es solo
@@ -22177,6 +22282,7 @@ function openPaymentDetail(id){
     <div class="modalactions">
       <button class="btn outline" data-close>Cerrar</button>
       <button class="btn soft" id="openFolderBtn">Abrir carpeta</button>
+      ${canEdit()&&p.voided!==true?'<button class="btn soft" id="editServiceFunding">Editar medio de pago</button>':''}
       ${isOwner()&&p.voided!==true?'<button class="btn soft" id="correctHistoricalPaymentBtn">Corregir pago histórico</button>':''}
       ${canEdit()&&p.voided!==true?'<button class="btn danger" id="annulPaymentBtn">Anular pago</button>':''}
     </div>`);
@@ -22192,6 +22298,7 @@ function openPaymentDetail(id){
   }
 
   document.getElementById('openFolderBtn').onclick=()=>openFolder(s.id);
+  if(document.getElementById('editServiceFunding'))document.getElementById('editServiceFunding').onclick=()=>openServiceFundingModal(id);
 
   if(document.getElementById('correctHistoricalPaymentBtn')){
     document.getElementById('correctHistoricalPaymentBtn').onclick=()=>openCorrectHistoricalPaymentModal(id);

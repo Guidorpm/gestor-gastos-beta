@@ -1,0 +1,38 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+for(const file of ['index.html','index_operator.html']){
+ const src=fs.readFileSync(file,'utf8');
+ for(const match of src.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi))if(match[1].trim())new vm.Script(match[1]);
+ const names=['paymentNoteMetadata','buildPaymentNotes','servicePaymentFunding','serviceFundingMovementValid','serviceCardReconciliation','paidAmountForWithAllocations'];
+ const ctx={serviceMoneyCents:v=>Math.round(Number(v)*100),roundServiceMoney:v=>Math.round(v*100)/100,creditMovementType:m=>m.type};vm.createContext(ctx);
+ vm.runInContext("const SERVICE_PAYMENT_METHODS={unknown:'Sin informar',cash:'Efectivo',credit_card:'Tarjeta de crédito'};"+names.map(n=>{const start=src.indexOf('function '+n+'(');assert(start>=0);return src.slice(start,src.indexOf('\n}',start)+2)}).join('\n'),ctx);
+ const notes=ctx.buildPaymentNotes(null,{appliedDueStage:'first',paymentMethod:'credit_card',paymentCardId:'card',paymentCardLabel:'Mastercard',paymentReference:'9317345566',paymentCreditMovementId:'movement'});
+ assert.equal(ctx.servicePaymentFunding({notes}).reference,'9317345566');
+ assert.equal(JSON.parse(ctx.buildPaymentNotes(notes,{paymentReference:'other'})).appliedDueStage,'first');
+ assert.equal(ctx.servicePaymentFunding({notes:'legacy text'}).method,'unknown');
+ const p={id:'payment',obligation_id:'oct',total_amount:230588.42,notes};
+ const obligations=[{id:'sep',period:'2026-09-01',amount:240939.03},{id:'oct',period:'2026-10-01',amount:116863.76}];
+ const allocations=[{payment_id:'payment',obligation_id:'sep',allocated_amount:113724.66,is_active:true},{payment_id:'payment',obligation_id:'oct',allocated_amount:116863.76,is_active:true}];
+ const movement={id:'movement',card_id:'card',statement_id:'statement',amount:230588.42,currency:'ARS',type:'purchase'};
+ const statement={id:'statement',card_id:'card',due_date:'2026-11-01'};
+ const calc=(ps=[p],os=obligations,as=allocations,ms=[movement],ss=[statement],max='2026-10')=>ctx.serviceCardReconciliation('2026',ps,os,as,ms,ss,max);
+ assert.equal(calc().duplicate,230588.42);
+ assert.equal(calc().duplicateForAverage,0,'Future statement not in current average');
+ assert.equal(calc(undefined,undefined,undefined,undefined,undefined,'2026-11').duplicateForAverage,230588.42);
+ assert.equal(calc(undefined,undefined,undefined,[]).duplicate,0,'No imported purchase: no deduction');
+ assert.equal(calc(undefined,undefined,undefined,[]).unlinked,230588.42);
+ assert.equal(calc(undefined,undefined,undefined,[{...movement,card_id:'wrong'}]).duplicate,0);
+ assert.equal(calc(undefined,undefined,undefined,[{...movement,currency:'USD'}]).duplicate,0);
+ assert.equal(calc(undefined,undefined,undefined,[{...movement,type:'payment'}]).duplicate,0);
+ assert.equal(calc(undefined,undefined,undefined,[{...movement,amount:230588.43}]).duplicate,0);
+ assert.equal(calc([{...p,voided:true}]).duplicate,0);
+ assert.equal(calc([{...p,notes:null}]).financedPaid,0,'Legacy unchanged');
+ assert.equal(calc([p,{...p,id:'other'}]).duplicate,0,'Duplicate link rejected');
+ assert.equal(calc(undefined,undefined,undefined,undefined,[{...statement,due_date:'2027-01-01'}]).duplicate,0,'No same-year double count');
+ assert.equal(calc(undefined,[obligations[0],{...obligations[1],status:'cancelled'}]).duplicate,113724.66);
+ assert.equal(ctx.paidAmountForWithAllocations('oct',[p],allocations),116863.76,'Service remains paid regardless of funding');
+ assert.equal(ctx.paidAmountForWithAllocations('sep',[p,{id:'prior',obligation_id:'sep',total_amount:127214.37}],allocations),240939.03);
+ assert.equal(calc().financedPaid,230588.42,'Single payment spanning two months counted once');
+ assert(src.includes('notes:buildPaymentNotes(null,{appliedDueStage:dueStage,...funding})'));
+ assert(src.indexOf('Servicios pagados con tarjeta:')>src.indexOf('function renderOwnerDashboard()'));
+ console.log(file+': syntax and 22 funding/reconciliation assertions passed');
+}
