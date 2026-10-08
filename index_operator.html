@@ -20433,6 +20433,17 @@ function bindServiceInvoiceItems(extra,editable){
   return ()=>active?read():null;
 }
 
+async function restoreObligationMonth(id,serviceId,key){
+  if(!isOwner())return toast('Solo el titular puede restaurar un registro');
+  const o=obligations.find(x=>x.id===id);if(!o||!isObligationVoided(o))return;
+  const history=obligationEditHistory(o);
+  const notes=updateObligationNotes(o.notes,{editHistory:[...history,{at:new Date().toISOString(),by:session.user.id,changedFields:{estado:{before:'Anulado',after:'Restaurado para corregir datos'}}}].slice(-20)});
+  try{
+    const {data,error}=await sb.from('obligations').update({status:'pending',notes}).eq('id',id).eq('status','cancelled').select('id').single();
+    if(error)throw error;
+    await syncObligationStatus(id);await refreshDashboardData();openObligation(serviceId,key);toast('Registro restaurado: revisá importe y período');
+  }catch(e){toast(e.message||'No se pudo restaurar');}
+}
 function openObligation(serviceId,key){
   const s=services.find(x=>x.id===serviceId);
   const o=obligationFor(serviceId,key);
@@ -20528,7 +20539,7 @@ function openObligation(serviceId,key){
     ${voided?`
       <div class="notice" style="border-color:#c9cdd1;background:#f1f3f2">
         <strong>Anulado por ${esc(displayNameForUserId(voidInfo?.voidedBy))}${voidInfo?.voidedAt?` · ${esc(fmtDate(voidInfo.voidedAt.slice(0,10)))}`:''}</strong><br>
-        Motivo: ${esc(voidInfo?.voidReason||'Sin motivo registrado')}
+        Motivo: ${esc(voidInfo?.voidReason||'Sin motivo registrado')}<br>${isOwner()?'<button type="button" class="btn outline" id="restoreMonthData">Restaurar registro para corregirlo</button>':''}
       </div>`:''}
 
     ${isNewForInactiveService?`
@@ -20988,6 +20999,8 @@ function openObligation(serviceId,key){
     };
   }
 
+  const restoreButton=document.getElementById('restoreMonthData');
+  if(restoreButton)restoreButton.onclick=()=>{restoreButton.disabled=true;restoreObligationMonth(o.id,serviceId,key);};
   const readServiceInvoiceItems=bindServiceInvoiceItems(extraFields,editableNow);
   if(!editableNow)return;
 
