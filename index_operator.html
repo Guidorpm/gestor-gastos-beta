@@ -3450,6 +3450,23 @@ function creditDollarPerceptionCode(value){
   const code=typeof value==='string'?value:creditTaxCode(value);
   return ['RG5617','RG4815'].includes(String(code||'').toUpperCase());
 }
+function creditPesoSettlement(items){
+  return (items||[]).reduce((total,item)=>{
+    const meta=creditMovementMeta(item);
+    if(creditMovementType(item)!=='payment'||item.currency!=='ARS'||meta.paymentSettlement!=='usd_in_ars'||!(meta.source==='manual_payment'||meta.appliesToCurrentStatement===true))return total;
+    const usd=Number(meta.settledUsd),rate=Number(meta.exchangeRate),ars=Math.abs(Number(item.amount));
+    if(!Number.isFinite(usd)||!Number.isFinite(rate)||!Number.isFinite(ars)||usd<=0||rate<=0||ars<=0||Math.abs(Math.round(usd*rate*100)-Math.round(ars*100))>1)return total;
+    total.usd+=usd;total.ars+=ars;
+    return total;
+  },{ars:0,usd:0});
+}
+function creditPesoSettlementError(usd,rate,ars,remainingUsd){
+  if(![usd,rate,ars].every(v=>Number.isFinite(v)&&v>0))return 'Completá los dólares cancelados, el tipo de cambio y los pesos debitados con importes mayores a cero.';
+  if(Math.abs(usd*100-Math.round(usd*100))>0.00001)return 'Los dólares cancelados deben tener como máximo dos decimales.';
+  if(usd>remainingUsd+0.001)return 'Los dólares cancelados superan el saldo USD pendiente.';
+  if(Math.abs(Math.round(usd*rate*100)-Math.round(ars*100))>1)return 'Los pesos debitados deben coincidir con dólares × tipo de cambio. No sumes aquí percepciones ya incluidas en el saldo en pesos.';
+  return '';
+}
 function creditCurrentStatementPayments(items){
   return (items||[]).reduce((totals,item)=>{
     if(creditMovementType(item)!=='payment')return totals;
@@ -3469,7 +3486,7 @@ function creditPaymentStatus(model,statement){
   const usdSettled=!hasUsdBalance||model.remainingUsd<=0.01;
   if(statement.status==='paid'||(arsSettled&&usdSettled))return{code:'paid',label:'Pagada'};
   if(arsSettled&&hasUsdBalance&&!usdSettled)return{code:'paid_ars_pending_usd',label:'Pagada en pesos / pendiente USD'};
-  if(usdSettled&&hasUsdBalance&&!arsSettled&&(model.paidUsd>0||statement.status==='partial'))return{code:'paid_usd_pending_ars',label:'Pagada en USD / pendiente pesos'};
+  if(usdSettled&&hasUsdBalance&&!arsSettled&&(model.paidUsd>0||model.convertedUsd>0||statement.status==='partial'))return{code:'paid_usd_pending_ars',label:model.convertedUsd>0?'Dólares cancelados / pendiente pesos':'Pagada en USD / pendiente pesos'};
   if(model.paidArs>0||model.paidUsd>0||statement.status==='partial')return{code:'partial',label:'Pago parcial'};
   return{code:'pending',label:'Pendiente'};
 }
@@ -3616,6 +3633,7 @@ function creditPaymentModel(statement,items){
   const fees=creditSumSystem(items,{type:'fee',currency:'ARS',positiveOnly:true});
   const dollarTaxLabel=rg4815>0&&rg5617>0?'RG 4815 / RG 5617':rg4815>0?'RG 4815':rg5617>0?'RG 5617':statementMeta.statementTaxFamily||'Percepción dólar';
   const paid=creditCurrentStatementPayments(items);
+  const converted=creditPesoSettlement(items);
   // CORRECCIÓN 6B4.9 - Fase 3/5 del pedido: antes se descontaba la
   // percepción del objetivo ARS con solo que hubiera saldo USD Y percepción
   // (canApplyDollarPerception=bankUsd>0&&dollarPerception>0), sin importar
@@ -3626,17 +3644,17 @@ function creditPaymentModel(statement,items){
   // basado en pagos ya registrados) — nunca por la sola existencia del
   // saldo. `canApplyDollarPerception` se conserva como alias de solo
   // lectura para no romper pantallas que ya lo mostraban.
-  const usdPaymentDecision=creditUsdPaymentDecision(bankUsd,paid.usd);
+  const usdPaymentDecision=converted.usd>0?(bankUsd-paid.usd-converted.usd<=0.01?'PAID_IN_ARS':'PARTIAL_IN_ARS'):creditUsdPaymentDecision(bankUsd,paid.usd);
   const eligibleForeignCurrencyPerceptionArs=usdPaymentDecision==='FULL_USD'?dollarPerception:0;
   const canApplyDollarPerception=usdPaymentDecision==='FULL_USD'&&dollarPerception>0;
-  const beforePaymentsArs=Math.max(0,bankArs-eligibleForeignCurrencyPerceptionArs);
+  const beforePaymentsArs=Math.max(0,bankArs-eligibleForeignCurrencyPerceptionArs+converted.ars);
   const beforePaymentsUsd=Math.max(0,bankUsd);
   const remainingArs=Math.max(0,beforePaymentsArs-paid.ars);
-  const remainingUsd=Math.max(0,beforePaymentsUsd-paid.usd);
+  const remainingUsd=Math.max(0,beforePaymentsUsd-paid.usd-converted.usd);
   const model={
     bankArs,bankUsd,rg5617,rg4815,dollarPerception,dollarTaxLabel,priorRefund,
     ivaRg4240,ivaPerception,iibb,sellosArs,sellosUsd,interest,fees,
-    beforePaymentsArs,beforePaymentsUsd,paidArs:paid.ars,paidUsd:paid.usd,
+    beforePaymentsArs,beforePaymentsUsd,paidArs:paid.ars,paidUsd:paid.usd,convertedArs:converted.ars,convertedUsd:converted.usd,
     remainingArs,remainingUsd,suggestedArs:remainingArs,suggestedUsd:remainingUsd,
     usdPaymentDecision,eligibleForeignCurrencyPerceptionArs,
     canApplyDollarPerception
@@ -3671,7 +3689,7 @@ function creditUsdNextStatement(statement){
   return best;
 }
 function creditUsdDisplayDecision(statement,model){
-  if(model.usdPaymentDecision==='FULL_USD'||model.usdPaymentDecision==='PARTIAL_USD')return model.usdPaymentDecision;
+  if(['FULL_USD','PARTIAL_USD','PAID_IN_ARS','PARTIAL_IN_ARS'].includes(model.usdPaymentDecision))return model.usdPaymentDecision;
   if(model.bankUsd<=0.01)return model.usdPaymentDecision;
   const nextStatement=creditUsdNextStatement(statement);
   if(nextStatement){
@@ -3681,6 +3699,8 @@ function creditUsdDisplayDecision(statement,model){
   return model.usdPaymentDecision;
 }
 const CREDIT_USD_STATE_MESSAGES={
+  PAID_IN_ARS:'Dólares cancelados en pesos. La percepción se conserva en el saldo en pesos.',
+  PARTIAL_IN_ARS:'Dólares parcialmente cancelados en pesos. La percepción se conserva.',
   FULL_USD:'Los dólares ya están cancelados. Queda pagar el saldo en pesos.',
   PARTIAL_USD:'Hay un pago parcial en dólares. Queda saldo USD pendiente y la percepción requiere revisión.',
   PENDING_DECISION:'Todavía no se registró cómo se cancelará el saldo en dólares.',
@@ -3697,7 +3717,7 @@ function creditUsdPaymentRecommendation(statement,items,decision,partialUsdAmoun
   const model=creditPaymentModel(statement,items);
   const bankArs=model.bankArs,bankUsd=model.bankUsd;
   const paidArs=model.paidArs,paidUsd=model.paidUsd;
-  const remainingUsdReal=Math.max(0,bankUsd-paidUsd);
+  const remainingUsdReal=model.remainingUsd;
   const realDecision=creditUsdDisplayDecision(statement,model);
   const simulated=decision||realDecision;
   const isHypothetical=decision!=null&&decision!==realDecision;
@@ -3707,16 +3727,20 @@ function creditUsdPaymentRecommendation(statement,items,decision,partialUsdAmoun
   const hasPerception=model.dollarPerception>0;
   if(bankUsd<=0.01){
     perceptionTreatment='NOT_APPLICABLE';
-    recommendedArs=Math.max(0,bankArs-paidArs);
+    recommendedArs=Math.max(0,bankArs+model.convertedArs-paidArs);
     recommendedUsd=0;
+  }else if(['PAID_IN_ARS','PARTIAL_IN_ARS'].includes(simulated)){
+    perceptionTreatment=hasPerception?'PERCEPTION_PAYABLE':'NOT_APPLICABLE';
+    recommendedArs=model.remainingArs;recommendedUsd=model.remainingUsd;pendingUsdAfter=model.remainingUsd;
+    warnings.push('La cancelación en pesos conserva las percepciones del resumen; no se agregan otra vez.');
   }else if(simulated==='FULL_USD'){
-    if(hasPerception){
+    if(hasPerception&&!model.convertedUsd){
       eligiblePerceptionArs=model.dollarPerception;
       perceptionTreatment='PERCEPTION_DEDUCTIBLE';
-      recommendedArs=Math.max(0,bankArs-eligiblePerceptionArs-paidArs);
+      recommendedArs=Math.max(0,bankArs+model.convertedArs-eligiblePerceptionArs-paidArs);
     }else{
       perceptionTreatment='NOT_APPLICABLE';
-      recommendedArs=Math.max(0,bankArs-paidArs);
+      recommendedArs=Math.max(0,bankArs+model.convertedArs-paidArs);
     }
     recommendedUsd=remainingUsdReal;
     pendingUsdAfter=0;
@@ -3726,7 +3750,7 @@ function creditUsdPaymentRecommendation(statement,items,decision,partialUsdAmoun
     }
   }else if(simulated==='NO_USD'){
     perceptionTreatment=hasPerception?'PERCEPTION_PAYABLE':'NOT_APPLICABLE';
-    recommendedArs=Math.max(0,bankArs-paidArs);
+    recommendedArs=Math.max(0,bankArs+model.convertedArs-paidArs);
     recommendedUsd=0;
     pendingUsdAfter=remainingUsdReal;
     if(model.usdPaymentDecision==='PARTIAL_USD'||model.usdPaymentDecision==='FULL_USD'){
@@ -3736,7 +3760,7 @@ function creditUsdPaymentRecommendation(statement,items,decision,partialUsdAmoun
   }else if(simulated==='PARTIAL_USD'){
     perceptionTreatment=hasPerception?'PERCEPTION_PARTIAL_REVIEW':'NOT_APPLICABLE';
     calculationConfidence='baja';
-    recommendedArs=Math.max(0,bankArs-paidArs);
+    recommendedArs=Math.max(0,bankArs+model.convertedArs-paidArs);
     if(partialUsdAmount>0&&partialUsdAmount<=remainingUsdReal+0.009){
       recommendedUsd=roundMoney(partialUsdAmount);
       pendingUsdAfter=Math.max(0,roundMoney(remainingUsdReal-recommendedUsd));
@@ -3751,14 +3775,14 @@ function creditUsdPaymentRecommendation(statement,items,decision,partialUsdAmoun
   }else if(simulated==='PESIFIED_BY_BANK'){
     perceptionTreatment='NOT_APPLICABLE';
     calculationConfidence='baja';
-    recommendedArs=Math.max(0,bankArs-paidArs);
+    recommendedArs=Math.max(0,bankArs+model.convertedArs-paidArs);
     recommendedUsd=0;
     pendingUsdAfter=0;
     warnings.push('El banco ya trasladó o convirtió el saldo en dólares al siguiente resumen. Revisar la composición de ese resumen antes de decidir un pago en dólares acá.');
   }else{
     perceptionTreatment='INSUFFICIENT_INFORMATION';
     calculationConfidence='baja';
-    recommendedArs=Math.max(0,bankArs-paidArs);
+    recommendedArs=Math.max(0,bankArs+model.convertedArs-paidArs);
     recommendedUsd=remainingUsdReal;
     pendingUsdAfter=0;
     warnings.push('Todavía no hay pago en dólares registrado ni una decisión confirmada para este resumen.');
@@ -3971,7 +3995,9 @@ function creditHistoricalReviewRows(card){
 // POSICIÓN ACTUAL por tarjeta (Fase 4.B / Fase 13): un solo resumen por
 // tarjeta — el último — exactamente el mismo criterio que ya usa el panel
 // principal (creditRowModel), presentado como tabla de auditoría explícita.
-const CREDIT_USD_DECISION_LABELS={FULL_USD:'Pagar todo en USD',PARTIAL_USD:'Pago parcial en USD',NO_USD:'No pagar en USD',PENDING_DECISION:'Pendiente de decidir',PESIFIED_BY_BANK:'Pesificado por el banco'};
+const CREDIT_USD_DECISION_LABELS={
+  PAID_IN_ARS:'Dólares cancelados en pesos. La percepción se conserva en el saldo en pesos.',
+  PARTIAL_IN_ARS:'Dólares parcialmente cancelados en pesos. La percepción se conserva.',FULL_USD:'Pagar todo en USD',PARTIAL_USD:'Pago parcial en USD',NO_USD:'No pagar en USD',PENDING_DECISION:'Pendiente de decidir',PESIFIED_BY_BANK:'Pesificado por el banco'};
 function creditCurrentPositionAuditRows(){
   return creditCards.map(card=>{
     const latest=creditLatestStatement(card.id);
@@ -7877,7 +7903,7 @@ function creditPaymentMethodLabel(value){
 function creditPaymentReceiptsRowHtml(movement){
   const receipts=creditReceiptsForMovement(movement.id);
   const meta=creditMovementMeta(movement);
-  const currencyLabel=movement.currency==='USD'?'Pago en dólares':'Pago en pesos';
+  const currencyLabel=meta.paymentSettlement==='usd_in_ars'?`Dólares pagados en pesos · ${fmtUsd(meta.settledUsd)} × ${formatARS(meta.exchangeRate)}`:movement.currency==='USD'?'Pago en dólares':'Pago en pesos';
   const amountLabel=movement.currency==='USD'?formatUSD(Math.abs(movement.amount)):formatARS(Math.abs(movement.amount));
   return `<div class="credit-payment-receipt-row">
     <div class="credit-payment-receipt-main">
@@ -12986,6 +13012,7 @@ function creditStatementCompositionHtml(statement,items,model){
     ${row('Impuestos',s.taxArs,0)}
     ${s.adjustmentsArs?row('Pagos, devoluciones y ajustes incluidos en el PDF',s.adjustmentsArs,0):''}
     ${row('Pagos aplicados',model.paidArs,model.paidUsd)}
+    ${model.convertedUsd>0?row('De los pagos ARS, aplicados a cancelar USD',model.convertedArs,model.convertedUsd):''}
     <div class="credit-currency-row remaining"><span>Saldo vigente</span><strong>${formatARS(model.remainingArs)}${model.remainingUsd>0.01?` · ${fmtUsd(model.remainingUsd)}`:''}</strong></div>
     <div class="credit-note ${reconciliation.status==='MATCH'?'':'warning'}">${esc(reconciliation.message)}</div>
     <div class="credit-note ${taxCoherence.status==='MATCH'?'':'warning'}">${esc(taxCoherence.message)}</div>
@@ -13039,6 +13066,7 @@ function creditUsdRecRowsHtml(rec,model,statementId,partialAmount,partialFieldSu
       <div class="credit-currency-row"><span>Otros impuestos ARS</span><strong>${formatARS(otherTaxesArs)}</strong></div>
       <div class="credit-currency-row"><span>Pagos ARS registrados</span><strong>${formatARS(rec.paidArs)}</strong></div>
       <div class="credit-currency-row"><span>Pagos USD registrados</span><strong>${fmtUsd(rec.paidUsd)}</strong></div>
+      ${model.convertedUsd>0?`<div class="credit-currency-row"><span>USD cancelados en pesos</span><strong>${fmtUsd(model.convertedUsd)} con ${formatARS(model.convertedArs)}</strong></div>`:''}
       <div class="credit-currency-row"><span>Saldo pendiente ARS</span><strong>${formatARS(model.remainingArs)}</strong></div>
       <div class="credit-currency-row"><span>Saldo pendiente USD</span><strong>${fmtUsd(model.remainingUsd)}</strong></div>
     </div>
@@ -13126,7 +13154,7 @@ function bindCreditUsdSimButtons(){
       }
       const items=statement?creditMovementsForStatement(statementId):[];
       const model=statement?creditPaymentModel(statement,items):null;
-      const maxUsd=model?Math.max(0,model.bankUsd-model.paidUsd):0;
+      const maxUsd=model?model.remainingUsd:0;
       if(value>maxUsd+0.009){
         toast(`El importe simulado no puede superar el saldo USD pendiente (${fmtUsd(maxUsd)})`);
         delete creditUsdPartialAmount[statementId];
@@ -13315,7 +13343,7 @@ function creditSelectedDetailHtml(selectedCard,statements,selectedStatement,move
     :`<div class="credit-payment-note ${model.paymentStatus.code==='partial'?'warning':''}"><div><strong>${model.paymentStatus.code==='partial'?'Hay pagos parciales registrados':'Todavía no registraste pagos para este saldo'}</strong><small>Los pagos del resumen anterior no se vuelven a restar. Solamente cuentan los pagos que registres para este resumen.</small></div><button class="credit-payment-button" data-register-credit-payment="${selectedStatement.id}">Registrar pago</button></div>`;
   const documentsSection=creditDocumentsSectionHtml(selectedStatement,movements);
   const monthlyPaymentsSection=creditCardPaymentsSectionHtml(selectedCard);
-  return `<section class="credit-detail-panel"><div class="credit-detail-head"><div><h2>${esc(creditCardName(selectedCard))} · ${creditStatementLabel(selectedStatement)}</h2><p>Cierre ${selectedStatement.close_date?fmtDate(selectedStatement.close_date):'—'} · Vencimiento ${selectedStatement.due_date?fmtDate(selectedStatement.due_date):'—'}</p></div><div class="credit-detail-toolbar"><select id="creditStatementQuickSelect">${statements.map(statement=>`<option value="${statement.id}" ${statement.id===selectedStatement.id?'selected':''}>${creditStatementLabel(statement)}</option>`).join('')}</select><button class="credit-payment-button" data-register-credit-payment="${selectedStatement.id}" ${model.paymentStatus.code==='paid'?'disabled':''}>Registrar pago</button><button class="btn outline small" id="editCreditCard">Editar tarjeta</button><button class="btn outline small" id="editStatement">Editar resumen</button><button class="btn primary small" id="openDirectStatementUpload">Subir resumen</button><button class="btn outline small" id="openHistoricalUpload">Cargar resúmenes históricos</button>${selectedCard.brand==='mercado_pago'&&canRepairCreditDocuments()?'<button class="btn outline small" id="openMpReplace">Reemplazar resúmenes de esta tarjeta</button>':''}<button class="btn primary small" id="newMovement">+ Consumo</button></div></div><div class="credit-currency-summary"><div class="credit-currency-block"><h3>Pesos</h3><div class="credit-currency-row"><span>Saldo original liquidado</span><strong>${formatARS(model.bankArs)}</strong></div><div class="credit-currency-row deduction"><span>Percepciones descontables</span><strong>− ${formatARS(model.dollarPerception)}</strong></div><div class="credit-currency-row target"><span>Objetivo de pago</span><strong>${formatARS(model.beforePaymentsArs)}</strong></div><div class="credit-currency-row deduction"><span>Pagos registrados</span><strong>− ${formatARS(model.paidArs)}</strong></div><div class="credit-currency-row remaining"><span>Saldo pendiente</span><strong>${formatARS(model.remainingArs)}</strong></div></div><div class="credit-currency-block"><h3>Dólares</h3><div class="credit-currency-row"><span>Saldo original liquidado</span><strong>${formatUSD(model.bankUsd)}</strong></div><div class="credit-currency-row deduction"><span>Pagos registrados</span><strong>− ${formatUSD(model.paidUsd)}</strong></div><div class="credit-currency-row remaining"><span>Saldo pendiente</span><strong>${formatUSD(model.remainingUsd)}</strong></div></div><div class="credit-currency-status"><span>Estado</span><strong><span class="credit-payment-state ${model.paymentStatus.code}">${model.paymentStatus.label}</span></strong></div></div>${creditUsdPaymentRecommendationHtml(selectedStatement,movements)}${creditStatementCompositionHtml(selectedStatement,movements,model)}${paymentNote}${documentsSection}${monthlyPaymentsSection}<details class="credit-composition" data-credit-panel="composition" ${isCreditPanelOpen('composition')?'open':''}><summary><span>Ver composición completa del resumen</span><span class="credit-review-pill ${reviewPillClass}">${reviewPillLabel}</span></summary><div class="credit-composition-body"><div class="credit-column-summary"><div class="credit-column-box"><h3>Consumos</h3><p>Compras y servicios clasificables.</p><div class="big">${formatARS(totals.totalArs)} · ${fmtUsd(totals.totalUsd)}</div><small>GR ${formatARS(totals.grArs)} · Personal ${formatARS(totals.personalArs)}</small></div><div class="credit-column-box tax"><h3>Impuestos y cargos</h3><p>Separados de los consumos.</p><div class="big">${formatARS(taxTotals.ars+chargeTotals.ars)}</div><small>Impuestos ${formatARS(taxTotals.ars)} · cargos ${formatARS(chargeTotals.ars)}</small></div><div class="credit-column-box alert"><h3>Revisión necesaria</h3><p>Consumos sin confirmar o sin asignar.</p><div class="big">${reviewCount}</div><small>${identification.unrecognized} marcados como no reconocidos</small></div></div><div class="credit-review-banner ${reviewClass}"><div><strong>${reviewBannerTitle}</strong><small>${noMovementsExtracted&&!reviewCount?'Este resumen se guardó solo con sus totales generales -- reprocesalo para completar el detalle línea por línea.':'El indicador permanecerá visible hasta que cada compra esté reconocida y asignada a GR o Personal.'}</small></div>${reviewCount?'<button class="btn primary small" data-set-credit-filter="pending">Revisar ahora</button>':''}</div><details class="credit-subsection" data-credit-panel="purchases" ${isCreditPanelOpen('purchases',reviewCount>0)?'open':''}><summary><span>Consumos y reconocimiento</span><span>${purchases.length} movimientos</span></summary><div class="credit-subsection-body">${creditPurchasesReviewTableHtml(purchases)}</div></details><details class="credit-subsection" data-credit-panel="taxes" ${isCreditPanelOpen('taxes')?'open':''}><summary><span>Impuestos y percepciones</span><span>${formatARS(taxTotals.ars)} · ${fmtUsd(taxTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(taxes,'No hay impuestos ni percepciones registrados.')}</div></details><details class="credit-subsection" data-credit-panel="charges" ${isCreditPanelOpen('charges')?'open':''}><summary><span>Intereses y cargos bancarios</span><span>${formatARS(chargeTotals.ars)} · ${fmtUsd(chargeTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(charges,'No hay intereses ni cargos registrados.')}</div></details><details class="credit-subsection" data-credit-panel="payments" ${isCreditPanelOpen('payments')?'open':''}><summary><span>Pagos, devoluciones y ajustes</span><span>${formatARS(paymentTotals.ars)} · ${fmtUsd(paymentTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(payments,'No hay pagos, devoluciones ni ajustes registrados.')}</div></details></div></details>${creditTraceabilityHtml(selectedCard)}${creditAnnualCalendarHtml(selectedCard,new Date().getFullYear())}</section>`;
+  return `<section class="credit-detail-panel"><div class="credit-detail-head"><div><h2>${esc(creditCardName(selectedCard))} · ${creditStatementLabel(selectedStatement)}</h2><p>Cierre ${selectedStatement.close_date?fmtDate(selectedStatement.close_date):'—'} · Vencimiento ${selectedStatement.due_date?fmtDate(selectedStatement.due_date):'—'}</p></div><div class="credit-detail-toolbar"><select id="creditStatementQuickSelect">${statements.map(statement=>`<option value="${statement.id}" ${statement.id===selectedStatement.id?'selected':''}>${creditStatementLabel(statement)}</option>`).join('')}</select><button class="credit-payment-button" data-register-credit-payment="${selectedStatement.id}" ${model.paymentStatus.code==='paid'?'disabled':''}>Registrar pago</button><button class="btn outline small" id="editCreditCard">Editar tarjeta</button><button class="btn outline small" id="editStatement">Editar resumen</button><button class="btn primary small" id="openDirectStatementUpload">Subir resumen</button><button class="btn outline small" id="openHistoricalUpload">Cargar resúmenes históricos</button>${selectedCard.brand==='mercado_pago'&&canRepairCreditDocuments()?'<button class="btn outline small" id="openMpReplace">Reemplazar resúmenes de esta tarjeta</button>':''}<button class="btn primary small" id="newMovement">+ Consumo</button></div></div><div class="credit-currency-summary"><div class="credit-currency-block"><h3>Pesos</h3><div class="credit-currency-row"><span>Saldo original liquidado</span><strong>${formatARS(model.bankArs)}</strong></div><div class="credit-currency-row deduction"><span>Percepciones descontables</span><strong>− ${formatARS(model.eligibleForeignCurrencyPerceptionArs)}</strong></div>${model.convertedArs>0?`<div class="credit-currency-row"><span>Pesos aplicados a cancelar dólares</span><strong>${formatARS(model.convertedArs)}</strong></div>`:''}<div class="credit-currency-row target"><span>Objetivo de pago</span><strong>${formatARS(model.beforePaymentsArs)}</strong></div><div class="credit-currency-row deduction"><span>Pagos registrados</span><strong>− ${formatARS(model.paidArs)}</strong></div><div class="credit-currency-row remaining"><span>Saldo pendiente</span><strong>${formatARS(model.remainingArs)}</strong></div></div><div class="credit-currency-block"><h3>Dólares</h3><div class="credit-currency-row"><span>Saldo original liquidado</span><strong>${formatUSD(model.bankUsd)}</strong></div><div class="credit-currency-row deduction"><span>Pagos registrados</span><strong>− ${formatUSD(model.paidUsd)}</strong></div>${model.convertedUsd>0?`<div class="credit-currency-row deduction"><span>Cancelados en pesos</span><strong>− ${formatUSD(model.convertedUsd)}</strong></div>`:''}<div class="credit-currency-row remaining"><span>Saldo pendiente</span><strong>${formatUSD(model.remainingUsd)}</strong></div></div><div class="credit-currency-status"><span>Estado</span><strong><span class="credit-payment-state ${model.paymentStatus.code}">${model.paymentStatus.label}</span></strong></div></div>${creditUsdPaymentRecommendationHtml(selectedStatement,movements)}${creditStatementCompositionHtml(selectedStatement,movements,model)}${paymentNote}${documentsSection}${monthlyPaymentsSection}<details class="credit-composition" data-credit-panel="composition" ${isCreditPanelOpen('composition')?'open':''}><summary><span>Ver composición completa del resumen</span><span class="credit-review-pill ${reviewPillClass}">${reviewPillLabel}</span></summary><div class="credit-composition-body"><div class="credit-column-summary"><div class="credit-column-box"><h3>Consumos</h3><p>Compras y servicios clasificables.</p><div class="big">${formatARS(totals.totalArs)} · ${fmtUsd(totals.totalUsd)}</div><small>GR ${formatARS(totals.grArs)} · Personal ${formatARS(totals.personalArs)}</small></div><div class="credit-column-box tax"><h3>Impuestos y cargos</h3><p>Separados de los consumos.</p><div class="big">${formatARS(taxTotals.ars+chargeTotals.ars)}</div><small>Impuestos ${formatARS(taxTotals.ars)} · cargos ${formatARS(chargeTotals.ars)}</small></div><div class="credit-column-box alert"><h3>Revisión necesaria</h3><p>Consumos sin confirmar o sin asignar.</p><div class="big">${reviewCount}</div><small>${identification.unrecognized} marcados como no reconocidos</small></div></div><div class="credit-review-banner ${reviewClass}"><div><strong>${reviewBannerTitle}</strong><small>${noMovementsExtracted&&!reviewCount?'Este resumen se guardó solo con sus totales generales -- reprocesalo para completar el detalle línea por línea.':'El indicador permanecerá visible hasta que cada compra esté reconocida y asignada a GR o Personal.'}</small></div>${reviewCount?'<button class="btn primary small" data-set-credit-filter="pending">Revisar ahora</button>':''}</div><details class="credit-subsection" data-credit-panel="purchases" ${isCreditPanelOpen('purchases',reviewCount>0)?'open':''}><summary><span>Consumos y reconocimiento</span><span>${purchases.length} movimientos</span></summary><div class="credit-subsection-body">${creditPurchasesReviewTableHtml(purchases)}</div></details><details class="credit-subsection" data-credit-panel="taxes" ${isCreditPanelOpen('taxes')?'open':''}><summary><span>Impuestos y percepciones</span><span>${formatARS(taxTotals.ars)} · ${fmtUsd(taxTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(taxes,'No hay impuestos ni percepciones registrados.')}</div></details><details class="credit-subsection" data-credit-panel="charges" ${isCreditPanelOpen('charges')?'open':''}><summary><span>Intereses y cargos bancarios</span><span>${formatARS(chargeTotals.ars)} · ${fmtUsd(chargeTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(charges,'No hay intereses ni cargos registrados.')}</div></details><details class="credit-subsection" data-credit-panel="payments" ${isCreditPanelOpen('payments')?'open':''}><summary><span>Pagos, devoluciones y ajustes</span><span>${formatARS(paymentTotals.ars)} · ${fmtUsd(paymentTotals.usd)}</span></summary><div class="credit-subsection-body">${creditSystemRowsHtml(payments,'No hay pagos, devoluciones ni ajustes registrados.')}</div></details></div></details>${creditTraceabilityHtml(selectedCard)}${creditAnnualCalendarHtml(selectedCard,new Date().getFullYear())}</section>`;
 }
 
 async function reviewCurrentCreditDocuments(){
@@ -17033,8 +17061,9 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
   const todayValue=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
   modal(`<h2 id="creditPaymentModalTitle">Registrar pago</h2><p class="sub">${esc(creditCardName(card))} · ${creditStatementLabel(statement)}</p>
     <div class="credit-payment-modal-balance"><div><span>Restante en pesos</span><strong>${formatARS(model.remainingArs)}</strong></div><div><span>Restante en dólares</span><strong>${fmtUsd(model.remainingUsd)}</strong></div></div>
-    <div class="grid2"><div class="field"><label>Fecha del pago</label><input id="creditPaymentDate" type="date" value="${todayValue}"></div><div class="field"><label>Moneda</label><select id="creditPaymentCurrency"><option value="ARS" ${model.remainingArs>0?'selected':''}>Pesos</option><option value="USD" ${model.remainingArs<=0&&model.remainingUsd>0?'selected':''}>Dólares</option></select></div></div>
-    <div class="grid2"><div class="field"><label>Importe pagado</label><input id="creditPaymentAmount" type="text" inputmode="decimal" autocomplete="off" value="" placeholder="Ej: 1250,50"></div><div class="field"><label>Medio</label><select id="creditPaymentMethod"><option value="transferencia">Transferencia</option><option value="debito">Débito automático</option><option value="pago_banco">Pago desde banco</option><option value="otro">Otro</option></select></div></div>
+    <div class="grid2"><div class="field"><label>Fecha del pago</label><input id="creditPaymentDate" type="date" value="${todayValue}"></div><div class="field"><label>Tipo de pago</label><select id="creditPaymentCurrency"><option value="ARS" ${model.remainingArs>0?'selected':''}>Pesos</option><option value="USD" ${model.remainingArs<=0&&model.remainingUsd>0?'selected':''}>Dólares</option><option value="USD_ARS">Dólares pagados en pesos</option></select></div></div>
+    <div class="grid2"><div class="field"><label id="creditPaymentAmountLabel">Importe pagado</label><input id="creditPaymentAmount" type="text" inputmode="decimal" autocomplete="off" value="" placeholder="Ej: 1250,50"></div><div class="field"><label>Medio</label><select id="creditPaymentMethod"><option value="transferencia">Transferencia</option><option value="debito">Débito automático</option><option value="pago_banco">Pago desde banco</option><option value="otro">Otro</option></select></div></div>
+    <div id="creditConversionFields" hidden><div class="grid2"><div class="field"><label>Dólares cancelados (USD)</label><input id="creditConvertedUsd" type="text" inputmode="decimal" value="${esc(formatMoneyField(model.remainingUsd))}"></div><div class="field"><label>Tipo de cambio (pesos por dólar)</label><input id="creditConversionRate" type="text" inputmode="decimal" placeholder="Ej: 1535"></div></div><p class="sub">Ingresá el débito que corresponde a la conversión de dólares. Las percepciones ya incluidas en el saldo en pesos se conservan: no las sumes otra vez. Registrá la parte original en pesos como un pago separado.</p></div>
     <div class="field"><label>Observación</label><textarea id="creditPaymentNotes" placeholder="Opcional: número de operación o referencia"></textarea></div>
     <div id="creditPaymentPreview" class="credit-note"></div>
     <div class="field"><label>Comprobante (opcional)</label>${fileUploadButtonHtml('creditPaymentReceiptFiles','Adjuntar comprobante',{multiple:true})}<div id="creditPaymentReceiptPreview"></div><small class="sub">Podés adjuntar uno o varios comprobantes ahora, o agregarlos después desde el resumen.</small></div>
@@ -17042,6 +17071,8 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
     <div class="actions end"><button type="button" class="btn soft" data-close>Cancelar</button><button type="button" class="btn primary" id="saveCreditPayment">Guardar pago</button></div>`);
   const currency=document.getElementById('creditPaymentCurrency');
   const amount=document.getElementById('creditPaymentAmount');
+  const usdInput=document.getElementById('creditConvertedUsd');
+  const rateInput=document.getElementById('creditConversionRate');
   const titleEl=document.getElementById('creditPaymentModalTitle');
   const previewEl=document.getElementById('creditPaymentPreview');
   // CORRECCIÓN 6B4.9.1 - Sección 12 del pedido: el título y la vista previa
@@ -17050,6 +17081,13 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
   const updatePreview=()=>{
     const paymentCurrency=currency.value;
     const rawValue=parseLocalizedPaymentAmount(amount.value);
+    if(paymentCurrency==='USD_ARS'){
+      const usd=parseLocalizedPaymentAmount(usdInput.value),rate=parseLocalizedPaymentAmount(rateInput.value);
+      const error=creditPesoSettlementError(usd,rate,rawValue,model.remainingUsd);
+      titleEl.textContent='Registrar dólares pagados en pesos';
+      previewEl.textContent=error||`${fmtUsd(usd)} cancelados con ${formatARS(rawValue)}. Restan ${fmtUsd(Math.max(0,model.remainingUsd-usd))} y ${formatARS(model.remainingArs)} de la parte original en pesos. La percepción no se descuenta.`;
+      return;
+    }
     const before=paymentCurrency==='USD'?model.remainingUsd:model.remainingArs;
     const fmt=paymentCurrency==='USD'?fmtUsd:formatARS;
     if(!rawValue||!Number.isFinite(rawValue)||rawValue<=0){
@@ -17078,23 +17116,37 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
     amount.value='';
     bindPaymentAmountInput(amount);
   };
-  currency.onchange=()=>{refresh();updatePreview();};
+  currency.onchange=()=>{
+    document.getElementById('creditConversionFields').hidden=currency.value!=='USD_ARS';
+    document.getElementById('creditPaymentAmountLabel').textContent=currency.value==='USD_ARS'?'Pesos debitados por los dólares':'Importe pagado';
+    refresh();updatePreview();
+  };
+  const calculateConversion=()=>{
+    const usd=parseLocalizedPaymentAmount(usdInput.value),rate=parseLocalizedPaymentAmount(rateInput.value);
+    if(usd>0&&rate>0)amount.value=formatMoneyField(Math.round(usd*rate*100)/100);
+    updatePreview();
+  };
+  usdInput.addEventListener('input',calculateConversion);
+  rateInput.addEventListener('input',calculateConversion);
   amount.addEventListener('input',updatePreview);
   refresh();
   updatePreview();
   const receiptFilesInput=document.getElementById('creditPaymentReceiptFiles');
   receiptFilesInput.onchange=()=>renderFileSelectionPreview(receiptFilesInput,document.getElementById('creditPaymentReceiptPreview'));
   document.getElementById('saveCreditPayment').onclick=async()=>{
-    const paymentCurrency=currency.value;
+    const isConversion=currency.value==='USD_ARS';
+    const paymentCurrency=isConversion?'ARS':currency.value;
+    const settlementMeta=isConversion?{paymentSettlement:'usd_in_ars',settledUsd:parseLocalizedPaymentAmount(usdInput.value),exchangeRate:parseLocalizedPaymentAmount(rateInput.value)}:{};
     const value=parseLocalizedPaymentAmount(amount.value);
     if(value===null)return toast('Completá el importe pagado');
     if(!Number.isFinite(value))return toast('El importe ingresado no tiene un formato válido. Usá coma o punto decimal, por ejemplo 1250,50.');
     if(value<=0)return toast('Completá el importe pagado');
+    if(isConversion){const error=creditPesoSettlementError(settlementMeta.settledUsd,settlementMeta.exchangeRate,value,model.remainingUsd);if(error)return toast(error);}
     const receiptFilesToUpload=[...(receiptFilesInput.files||[])];
     const oversizedFile=receiptFilesToUpload.find(file=>file.size>10*1024*1024);
     if(oversizedFile)return toast(`El archivo "${oversizedFile.name}" supera el límite de 10 MB`);
     const currentRemaining=paymentCurrency==='USD'?model.remainingUsd:model.remainingArs;
-    if(value>currentRemaining+0.01&&!confirm(`El pago supera el saldo restante (${paymentCurrency==='USD'?fmtUsd(currentRemaining):formatARS(currentRemaining)}). ¿Guardar igualmente?`))return;
+    if(!isConversion&&value>currentRemaining+0.01&&!confirm(`El pago supera el saldo restante (${paymentCurrency==='USD'?fmtUsd(currentRemaining):formatARS(currentRemaining)}). ¿Guardar igualmente?`))return;
     const method=document.getElementById('creditPaymentMethod').value;
     const methodLabel={transferencia:'Transferencia',debito:'Débito automático',pago_banco:'Pago desde banco',otro:'Otro'}[method]||'Otro';
     const userNotes=document.getElementById('creditPaymentNotes').value.trim();
@@ -17102,12 +17154,12 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
       card_id:statement.card_id,
       statement_id:statement.id,
       movement_date:document.getElementById('creditPaymentDate').value||todayValue,
-      description:`Pago parcial registrado · ${methodLabel}`,
+      description:`${isConversion?'Dólares pagados en pesos':'Pago registrado'} · ${methodLabel}`,
       classification:'ajuste',
       category:'Pago parcial registrado',
       currency:paymentCurrency,
       amount:-Math.abs(value),
-      notes:buildCreditMovementNotes(userNotes,'recognized',{movementType:'payment',taxCode:'PAYMENT',source:'manual_payment',appliesToCurrentStatement:true,paymentMethod:method})
+      notes:buildCreditMovementNotes(userNotes,'recognized',{movementType:'payment',taxCode:'PAYMENT',source:'manual_payment',appliesToCurrentStatement:true,paymentMethod:method,...settlementMeta})
     };
     // Deshabilita el botón de guardado durante toda la operación (registro +
     // comprobantes) para evitar que dos toques rápidos registren dos pagos.
@@ -17116,8 +17168,7 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
     button.disabled=true;
     const {data,error}=await sb.from('credit_card_movements').insert(payload).select('id').single();
     if(error){button.disabled=false;return toast(error.message);}
-    const remainingArs=paymentCurrency==='ARS'?Math.max(0,model.remainingArs-value):model.remainingArs;
-    const remainingUsd=paymentCurrency==='USD'?Math.max(0,model.remainingUsd-value):model.remainingUsd;
+    const {remainingArs,remainingUsd}=creditPaymentModel(statement,[...items,payload]);
     const nextStatus=remainingArs<=0.009&&remainingUsd<=0.009?'paid':'partial';
     await sb.from('credit_card_statements').update({status:nextStatus}).eq('id',statement.id);
 
@@ -17188,7 +17239,7 @@ function openCorrectCreditPaymentModal(movementId){
   const meta=creditMovementMeta(movement);
   if(meta.source!=='manual_payment')return toast('Este movimiento no se puede corregir desde acá');
   const currentAmount=Math.abs(Number(movement.amount||0));
-  modal(`<h3>Corregir pago</h3>
+  modal(`<h3>Corregir pago</h3>${meta.paymentSettlement==='usd_in_ars'?`<p class="notice">Este pago cancela ${fmtUsd(meta.settledUsd)}. Al corregir los pesos, se recalculará el tipo de cambio; los dólares cancelados se conservan.</p>`:''}
     <p class="sub">Este pago sigue siendo el mismo movimiento (no se borra ni se duplica) — solo se actualiza su importe/fecha, y queda registrado que fue corregido.</p>
     <div class="field"><label>Fecha del pago</label><input id="correctPaymentDate" type="date" value="${esc(String(movement.movement_date||'').slice(0,10))}"></div>
     <div class="field"><label>Importe (${movement.currency==='USD'?'USD':'ARS'})</label><input id="correctPaymentAmount" type="text" inputmode="decimal" autocomplete="off" value="${esc(formatMoneyField(currentAmount))}"></div>
@@ -17203,14 +17254,17 @@ function openCorrectCreditPaymentModal(movementId){
     if(newAmount===null)return toast('Completá el importe');
     if(!Number.isFinite(newAmount))return toast('El importe ingresado no tiene un formato válido. Usá coma o punto decimal, por ejemplo 1250,50.');
     if(newAmount<=0)return toast('El importe debe ser mayor a cero');
+    if(meta.paymentSettlement==='usd_in_ars'&&!(Number(meta.settledUsd)>0))return toast('Falta el importe USD original de este pago. Revisá el registro antes de corregirlo.');
     const newDate=document.getElementById('correctPaymentDate').value||movement.movement_date;
     const reason=document.getElementById('correctPaymentReason').value.trim();
     const previousCorrections=Array.isArray(meta.corrections)?meta.corrections:[];
     const newMeta={
       ...meta,
+      ...(meta.paymentSettlement==='usd_in_ars'?{exchangeRate:newAmount/Number(meta.settledUsd)}:{}),
       corrections:[...previousCorrections,{
         correctedAt:new Date().toISOString(),
         previousAmount:currentAmount,
+        previousExchangeRate:meta.exchangeRate||null,
         previousDate:movement.movement_date,
         reason:reason||'Sin motivo especificado',
       }],
