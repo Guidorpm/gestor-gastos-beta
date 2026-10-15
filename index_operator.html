@@ -3461,7 +3461,7 @@ function creditPesoSettlement(items){
   },{ars:0,usd:0});
 }
 function creditPesoSettlementError(usd,rate,ars,remainingUsd){
-  if(![usd,rate,ars].every(v=>Number.isFinite(v)&&v>0))return 'Completá los dólares cancelados, el tipo de cambio y los pesos debitados con importes mayores a cero.';
+  if(![usd,rate,ars].every(v=>Number.isFinite(v)&&v>0))return 'Completá los dólares cancelados y los pesos debitados con importes mayores a cero. El tipo de cambio se calcula automáticamente.';
   if(Math.abs(usd*100-Math.round(usd*100))>0.00001)return 'Los dólares cancelados deben tener como máximo dos decimales.';
   if(usd>remainingUsd+0.001)return 'Los dólares cancelados superan el saldo USD pendiente.';
   if(Math.abs(Math.round(usd*rate*100)-Math.round(ars*100))>1)return 'Los pesos debitados deben coincidir con dólares × tipo de cambio. No sumes aquí percepciones ya incluidas en el saldo en pesos.';
@@ -17062,8 +17062,9 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
   modal(`<h2 id="creditPaymentModalTitle">Registrar pago</h2><p class="sub">${esc(creditCardName(card))} · ${creditStatementLabel(statement)}</p>
     <div class="credit-payment-modal-balance"><div><span>Restante en pesos</span><strong>${formatARS(model.remainingArs)}</strong></div><div><span>Restante en dólares</span><strong>${fmtUsd(model.remainingUsd)}</strong></div></div>
     <div class="grid2"><div class="field"><label>Fecha del pago</label><input id="creditPaymentDate" type="date" value="${todayValue}"></div><div class="field"><label>Tipo de pago</label><select id="creditPaymentCurrency"><option value="ARS" ${model.remainingArs>0?'selected':''}>Pesos</option><option value="USD" ${model.remainingArs<=0&&model.remainingUsd>0?'selected':''}>Dólares</option><option value="USD_ARS">Dólares pagados en pesos</option></select></div></div>
+    <div class="field"><label for="creditPaymentScope">¿Cuánto querés pagar?</label><select id="creditPaymentScope"><option value="total">Total pendiente</option><option value="other">Otro importe (pago parcial)</option></select><small class="sub">El total corresponde a la moneda elegida. Si pagás dólares en pesos, completamos los USD pendientes y vos ingresás el débito en pesos.</small></div>
     <div class="grid2"><div class="field"><label id="creditPaymentAmountLabel">Importe pagado</label><input id="creditPaymentAmount" type="text" inputmode="decimal" autocomplete="off" value="" placeholder="Ej: 1250,50"></div><div class="field"><label>Medio</label><select id="creditPaymentMethod"><option value="transferencia">Transferencia</option><option value="debito">Débito automático</option><option value="pago_banco">Pago desde banco</option><option value="otro">Otro</option></select></div></div>
-    <div id="creditConversionFields" hidden><div class="grid2"><div class="field"><label>Dólares cancelados (USD)</label><input id="creditConvertedUsd" type="text" inputmode="decimal" value="${esc(formatMoneyField(model.remainingUsd))}"></div><div class="field"><label>Tipo de cambio (pesos por dólar)</label><input id="creditConversionRate" type="text" inputmode="decimal" placeholder="Ej: 1535"></div></div><p class="sub">Ingresá el débito que corresponde a la conversión de dólares. Las percepciones ya incluidas en el saldo en pesos se conservan: no las sumes otra vez. Registrá la parte original en pesos como un pago separado.</p></div>
+    <div id="creditConversionFields" hidden><div class="grid2"><div class="field"><label>Dólares cancelados (USD)</label><input id="creditConvertedUsd" type="text" inputmode="decimal" value="${esc(formatMoneyField(model.remainingUsd))}"></div><div class="field"><label for="creditConversionRate">Tipo de cambio calculado (pesos por dólar)</label><input id="creditConversionRate" type="text" readonly placeholder="Se calcula con pesos ÷ dólares"></div></div><p class="sub">Ingresá el débito que corresponde a la conversión de dólares. Las percepciones ya incluidas en el saldo en pesos se conservan: no las sumes otra vez. Registrá la parte original en pesos como un pago separado.</p></div>
     <div class="field"><label>Observación</label><textarea id="creditPaymentNotes" placeholder="Opcional: número de operación o referencia"></textarea></div>
     <div id="creditPaymentPreview" class="credit-note"></div>
     <div class="field"><label>Comprobante (opcional)</label>${fileUploadButtonHtml('creditPaymentReceiptFiles','Adjuntar comprobante',{multiple:true})}<div id="creditPaymentReceiptPreview"></div><small class="sub">Podés adjuntar uno o varios comprobantes ahora, o agregarlos después desde el resumen.</small></div>
@@ -17071,6 +17072,7 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
     <div class="actions end"><button type="button" class="btn soft" data-close>Cancelar</button><button type="button" class="btn primary" id="saveCreditPayment">Guardar pago</button></div>`);
   const currency=document.getElementById('creditPaymentCurrency');
   const amount=document.getElementById('creditPaymentAmount');
+  const scope=document.getElementById('creditPaymentScope');
   const usdInput=document.getElementById('creditConvertedUsd');
   const rateInput=document.getElementById('creditConversionRate');
   const titleEl=document.getElementById('creditPaymentModalTitle');
@@ -17082,7 +17084,9 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
     const paymentCurrency=currency.value;
     const rawValue=parseLocalizedPaymentAmount(amount.value);
     if(paymentCurrency==='USD_ARS'){
-      const usd=parseLocalizedPaymentAmount(usdInput.value),rate=parseLocalizedPaymentAmount(rateInput.value);
+      const usd=parseLocalizedPaymentAmount(usdInput.value);
+      const rate=usd>0&&Number.isFinite(rawValue)&&rawValue>0?rawValue/usd:NaN;
+      rateInput.value=Number.isFinite(rate)?rate.toLocaleString('es-AR',{maximumFractionDigits:6}):'';
       const error=creditPesoSettlementError(usd,rate,rawValue,model.remainingUsd);
       titleEl.textContent='Registrar dólares pagados en pesos';
       previewEl.textContent=error||`${fmtUsd(usd)} cancelados con ${formatARS(rawValue)}. Restan ${fmtUsd(Math.max(0,model.remainingUsd-usd))} y ${formatARS(model.remainingArs)} de la parte original en pesos. La percepción no se descuenta.`;
@@ -17109,35 +17113,33 @@ function openCreditPaymentModal(statementId=selectedCreditStatementId){
     `;
   };
   const refresh=()=>{
-    // CIERRE INTEGRAL TRAZABILIDAD DE TARJETAS 20260806 - PARTE G: mismo
-    // campo de texto con parseLocalizedPaymentAmount para ARS y USD (antes
-    // USD pasaba a type="number", que en varios navegadores bloquea la
-    // coma según el idioma del sistema -- la causa real reportada).
-    amount.value='';
-    bindPaymentAmountInput(amount);
-  };
-  currency.onchange=()=>{
-    document.getElementById('creditConversionFields').hidden=currency.value!=='USD_ARS';
-    document.getElementById('creditPaymentAmountLabel').textContent=currency.value==='USD_ARS'?'Pesos debitados por los dólares':'Importe pagado';
-    refresh();updatePreview();
-  };
-  const calculateConversion=()=>{
-    const usd=parseLocalizedPaymentAmount(usdInput.value),rate=parseLocalizedPaymentAmount(rateInput.value);
-    if(usd>0&&rate>0)amount.value=formatMoneyField(Math.round(usd*rate*100)/100);
+    const conversion=currency.value==='USD_ARS';
+    const total=scope.value==='total';
+    document.getElementById('creditConversionFields').hidden=!conversion;
+    document.getElementById('creditPaymentAmountLabel').textContent=conversion?'Pesos debitados por los dólares':'Importe pagado';
+    amount.readOnly=total&&!conversion;
+    usdInput.readOnly=total;
+    amount.value=total&&!conversion?formatMoneyField(currency.value==='USD'?model.remainingUsd:model.remainingArs):'';
+    usdInput.value=total?formatMoneyField(model.remainingUsd):'';
+    rateInput.value='';
     updatePreview();
   };
-  usdInput.addEventListener('input',calculateConversion);
-  rateInput.addEventListener('input',calculateConversion);
+  bindPaymentAmountInput(amount);
+  bindPaymentAmountInput(usdInput);
+  currency.onchange=refresh;
+  scope.onchange=refresh;
+  usdInput.addEventListener('input',updatePreview);
   amount.addEventListener('input',updatePreview);
   refresh();
-  updatePreview();
   const receiptFilesInput=document.getElementById('creditPaymentReceiptFiles');
   receiptFilesInput.onchange=()=>renderFileSelectionPreview(receiptFilesInput,document.getElementById('creditPaymentReceiptPreview'));
   document.getElementById('saveCreditPayment').onclick=async()=>{
     const isConversion=currency.value==='USD_ARS';
     const paymentCurrency=isConversion?'ARS':currency.value;
-    const settlementMeta=isConversion?{paymentSettlement:'usd_in_ars',settledUsd:parseLocalizedPaymentAmount(usdInput.value),exchangeRate:parseLocalizedPaymentAmount(rateInput.value)}:{};
     const value=parseLocalizedPaymentAmount(amount.value);
+    const settledUsd=isConversion?parseLocalizedPaymentAmount(usdInput.value):null;
+    // Persist the ratio from the original amounts, not the rounded display value.
+    const settlementMeta=isConversion?{paymentSettlement:'usd_in_ars',settledUsd,exchangeRate:value/settledUsd}:{};
     if(value===null)return toast('Completá el importe pagado');
     if(!Number.isFinite(value))return toast('El importe ingresado no tiene un formato válido. Usá coma o punto decimal, por ejemplo 1250,50.');
     if(value<=0)return toast('Completá el importe pagado');
