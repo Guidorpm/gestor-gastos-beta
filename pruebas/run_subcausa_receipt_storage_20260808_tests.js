@@ -314,17 +314,15 @@ function run(label, src) {
   const operatorMatches = (srcOperator.match(new RegExp(uploadCallRegex.source, 'g')) || []).length;
   ok('index_operator.html: misma verificación', operatorMatches === 1);
 
-  const kindBranchRegex = /if\(kind===('|")card_receipt\1\)\{[\s\S]{0,400}?file\.arrayBuffer\(\)/;
-  ok('index.html: la rama ArrayBuffer está acotada exclusivamente a kind===\'card_receipt\'', kindBranchRegex.test(srcMain));
-  ok('index_operator.html: misma verificación', kindBranchRegex.test(srcOperator));
+  // 2026-10-26: statements now use the same binary upload as receipts.
+  for(const [label,src] of [['index.html',srcMain],['index_operator.html',srcOperator]]){
+    const upload=extractFunction(src,'uploadCreditDocument');
+    ok(label+': binary body for both document kinds',upload.includes('uploadBody=await file.arrayBuffer();')&&!upload.includes("if(kind==='card_receipt')"));
+    ok(label+': rejects empty or incomplete content',upload.includes('uploadBody.byteLength===0||uploadBody.byteLength!==file.size'));
+    ok(label+': preserves supplied MIME',upload.includes('file.type&&String(file.type).trim()?file.type:'));
+    ok(label+': infers PDF MIME when omitted',upload.includes("'application/pdf':'application/octet-stream'"));
+  }
 
-  ok('index.html: uploadBody arranca como el File/Blob original (=file) -- statement nunca entra al if, así que nunca se transforma', srcMain.includes('let uploadBody=file;'));
-  ok('index_operator.html: misma verificación', srcOperator.includes('let uploadBody=file;'));
-  ok('index.html: uploadContentType arranca como file.type tal cual -- statement conserva exactamente el valor de siempre', srcMain.includes('let uploadContentType=file.type;'));
-  ok('index_operator.html: misma verificación', srcOperator.includes('let uploadContentType=file.type;'));
-
-  ok('index.html: fallback a application/octet-stream SOLO cuando file.type está vacío, nunca se pisa un MIME real', srcMain.includes("uploadContentType=file.type&&String(file.type).trim()?file.type:'application/octet-stream';"));
-  ok('index_operator.html: misma verificación', srcOperator.includes("uploadContentType=file.type&&String(file.type).trim()?file.type:'application/octet-stream';"));
 }
 
 // ------------------------------------------------------------
