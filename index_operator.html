@@ -4092,6 +4092,86 @@ function creditExistingMovementFingerprints(statementId){
 // Fase 12 del pedido: vista previa por documento -- NUNCA escribe. Vuelve a
 // leer el PDF ya guardado (mismo mecanismo que la carga histórica) y lo
 // compara contra lo que ya existe, sin insertar nada.
+// Recupera solo consumos identificados en el PDF original de un resumen.
+function canRecoverHistoricalPurchases(card){
+  return canAccessTarjetas()&&!!session?.user?.id&&card?.owner_id===session.user.id;
+}
+function planHistoricalPurchases(financial,identity,existingRows){
+  if(!financial?.valid)return{reason:'El PDF requiere revisión financiera.'};
+  const parserKey=creditStatementParserKey(identity);
+  const movements=financial.movements||[];
+  const dates=extractMovementDates(movements,financial.declaredCloseDate);
+  const candidates=[];
+  for(const [index,movement] of movements.entries()){
+    if(movement.category!=='purchase')continue;
+    if(isAggregatePurchaseComponent(movement,parserKey)){
+      return{reason:'El formato presenta los consumos como un total agregado.'};
+    }
+    if(classifyPersistenceCategory(movement.description,movement.category).movementType!=='purchase'||
+      determineMovementSemanticType(movement.description,'purchase',null)!=='purchase')continue;
+    const {fecha,fechaConfianza,fechaOrigen}=dates[index];
+    const amount=movement.amountArs??movement.amountUsd;
+    if(amount===0)continue;
+    const date=movement.date||fecha;
+    const parsedDate=new Date(date+'T00:00:00Z');
+    if(!date||Number.isNaN(parsedDate.getTime())||parsedDate.toISOString().slice(0,10)!==date||
+      !movement.description?.trim()||!Number.isFinite(amount)||amount<0||
+      (movement.amountArs!=null&&movement.amountUsd!=null)){
+      return{reason:'Hay consumos cuya fecha, descripción o importe requiere revisión.'};
+    }
+    candidates.push({
+      fecha:date,fechaConfianza,fechaOrigen,descripcionOriginal:movement.description,
+      categoria:'purchase',moneda:movement.amountArs!=null?'ARS':'USD',importe:amount,sourceIndex:index,
+      cardLast4:movement.cardLast4||null,cardHolderLabel:movement.cardHolderLabel||null,
+      installment:movement.installment||null,
+    });
+  }
+  const existingPurchases=existingRows.filter(row=>creditMovementType(row)==='purchase');
+  const comparison=matchMovementsOneToOne(candidates,existingPurchases);
+  if(comparison.plannedMovementInserts.length&&comparison.unmatchedExisting.length){
+    return{reason:'Hay compras existentes sin una coincidencia segura. Revisá este resumen antes de completar el detalle.'};
+  }
+  return{purchases:comparison.plannedMovementInserts};
+}
+async function saveHistoricalPurchases(card,statementId,documentId,financial,identity,sourceHash){
+  if(!canRecoverHistoricalPurchases(card))return{reason:'La recuperación requiere acceso de titular a esta tarjeta.'};
+  if(isCreditLocalPreviewMode())return{reason:'Vista previa local: guardado desactivado.'};
+  const save=async()=>{
+    if(!canRecoverHistoricalPurchases(card))return{reason:'La sesión ya no tiene acceso a la tarjeta.'};
+    const original=await sb.from('documents').select('id').eq('statement_id',statementId)
+      .eq('card_id',card.id).eq('kind','statement').limit(2);
+    if(original.error||original.data?.length!==1||original.data[0].id!==documentId){
+      return{reason:'No se pudo confirmar un único PDF original para este resumen.'};
+    }
+    const existing=await fetchAllRowsPaged('credit_card_movements',query=>query
+      .eq('statement_id',statementId).eq('card_id',card.id).order('id'));
+    if(!existing.complete)return{reason:'No se pudieron comprobar todos los consumos guardados.'};
+    const plan=planHistoricalPurchases(financial,identity,existing.rows);
+    if(plan.reason)return plan;
+    const rows=await Promise.all(plan.purchases.map(async purchase=>{
+      // El ID estable protege el mismo PDF frente a simultaneidad entre dispositivos.
+      const data=new TextEncoder().encode(['historical-purchase',statementId,documentId,purchase.sourceIndex].join(':'));
+      const hex=await sha256HexFromArrayBuffer(data);
+      const id=[hex.slice(0,8),hex.slice(8,12),'8'+hex.slice(13,16),'8'+hex.slice(17,20),hex.slice(20,32)].join('-');
+      return{
+        id,card_id:card.id,owner_id:card.owner_id,statement_id:statementId,
+        movement_date:purchase.fecha,description:purchase.descripcionOriginal,
+        classification:'otro',category:null,currency:purchase.moneda,amount:purchase.importe,
+        notes:buildCreditMovementNotes('','pending',{
+          movementType:'purchase',source:'historical_statement_purchases',sourceFileHash:sourceHash||null,
+          fechaConfianza:purchase.fechaConfianza,fechaOrigen:purchase.fechaOrigen,
+          cardLast4:purchase.cardLast4,cardHolderLabel:purchase.cardHolderLabel,installment:purchase.installment,
+        }),
+      };
+    }));
+    if(!rows.length)return{inserted:0};
+    if(!canRecoverHistoricalPurchases(card))return{reason:'La sesión ya no tiene acceso a la tarjeta.'};
+    const {error}=await sb.from('credit_card_movements').insert(rows);
+    if(error)return{reason:'No se pudo confirmar el guardado. Volvé a revisar el resumen antes de reintentar.'};
+    return{inserted:rows.length};
+  };
+  return navigator.locks?navigator.locks.request('credit-historical-purchases:'+statementId,save):save();
+}
 async function creditReprocessingPreviewForDocument(doc,card){
   const statement=creditStatements.find(s=>s.id===doc.statement_id)||null;
   const period=statement?normalizeCreditStatementPeriod(statement.statement_month):(creditDocumentPeriodHint(doc)||null);
@@ -4120,11 +4200,19 @@ async function creditReprocessingPreviewForDocument(doc,card){
   }catch(e){
     return{...base,state:'DOCUMENT_NOT_ACCESSIBLE',confidence:'sin_informacion',movementsDetected:0};
   }
-  const identity={brandFamily:creditBrandFamily(card.brand||card.card_brand||''),issuerFamily:'unknown'};
+  const identity=await detectCreditStatementIdentity(file);
   const parsed=await parseCreditStatementFinancials(file,identity);
   if(parsed.status==='unsupported'){
     return{...base,state:'INSUFFICIENT_INFORMATION',confidence:'sin_informacion',movementsDetected:0};
   }
+  const financial=reconcileCreditStatementTotals(parsed,identity,period);
+  const matchingCard=validateStatementAgainstCard(identity,card).status==='MATCH';
+  const matchingCycle=statement?.close_date
+    ?financial.declaredCloseDate===String(statement.close_date).slice(0,10)
+    :identity.period===period;
+  const purchasePlan=statement&&statement.card_id===card.id&&matchingCard&&matchingCycle&&canRecoverHistoricalPurchases(card)
+    ?planHistoricalPurchases(financial,identity,creditMovementsForStatement(statement.id))
+    :{reason:'No se pudo confirmar la tarjeta y el ciclo del PDF original.'};
   const sumKey=creditStatementParserKey(identity);
   const sumFn=CREDIT_RECONCILE_SUM_FNS[sumKey]||sumSignedStatementMovements;
   const calc=sumFn(parsed.movements||[]);
@@ -4166,7 +4254,7 @@ async function creditReprocessingPreviewForDocument(doc,card){
     totalBanco:bankArs,
     diffArs,
     existingMovementsCount:existingCount,
-    duplicateCount,
+    duplicateCount,purchasePlan,financial,identity,
   };
 }
 const CREDIT_REPROCESS_STATE_LABELS={
@@ -4184,11 +4272,20 @@ async function openCreditReprocessingPreviewModal(){
     <p class="sub">Solo vista previa: leyendo los PDF ya guardados para comparar contra lo que ya existe. Todavía no se escribe nada.</p>
     <div id="creditReprocessPreviewBody"><div class="credit-note">Leyendo documentos…</div></div>
     <div class="actions"><button class="btn outline" data-close>Cerrar</button></div>`,true);
-  const statementDocs=creditDocuments.filter(d=>d.kind==='statement');
+  const statementDocs=creditDocuments.filter(d=>d.kind==='statement'&&d.statement_id);
+  const documentCounts=new Map();
+  for(const doc of statementDocs)documentCounts.set(doc.statement_id,(documentCounts.get(doc.statement_id)||0)+1);
   const rows=[];
   for(const doc of statementDocs){
     const card=creditCards.find(c=>c.id===doc.card_id);
-    if(!card)continue;
+    if(!canRecoverHistoricalPurchases(card))continue;
+    if(documentCounts.get(doc.statement_id)>1){
+      if(creditStatementOriginalDoc(doc.statement_id)?.id!==doc.id)continue;
+      rows.push({cardId:card.id,cardName:creditCardName(card),period:'—',fileName:doc.original_name||'Documento',
+        state:'INSUFFICIENT_INFORMATION',confidence:'sin_informacion',movementsDetected:0,
+        purchasePlan:{reason:'Hay más de un PDF vinculado al resumen.'}});
+      continue;
+    }
     try{
       rows.push(await creditReprocessingPreviewForDocument(doc,card));
     }catch(e){
@@ -4201,7 +4298,42 @@ async function openCreditReprocessingPreviewModal(){
     body.innerHTML='<div class="credit-note">No hay documentos de resumen para revisar.</div>';
     return;
   }
-  body.innerHTML=`<div class="credit-table-scroll"><table class="owner-table"><thead><tr><th>Tarjeta</th><th>Período</th><th>Archivo</th><th>Movimientos detectados</th><th>Consumos</th><th>Saldo anterior</th><th>Intereses</th><th>Comisiones</th><th>Impuestos</th><th>ARS calculado</th><th>Total banco</th><th>Diferencia</th><th>Confianza</th><th>Estado</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${esc(row.cardName)}</td><td>${esc(row.period)}</td><td><small>${esc(row.fileName)}</small></td><td>${row.movementsDetected}</td><td>${row.consumosArs!=null?formatARS(row.consumosArs):'—'}</td><td>${row.saldoAnteriorArs!=null?formatARS(row.saldoAnteriorArs):'—'}</td><td>${row.interesesArs!=null?formatARS(row.interesesArs):'—'}</td><td>${row.comisionesArs!=null?formatARS(row.comisionesArs):'—'}</td><td>${row.impuestosArs!=null?formatARS(row.impuestosArs):'—'}</td><td>${row.arsCalculado!=null?formatARS(row.arsCalculado):'—'}</td><td>${row.totalBanco!=null?formatARS(row.totalBanco):'—'}</td><td>${row.diffArs!=null?formatARS(row.diffArs):'—'}</td><td>${esc(row.confidence)}</td><td>${esc(CREDIT_REPROCESS_STATE_LABELS[row.state]||row.state)}</td></tr>`).join('')}</tbody></table></div><div class="credit-note">Ninguna fila de esta vista se importó. La acción real de importación queda preparada pero no se ejecuta en esta etapa.</div>`;
+  body.innerHTML=`<div class="credit-table-scroll"><table class="owner-table"><thead><tr><th>Tarjeta</th><th>Período</th><th>Archivo</th><th>Movimientos detectados</th><th>Consumos</th><th>Saldo anterior</th><th>Intereses</th><th>Comisiones</th><th>Impuestos</th><th>ARS calculado</th><th>Total banco</th><th>Diferencia</th><th>Confianza</th><th>Estado</th><th>Detalle recuperable</th></tr></thead><tbody>${rows.map(row=>`<tr><td>${esc(row.cardName)}</td><td>${esc(row.period)}</td><td><small>${esc(row.fileName)}</small></td><td>${row.movementsDetected}</td><td>${row.consumosArs!=null?formatARS(row.consumosArs):'—'}</td><td>${row.saldoAnteriorArs!=null?formatARS(row.saldoAnteriorArs):'—'}</td><td>${row.interesesArs!=null?formatARS(row.interesesArs):'—'}</td><td>${row.comisionesArs!=null?formatARS(row.comisionesArs):'—'}</td><td>${row.impuestosArs!=null?formatARS(row.impuestosArs):'—'}</td><td>${row.arsCalculado!=null?formatARS(row.arsCalculado):'—'}</td><td>${row.totalBanco!=null?formatARS(row.totalBanco):'—'}</td><td>${row.diffArs!=null?formatARS(row.diffArs):'—'}</td><td>${esc(row.confidence)}</td><td>${esc(CREDIT_REPROCESS_STATE_LABELS[row.state]||row.state)}</td><td>${esc(row.purchasePlan?.reason??(row.purchasePlan?.purchases?row.purchasePlan.purchases.length+' consumos faltantes':'Requiere revisión'))}</td></tr>`).join('')}</tbody></table></div>`;
+  const eligible=rows.filter(row=>row.purchasePlan?.purchases?.length>0);
+  if(!eligible.length||isCreditLocalPreviewMode())return;
+  body.insertAdjacentHTML('beforeend','<div class="actions"><button type="button" class="btn primary" id="saveMissingHistoricalPurchases">Guardar consumos faltantes</button></div><div class="credit-note" id="saveMissingHistoricalResult" role="status"></div>');
+  const button=body.querySelector('#saveMissingHistoricalPurchases');
+  const status=body.querySelector('#saveMissingHistoricalResult');
+  button.onclick=async()=>{
+    const count=eligible.reduce((total,row)=>total+row.purchasePlan.purchases.length,0);
+    if(!confirm(`La vista previa encontró ${count} consumos faltantes en ${eligible.length} resúmenes. Se volverán a comprobar antes de guardar. Los pagos y registros existentes se conservan. ¿Continuar?`))return;
+    button.disabled=true;
+    status.textContent='Comprobando y guardando consumos…';
+    let inserted=0;
+    const pending=[];
+    try{
+      for(const row of eligible){
+        const card=creditCards.find(c=>c.id===row.cardId);
+        try{
+          const saved=await saveHistoricalPurchases(card,row.statementId,row.documentId,row.financial,row.identity);
+          inserted+=saved.inserted||0;
+          if(saved.reason)pending.push(row.cardName+' · '+row.period+' · '+saved.reason);
+        }catch{
+          pending.push(row.cardName+' · '+row.period+' · No se pudo confirmar el guardado.');
+        }
+      }
+      status.textContent=`Consumos agregados: ${inserted}. Resúmenes pendientes: ${pending.length}.`;
+      for(const item of pending){
+        const detail=document.createElement('div');
+        detail.textContent=item;
+        status.appendChild(detail);
+      }
+      await loadCreditCardsData();
+      button.remove();
+    }finally{
+      button.disabled=false;
+    }
+  };
 }
 // CORRECCIÓN 6B4.8.2 - Fase 7/8: confirmación histórica manual. Nunca crea
 // un pago, nunca crea un movimiento, nunca toca documentos, nunca se
@@ -16332,7 +16464,18 @@ async function processCreditStatementFile(file,card,options={}){
   const uploadStatementId=pendingReprocess?null:statementId;
   let uploadResult;
   try{
-    uploadResult=await uploadCreditDocument(file,{cardId:card.id,statementId:uploadStatementId,kind:'statement'});
+    const original=options.historicalPurchasesOnly&&statementId?creditStatementOriginalDoc(statementId):null;
+    if(original){
+      const originalHash=await computeStoredFileHash(original.file_path);
+      if(!originalHash||originalHash!==result.hash){
+        result.state='review_required';
+        result.resultMessage='Este resumen ya tiene otro PDF vinculado o su contenido no se pudo confirmar.';
+        return result;
+      }
+      uploadResult={document:original,alreadyLoaded:true};
+    }else{
+      uploadResult=await uploadCreditDocument(file,{cardId:card.id,statementId:uploadStatementId,kind:'statement'});
+    }
   }catch(uploadError){
     result.stage='document_failed';
     result.state='error';
@@ -16449,6 +16592,9 @@ async function processCreditStatementFile(file,card,options={}){
       result.resultMessage='PDF preservado; el resumen se creó pero el vínculo con el documento no se pudo confirmar: '+historicalUploadErrorMessage(linkError);
       return result;
     }
+  }else if(options.historicalPurchasesOnly){
+    result.statementId=statementId;
+    result.statementOutcome=outcomeKind;
   }else{
     // CORRECCIÓN INTEGRACIÓN REAL 20260806 - REPROCESAMIENTO DE UN STATEMENT
     // EXISTENTE (ej. Visa 8374) que SÍ concilia (financiallyOk=true --
@@ -16494,6 +16640,11 @@ async function processCreditStatementFile(file,card,options={}){
   await loadCreditCardsData();
   const refreshedCard=creditCards.find(c=>c.id===card.id)||card;
   try{
+    if(options.historicalPurchasesOnly){
+      const saved=await saveHistoricalPurchases(refreshedCard,statementId,result.document?.id,financialResult,identity,result.hash);
+      result.movementsInserted=saved.inserted||0;
+      result.movementsSkippedReason=saved.reason||null;
+    }else{
     const movementItem={preview:{identity,parsed:{
       movements:financialResult.movements||[],
       declaredCloseDate:financialResult.declaredCloseDate||null,
@@ -16545,6 +16696,7 @@ async function processCreditStatementFile(file,card,options={}){
         }
       }
     }
+    }
   }catch(movementAnalysisError){
     // Nunca deja de guardar el PDF/los totales por un error acá -- el
     // detalle de movimientos es un enriquecimiento posterior, no una
@@ -16565,7 +16717,7 @@ async function processCreditStatementFile(file,card,options={}){
     ?((uploadResult.alreadyLoaded&&outcomeKind==='listo')?'already_uploaded':({listo:'uploaded',created:'created_and_uploaded',recovered:'linked_existing'}[outcomeKind]||'uploaded'))
     :'review_required';
   const movementsSuffix=(result.movementsInserted>0
-    ? ` Se guardaron ${result.movementsInserted} movimientos individuales.`
+    ? ` Se guardaron ${result.movementsInserted} ${options.historicalPurchasesOnly?'consumos individuales':'movimientos individuales'}.`
     : (result.movementsSkippedReason?` ${result.movementsSkippedReason}`:''))
     +(result.totalsSkippedReason?` ${result.totalsSkippedReason}`:'');
   result.resultMessage=(uploadResult.alreadyLoaded&&result.movementsInserted===0&&!result.movementsSkippedReason&&financiallyOk)?'Ya cargado':(financiallyOk?{
@@ -16634,7 +16786,7 @@ async function runHistoricalUpload(){
         const result=await processCreditStatementFile(row.file,card,{
           statementId:row.statementId,identity:row.identity,selectedPeriod:row.period,
           periodSource:row.periodSource,replaceDocId:row.replaceDocId,previewOnly,
-          manualConfirmed:true,
+          manualConfirmed:true,historicalPurchasesOnly:true,
         });
         row.financialResult=result.financialResult;
         row.financialReviewStatus=financialReviewStatusFor(result.financialResult);
@@ -16678,8 +16830,13 @@ async function runHistoricalUpload(){
     // CORRECCIÓN 6B4.4: éxito total — mensaje visible y cierre automático
     // (no inmediato: se deja ~1000ms para que el usuario vea la confirmación).
     historicalUploadState.successMessage=`${processedCount} archivo${processedCount===1?'':'s'} procesado${processedCount===1?'':'s'} correctamente. 0 archivos pendientes.`;
+    const purchasesPending=includedRows.filter(row=>row.movementsSkippedReason).length;
+    if(purchasesPending){
+      historicalUploadState.successMessage=`PDFs procesados: ${processedCount}. Resúmenes con detalle pendiente: ${purchasesPending}.`;
+    }
     refreshHistoricalUploadModal();
-    toast('Los resúmenes se guardaron correctamente.');
+    toast(purchasesPending?'PDFs procesados. Revisá el detalle pendiente.':'Los resúmenes se guardaron correctamente.');
+    if(includedRows.some(row=>row.movementsInserted||row.movementsSkippedReason))return;
     const cardIdAtClose=card.id;
     setTimeout(()=>{
       // Si el usuario ya cerró manualmente o abrió otra tarjeta mientras
