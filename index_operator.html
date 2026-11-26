@@ -4099,12 +4099,13 @@ function canRecoverHistoricalPurchases(card){
 function planHistoricalPurchases(financial,identity,existingRows){
   if(!financial?.valid)return{reason:'El PDF requiere revisión financiera.'};
   const parserKey=creditStatementParserKey(identity);
-  const movements=financial.movements||[];
+  const separateDetails=parserKey==='mercado_pago'&&Array.isArray(financial.purchaseDetails);
+  const movements=separateDetails?financial.purchaseDetails:(financial.movements||[]);
   const dates=extractMovementDates(movements,financial.declaredCloseDate);
   const candidates=[];
   for(const [index,movement] of movements.entries()){
     if(movement.category!=='purchase')continue;
-    if(isAggregatePurchaseComponent(movement,parserKey)){
+    if(!separateDetails&&isAggregatePurchaseComponent(movement,parserKey)){
       return{reason:'El formato presenta los consumos como un total agregado.'};
     }
     if(classifyPersistenceCategory(movement.description,movement.category).movementType!=='purchase'||
@@ -4112,7 +4113,7 @@ function planHistoricalPurchases(financial,identity,existingRows){
     const {fecha,fechaConfianza,fechaOrigen}=dates[index];
     const amount=movement.amountArs??movement.amountUsd;
     if(amount===0)continue;
-    const date=movement.date||fecha;
+    const date=separateDetails?resolveMercadoPagoPurchaseDate(movement,financial.declaredCloseDate):(movement.date||fecha);
     const parsedDate=new Date(date+'T00:00:00Z');
     if(!date||Number.isNaN(parsedDate.getTime())||parsedDate.toISOString().slice(0,10)!==date||
       !movement.description?.trim()||!Number.isFinite(amount)||amount<0||
@@ -4120,7 +4121,8 @@ function planHistoricalPurchases(financial,identity,existingRows){
       return{reason:'Hay consumos cuya fecha, descripción o importe requiere revisión.'};
     }
     candidates.push({
-      fecha:date,fechaConfianza,fechaOrigen,descripcionOriginal:movement.description,
+      fecha:date,fechaConfianza:separateDetails?'media':fechaConfianza,
+      fechaOrigen:separateDetails?'fecha_pdf_y_cierre':fechaOrigen,descripcionOriginal:movement.description,
       categoria:'purchase',moneda:movement.amountArs!=null?'ARS':'USD',importe:amount,sourceIndex:index,
       cardLast4:movement.cardLast4||null,cardHolderLabel:movement.cardHolderLabel||null,
       installment:movement.installment||null,
@@ -6409,6 +6411,130 @@ function parseBancoProvinciaMastercardStatement(layout){
 // mano que TOTAL A PAGAR = suma de los "Subtotal" de todas las categorías
 // presentes (con el signo que cada una ya trae impreso: pagos y algunos
 // ajustes vienen negativos).
+function parseMercadoPagoConsumptionLine(line){
+  const trimmed=String(line||'').trim();
+  let day=null,monthIndex=null,dateConsumedLength=0;
+  // Formato numérico ya soportado: d/m, dd/mm, d/mm, dd/m, con año
+  // opcional (dd/mm/yyyy) cuando el resumen llegue a imprimirlo.
+  const numericDateMatch=trimmed.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b/);
+  if(numericDateMatch){
+    day=Number(numericDateMatch[1]);
+    monthIndex=Number(numericDateMatch[2])-1;
+    dateConsumedLength=numericDateMatch[0].length;
+  }else{
+    // Formato real confirmado: día/mes-abreviado ("2/may", "15/jul").
+    const abbrDateMatch=trimmed.match(/^(\d{1,2})\/([a-zA-Záéíóúñ]{3,4})\b/);
+    if(abbrDateMatch){
+      day=Number(abbrDateMatch[1]);
+      monthIndex=SPANISH_MONTH_ABBR.indexOf(abbrDateMatch[2].toLowerCase().slice(0,3));
+      dateConsumedLength=abbrDateMatch[0].length;
+    }
+  }
+  // Ni el encabezado ("Fecha Descripción Cuota Operación Pesos Dólares")
+  // ni una línea informativa como "Con tarjeta virtual" empiezan con un
+  // día numérico -- nunca llegan a esta rama, se descartan naturalmente
+  // sin necesidad de una exclusión aparte.
+  if(monthIndex==null||monthIndex<0||monthIndex>11||!day)return null;
+  const dateLabel=`${String(day).padStart(2,'0')}/${String(monthIndex+1).padStart(2,'0')}`;
+  const rest=trimmed.slice(dateConsumedLength).trim();
+  if(!rest)return null;
+  // Mismo criterio ya usado en el resto del parser de tarjetas: el
+  // importe es el/los último(s) token(s) con forma de dinero de la
+  // línea (columna más a la derecha). Admite el signo "-" tanto antes
+  // como después del número (las dos convenciones ya vistas en
+  // resúmenes reales de otros emisores).
+  const amountRe=/(-)?\s*\$?\s*(\d[\d.]*,\d{2})(-)?/g;
+  const amountMatches=[...rest.matchAll(amountRe)];
+  if(!amountMatches.length)return null;
+  const toSignedAmount=(match)=>{
+    const value=parseArgMoney(match[2]);
+    if(value===null)return null;
+    return(match[1]||match[3])?-Math.abs(value):value;
+  };
+  // CORRECCIÓN 6B4.18.1 - Orden REAL de columnas confirmado por el
+  // titular: "Fecha, Descripción, Cuota, Operación, Pesos y Dólares" --
+  // Pesos va ANTES que Dólares (izquierda a derecha), nunca al revés.
+  // La versión anterior asumía lo opuesto (tomaba el ÚLTIMO importe como
+  // "Pesos"), lo que en cualquier línea con las dos columnas impresas
+  // leía el importe en dólares como si fuera el importe en pesos (y
+  // viceversa) -- causa real confirmada de que el PDF real no itemizaba
+  // ningún consumo pese a que el subtotal sí cerraba bien (el subtotal
+  // se lee de una línea aparte, ajena a este bug).
+  let amountArs,amountUsd=null,amountBoundaryIndex;
+  if(amountMatches.length>=2){
+    const arsMatch=amountMatches[amountMatches.length-2];
+    const usdMatch=amountMatches[amountMatches.length-1];
+    amountArs=toSignedAmount(arsMatch);
+    if(amountArs===null)return null;
+    // Una columna Dólares en 0,00 (o ausente) en un consumo en pesos no
+    // es un segundo importe real -- misma columna vacía que ya se ve en
+    // el resto del documento (mismo criterio que usdZeroEvidence, más
+    // abajo en este archivo).
+    const candidateUsd=toSignedAmount(usdMatch);
+    if(candidateUsd!==null&&Math.abs(candidateUsd)>0.001)amountUsd=candidateUsd;
+    amountBoundaryIndex=arsMatch.index;
+  }else{
+    const onlyMatch=amountMatches[0];
+    amountArs=toSignedAmount(onlyMatch);
+    if(amountArs===null)return null;
+    amountBoundaryIndex=onlyMatch.index;
+  }
+  const beforeAmount=rest.slice(0,amountBoundaryIndex).trim();
+  if(!beforeAmount)return null;
+  // Cuota: acepta tanto "N/M" (formato ya soportado) como "N de M" (texto
+  // REAL confirmado del PDF: "3 de 3", "2 de 3", "2 de 6") -- buscado en
+  // el texto ANTES del importe (la fecha ya se consumió al principio de
+  // la línea, así que acá nunca puede haber confusión con la fecha).
+  // Nunca inventa cuota si la línea no la trae (consumos de pago único).
+  const installmentMatch=beforeAmount.match(/\b(\d{1,2})\s*\/\s*(\d{1,2})\b|\b(\d{1,2})\s+de\s+(\d{1,2})\b/i);
+  let installmentCurrent=null,installmentTotal=null;
+  if(installmentMatch){
+    if(installmentMatch[1]!==undefined){
+      installmentCurrent=Number(installmentMatch[1]);
+      installmentTotal=Number(installmentMatch[2]);
+    }else{
+      installmentCurrent=Number(installmentMatch[3]);
+      installmentTotal=Number(installmentMatch[4]);
+    }
+  }
+  const withoutInstallment=installmentMatch
+    ?beforeAmount.slice(0,installmentMatch.index)+' '+beforeAmount.slice(installmentMatch.index+installmentMatch[0].length)
+    :beforeAmount;
+  // Operación: identificador numérico real (siempre de 6 dígitos en los
+  // casos reales conocidos; se acepta 4 a 8 para no ser más frágil que
+  // lo necesario ante variaciones no vistas todavía). \b exige límite de
+  // palabra real, así que un comercio con dígitos pegados a letras (ej.
+  // "420PLACER") nunca se confunde con un número de operación.
+  const operationMatch=withoutInstallment.match(/\b(\d{4,8})\b/);
+  let description=withoutInstallment;
+  if(operationMatch)description=description.replace(new RegExp('\\b'+operationMatch[1]+'\\b'),' ');
+  description=description.replace(/\s+/g,' ').trim();
+  if(!description)return null;
+  return{
+    dayMonth:{monthIndex,day},
+    printedYear:numericDateMatch?.[3]||null,
+    dateLabel,
+    description,
+    amountArs,amountUsd,
+    // MEJORA 6B4.18.2 - representación visual normalizada, pedido
+    // explícito: "3/3" en vez de un eventual "03/03" con ceros a la
+    // izquierda -- installmentCurrent/installmentTotal (numéricos) son
+    // los que de verdad importan para lógica; este string es solo texto.
+    installment:installmentMatch?`${installmentCurrent}/${installmentTotal}`:null,
+    installmentCurrent,
+    installmentTotal,
+    operationRef:operationMatch?operationMatch[1]:null,
+  };
+}
+function resolveMercadoPagoPurchaseDate(item,closeDate){
+  if(!closeDate)return null;
+  const {monthIndex,day}=item.dayMonth;
+  const referenceYear=Number(closeDate.slice(0,4));
+  const monthDay=String(monthIndex+1).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+  const year=item.printedYear||(monthDay>closeDate.slice(5)?referenceYear-1:referenceYear);
+  const date=year+'-'+monthDay;
+  return date<=closeDate?date:null;
+}
 function parseMercadoPagoStatement(layout){
   const lines=layout.pages.flatMap(p=>p.lines.map(l=>l.text)).filter(Boolean);
   const fullText=lines.join('\n');
@@ -6552,6 +6678,7 @@ function parseMercadoPagoStatement(layout){
   }
 
   const movements=[];
+  let purchaseDetails=null;
   let declaredConsumptionArs=null;
   let previousBalanceArs=0;
   let foundAnyCategory=false;
@@ -6559,7 +6686,28 @@ function parseMercadoPagoStatement(layout){
     const amount=categorySubtotal(re,activityRe);
     if(amount===null)continue;
     foundAnyCategory=true;
-    if(category==='purchase'&&/^Consumos/.test(label))declaredConsumptionArs=amount;
+    if(category==='purchase'){
+      declaredConsumptionArs=amount;
+      const from=findLineIndex(0,re);
+      let to=detalleLines.length;
+      for(let i=from+1;i<detalleLines.length;i++){
+        if(boundaryRes.some(boundary=>boundary.test(detalleLines[i].trim()))){to=i;break;}
+      }
+      const window=detalleLines.slice(from+1,to);
+      const subtotalIndex=window.findIndex(line=>/^\s*Subtotal\b/i.test(line));
+      const itemLines=(subtotalIndex<0?window:window.slice(0,subtotalIndex))
+        .filter(line=>/^\s*\d{1,2}\//.test(line));
+      const items=itemLines.map(parseMercadoPagoConsumptionLine);
+      const cents=items.reduce((sum,item)=>sum+Math.round((item?.amountArs||0)*100),0);
+      // Only use itemization when every dated row parses and the printed subtotal agrees.
+      const printedSubtotal=subtotalIndex>=0
+        &&/(?:^|\s)\$\s*\d[\d.]*,\d{2}/.test(window.slice(subtotalIndex,subtotalIndex+2).join('\n'));
+      if(amount===0&&!itemLines.length)purchaseDetails=[];
+      else if(printedSubtotal&&items.length&&items.every(item=>item&&item.amountArs>0&&item.amountUsd==null)
+        &&cents===Math.round(amount*100)){
+        purchaseDetails=items.map(item=>({...item,category:'purchase'}));
+      }
+    }
     // CORRECCIÓN 6B4.8.3 - el subtotal de "Composición del saldo del
     // período anterior" ya viene neteado contra los pagos de esa sección
     // (ver ejemplo real: "Total a pagar del periodo anterior" - "Pago de
@@ -6584,7 +6732,7 @@ function parseMercadoPagoStatement(layout){
     declaredMinPaymentArs:null,declaredMinPaymentUsd:null,
     declaredConsumptionArs,declaredConsumptionUsd:null,
     declaredCloseMonthDay,declaredDueMonthDay,
-    movements,missing,usdZeroEvidence,
+    movements,missing,usdZeroEvidence,purchaseDetails,
   };
 }
 // CORRECCIÓN 6B4.7 - Registro de parsers financieros por formato. Nunca es
@@ -6775,7 +6923,10 @@ function buildCreditReconcileBreakdown(movements){
 function reconcileCreditStatementTotals(parsed,identity,periodHint){
   const key=creditStatementParserKey(identity);
   const missing=[...(parsed?.missing||[])];
-  const dates=creditResolveDeclaredDates(parsed,periodHint);
+  const dates={
+    ...creditResolveDeclaredDates(parsed,periodHint),
+    purchaseDetails:parsed?.purchaseDetails??null,
+  };
   const carry=creditResolveCarryInfo(parsed);
   // CORRECCIÓN ESTABILIZACIÓN 20260805 - RESÚMENES: BUG REAL -- los
   // movimientos individuales YA los extrae parseBancoProvinciaVisaStatement
